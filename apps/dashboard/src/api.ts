@@ -12,12 +12,44 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** Страница сопряжения (§11). Короткая и на том же origin. */
+export const PAIR_PATH = '/pair';
+
+/**
+ * Сессии нет — уходим на экран сопряжения.
+ *
+ * Именно этого от дашборда и ждут: телевизор висит на стене, и если сессию
+ * отозвали или она не заводилась, он обязан показать код сопряжения, а не
+ * пустой экран и не бесконечную «загрузку». Разбираться, почему дневник
+ * пропал, будет некому — на телевизоре нет ни консоли, ни клавиатуры.
+ *
+ * `replace`, а не `assign`: возвращаться кнопкой «назад» на страницу,
+ * которая всё равно отдаст 401, незачем.
+ *
+ * Переход одноразовый: дашборд шлёт несколько запросов сразу, и каждый из
+ * них получит 401 — навигацию надо начать один раз.
+ */
+let leaving = false;
+
+export function goToPairing(): void {
+  if (leaving) return;
+  leaving = true;
+  const next = encodeURIComponent(window.location.pathname || '/');
+  window.location.replace(`${PAIR_PATH}?next=${next}`);
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiUrl(path), {
     signal,
     headers: { accept: 'application/json' },
     cache: 'no-store',
+    // Кука сессии нужна и при отдельном dev-origin.
+    credentials: 'include',
   });
+  if (res.status === 401) {
+    goToPairing();
+    throw new Error(`${path} → нет сессии`);
+  }
   if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
   return (await res.json()) as T;
 }

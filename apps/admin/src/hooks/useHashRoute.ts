@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type Route = 'overview' | 'stats' | 'history';
+/**
+ * `devices` — экран одобрения и отзыва устройств (§11). Вкладки для него нет
+ * намеренно: заходят туда несколько раз в жизни, а место в нижней навигации
+ * стоит дорого. Попасть можно из настроек и по баннеру, который появляется
+ * сам, когда кто-то просится.
+ */
+export type Route = 'overview' | 'stats' | 'history' | 'devices';
 
-const ROUTES: Route[] = ['overview', 'stats', 'history'];
+const ROUTES: Route[] = ['overview', 'stats', 'history', 'devices'];
 
 function read(): Route {
   const raw = window.location.hash.replace(/^#\/?/, '');

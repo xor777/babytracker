@@ -7,14 +7,25 @@
  * интерфейс мог сказать «данные от 19:45», а не выдать вчерашние цифры
  * за сегодняшние.
  *
- * Про аутентификацию: все запросы идут тем же Request, что создала страница,
- * то есть с credentials: 'same-origin'. Basic Auth на Caddy при этом проходит
- * штатно, и отдельного хранилища учётных данных воркеру не нужно.
- * Ответы 401 не кэшируются никогда — иначе после разлогина приложение
- * показывало бы «успешный» кэш вместо запроса пароля.
+ * Про аутентификацию (§11: сессии устройств вместо basic auth). Все запросы
+ * идут тем же Request, что создала страница, то есть с кукой сессии; своего
+ * хранилища секретов воркеру не нужно и быть не должно.
+ *
+ * Две ловушки, обе тихие, обе приводят к тому, что приложение выглядит
+ * работающим, когда доступа уже нет:
+ *
+ *  1. Ответ 401 в кэше подменил бы собой требование войти. Не кэшируем.
+ *  2. Куда опаснее: без сессии сервер отвечает на переход РЕДИРЕКТОМ на
+ *     страницу сопряжения. `fetch` следует за ним молча и возвращает вполне
+ *     успешный ответ 200 — страницу с кодом. Положив его в кэш под именем
+ *     оболочки приложения, воркер намертво подменил бы дневник экраном
+ *     сопряжения, и переживало бы это даже возврат сессии. Поэтому ответы,
+ *     полученные через редирект, в кэш не попадают никогда.
  */
 
-const VERSION = 'v1';
+/* Версия сменена вместе с переездом на сессии устройств: старые кэши, снятые
+   при basic auth, надо выбросить целиком, а не донашивать. */
+const VERSION = 'v2';
 const SHELL = `bt-shell-${VERSION}`;
 const DATA = `bt-data-${VERSION}`;
 const SCOPE = new URL(self.registration.scope).pathname; // «/dash/»
@@ -41,9 +52,18 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/** Можно ли вообще класть этот ответ в кэш. */
+function cacheable(response) {
+  // `redirected` — это и есть признак, что сервер увёл нас на страницу
+  // сопряжения: статус при этом 200, и по нему отличить нельзя.
+  if (!response.ok || response.redirected) return false;
+  if (response.type === 'opaqueredirect') return false;
+  return true;
+}
+
 /** Ответ из кэша помечаем датой — по ней интерфейс пишет «данные от 19:45». */
 async function putStamped(cacheName, request, response) {
-  if (!response.ok) return response;
+  if (!cacheable(response)) return response;
   const body = await response.clone().arrayBuffer();
   const headers = new Headers(response.headers);
   headers.set('x-cached-at', new Date().toISOString());
@@ -55,7 +75,7 @@ async function putStamped(cacheName, request, response) {
 async function networkFirst(request) {
   try {
     const fresh = await fetch(request);
-    // 401 в кэш не кладём: иначе запрос пароля подменится «успешным» ответом.
+    // 401 в кэш не кладём: иначе требование войти подменится «успешным» ответом.
     if (fresh.status === 401) return fresh;
     return await putStamped(DATA, request, fresh);
   } catch (err) {
@@ -84,7 +104,11 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
-        .then((res) => putStamped(SHELL, INDEX, res))
+        .then((res) => {
+          // Увели на сопряжение — отдаём как есть и НЕ трогаем кэш оболочки.
+          if (!cacheable(res)) return res;
+          return putStamped(SHELL, INDEX, res);
+        })
         .catch(async () => (await caches.match(INDEX)) ?? Response.error()),
     );
     return;
@@ -105,5 +129,18 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       cacheFirst(request, SHELL).catch(async () => (await caches.match(request)) ?? Response.error()),
     );
+  }
+});
+
+/*
+ * Выход из сессии: страница просит забыть всё, что отложено про запас.
+ *
+ * Страница и сама умеет чистить `caches` — они на том же origin, — но воркер
+ * может успеть положить что-то обратно между её вызовом и снятием
+ * регистрации. Поэтому уборку делает и он, по прямой просьбе.
+ */
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'bt-forget') {
+    event.waitUntil(caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))));
   }
 });

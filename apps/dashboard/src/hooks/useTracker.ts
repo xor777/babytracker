@@ -198,7 +198,9 @@ export function useTracker(): TrackerData {
 
     const connect = () => {
       if (closed) return;
-      es = new EventSource(apiUrl('/api/stream'));
+      // withCredentials — чтобы кука сессии (§11) уходила и при отдельном
+      // dev-origin. На том же origin флаг ни на что не влияет.
+      es = new EventSource(apiUrl('/api/stream'), { withCredentials: true });
 
       es.onopen = () => {
         if (closed) return;

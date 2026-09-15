@@ -2202,3 +2202,179 @@ textarea.input {
     font-size: 13px;
   }
 }
+
+/* ============================================================
+   Устройства (§11): экран одобрения и отзыва.
+
+   Код — самое крупное, что есть на экране, и это не украшение:
+   его сверяют с экраном телевизора, стоя посреди комнаты с телефоном
+   в руке. Всё остальное здесь подпись к нему.
+   ============================================================ */
+
+.devsec {
+  margin: 16px 0 22px;
+}
+
+.devsec__title {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.devcard {
+  margin-bottom: 10px;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* Заявка — единственное на экране, что требует действия прямо сейчас. */
+.devcard--pending {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.devcard__head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.devcard__icon,
+.devrow__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--tint);
+  color: var(--cyan);
+}
+
+.devcard__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.devcard__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.devcard__hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.devcode {
+  margin: 14px 0 0;
+  padding: 12px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  /* Уменьшается на узких экранах, но не мельче читаемого с вытянутой руки. */
+  font-size: clamp(28px, 11vw, 42px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  color: var(--cyan);
+  /* Тире не должно переносить половину кода на другую строку. */
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.devcard__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.devcard__actions .btn {
+  flex: 1;
+}
+
+.devrow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.devrow:last-child {
+  border-bottom: none;
+}
+
+.devrow__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.devrow__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.devrow__badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--cyan);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-line);
+}
+
+.devrow__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Подтверждение отзыва встаёт на место кнопки: отозвать не тот телефон
+   легко, а обратно уже не вернёшь — устройство придётся подключать заново. */
+.devrow__confirm {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.btn--sm {
+  min-height: 36px;
+  padding: 0 11px;
+  font-size: 13px;
+  flex: none;
+}
+
+@media (max-width: 380px) {
+  .devrow {
+    flex-wrap: wrap;
+  }
+
+  .devrow__confirm {
+    width: 100%;
+  }
+
+  .devrow__confirm .btn {
+    flex: 1;
+  }
+}
