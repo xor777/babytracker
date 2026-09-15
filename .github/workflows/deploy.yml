@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Версию намеренно не указываем: она берётся из "packageManager"
+      # в package.json. Если задать оба, action падает на конфликте.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
