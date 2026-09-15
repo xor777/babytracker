@@ -1,39 +1,90 @@
 # Развёртывание
 
-Прод — `codex-vm` (Ubuntu 24.04, 8 ядер, 15 ГБ RAM, **~6 ГБ свободного диска**), доступна
-через Tailscale как `codex-vm`.
+Сервер — любая Ubuntu 22.04/24.04 машина, до которой есть SSH. Целевой хост задаётся
+переменной `BABYTRACKER_HOST` (имя из `~/.ssh/config`), жёстко в скриптах он не прописан.
 
-## Почему именно так
+```bash
+BABYTRACKER_HOST=my-server ./infra/deploy.sh
+```
 
-Несколько решений, принятых из-за особенностей этой машины — чтобы они не выглядели произволом:
+## Требования к машине
 
-- **Без Docker.** Docker на VM требует sudo, а worker'у нужен авторизованный `claude` CLI
-  с домашним каталогом пользователя — в контейнере это лишняя возня с пробросом токенов.
-  Обычные systemd-сервисы пользователя проще и надёжнее.
-- **`systemctl --user` вместо системных юнитов.** `Linger=yes` уже включён, поэтому сервисы
-  стартуют при загрузке машины и живут без активной сессии. Sudo для управления не нужен.
-- **`node:sqlite` вместо `better-sqlite3`.** На диске ~6 ГБ и нет C++ тулчейна; нативный
-  модуль там собирать нечем. Встроенный в Node драйвер не требует компиляции вообще.
-- **Cloudflare Tunnel.** У VM нет публичного IP (eth0 в 10.20.10.20/24, наружу через NAT).
-  Tailscale Funnel не годится: тайлнет на кастомном домене `tail.nuanu.ai`, а Funnel работает
-  только с `*.ts.net`.
-- **Порт 8787.** Порт 3000 на машине уже занят другим процессом.
+| Что | Зачем |
+|-----|-------|
+| SSH-доступ, пользователь с `sudo` не обязателен | всё ставится в `~/.local`, сервисы — `systemctl --user` |
+| ~2 ГБ свободного диска | Node, зависимости, база, снимки |
+| Публичный HTTPS до порта 8787 | Алиса ходит только по HTTPS с валидным сертификатом |
+| Авторизованный `claude` CLI | без него LLM-разбор пропускается, остальное работает |
+
+`bootstrap-vm.sh` ставит Node 24, pnpm, cloudflared и Claude Code CLI — всё в домашний каталог,
+системные пакеты не трогает. Скрипт идемпотентен.
+
+## Почему устроено именно так
+
+- **Без Docker.** Воркеру нужен авторизованный `claude` CLI с домашним каталогом пользователя;
+  в контейнере это лишняя возня с пробросом токенов. Обычные systemd-сервисы проще.
+- **`systemctl --user` вместо системных юнитов.** Не нужен root. Нужен лишь включённый lingering,
+  иначе сервисы не переживут выход из сессии: `sudo loginctl enable-linger $USER`.
+- **`node:sqlite` вместо `better-sqlite3`.** Нативный модуль требует C++ тулчейна на сервере;
+  встроенный в Node драйвер не требует компиляции. Отсюда требование Node ≥ 24.
+- **TypeScript запускается напрямую**, без сборки: Node 24 умеет снимать типы сам.
+  Поэтому `ExecStart` указывает на `src/index.ts`, а `dist/` не существует.
+- **Порт 8787**, не 3000 — 3000 слишком часто занят чем-то другим.
+
+## Как дать Алисе публичный HTTPS
+
+Зависит от того, что у сервера есть.
+
+**Есть публичный IP и домен** — самый надёжный вариант. Поставь Caddy, он сам получит
+сертификат Let's Encrypt:
+
+```
+baby.example.com {
+    reverse_proxy localhost:8787
+}
+```
+
+**Сервер за NAT, публичного IP нет** — Cloudflare Tunnel, `cloudflared` уже стоит после
+bootstrap. Быстрый туннель работает без аккаунта и без домена:
+
+```bash
+ssh $BABYTRACKER_HOST 'systemctl --user start babytracker-tunnel'
+ssh $BABYTRACKER_HOST 'bash ~/babytracker/infra/tunnel-url.sh'
+```
+
+Он выдаёт случайный `https://…trycloudflare.com`, **который меняется при каждом перезапуске** —
+для первых проверок нормально, для постоянной работы нет: URL придётся переписывать в консоли
+Яндекс Диалогов. Постоянный адрес даёт именованный туннель (нужен аккаунт Cloudflare и домен):
+
+```bash
+ssh -t $BABYTRACKER_HOST
+cloudflared tunnel login
+cloudflared tunnel create babytracker
+cloudflared tunnel route dns babytracker baby.example.com
+```
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: babytracker
+credentials-file: /home/<user>/.cloudflared/<UUID>.json
+ingress:
+  - hostname: baby.example.com
+    service: http://localhost:8787
+  - service: http_status:404
+```
+
+И в `infra/systemd/babytracker-tunnel.service` заменить `ExecStart` на
+`%h/.local/bin/cloudflared tunnel --no-autoupdate run babytracker`, затем передеплоить.
 
 ## Первый запуск
 
 ```bash
-# 1. Подготовить машину: Node 24, pnpm, cloudflared, claude CLI. Идемпотентно.
-./infra/bootstrap-vm.sh        # либо: ssh codex-vm 'bash -s' < infra/bootstrap-vm.sh
+export BABYTRACKER_HOST=my-server
 
-# 2. Авторизовать claude CLI (нужен браузер). Без этого LLM-разбор
-#    будет пропускаться, но сервер и fast-path продолжат работать.
-ssh -t codex-vm 'claude setup-token'
-
-# 3. Выкатить код, собрать, поднять сервисы
-./infra/deploy.sh
-
-# 4. Узнать публичный адрес вебхука
-ssh codex-vm 'bash ~/babytracker/infra/tunnel-url.sh'
+ssh $BABYTRACKER_HOST 'bash -s' < infra/bootstrap-vm.sh   # Node 24, pnpm, cloudflared, claude CLI
+ssh -t $BABYTRACKER_HOST 'claude setup-token'             # авторизация CLI, нужен браузер
+./infra/deploy.sh                                          # код, сборка, сервисы
 ```
 
 Дальше — [ALICE_SETUP.md](ALICE_SETUP.md).
@@ -41,68 +92,44 @@ ssh codex-vm 'bash ~/babytracker/infra/tunnel-url.sh'
 ## Повседневное
 
 ```bash
-./infra/deploy.sh                                          # выкатить изменения
-ssh codex-vm 'journalctl --user -u babytracker -f'         # логи сервера
-ssh codex-vm 'journalctl --user -u babytracker-tunnel -f'  # логи туннеля
-ssh codex-vm 'systemctl --user restart babytracker'
-ssh codex-vm 'curl -s localhost:8787/healthz | jq'
+./infra/deploy.sh                                                  # выкатить изменения
+ssh $BABYTRACKER_HOST 'journalctl --user -u babytracker -f'        # логи
+ssh $BABYTRACKER_HOST 'systemctl --user restart babytracker'
+ssh $BABYTRACKER_HOST 'curl -s localhost:8787/healthz'
 ```
 
-`.env` на сервере создаётся один раз при первом деплое и **больше не перезаписывается** —
-иначе секрет вебхука менялся бы при каждой выкатке, и URL в консоли Яндекса пришлось бы
-переписывать. Менять его руками: `ssh codex-vm 'nano ~/babytracker/.env'` + рестарт.
+`.env` на сервере создаётся при первом деплое и **больше не перезаписывается** — иначе секрет
+вебхука менялся бы при каждой выкатке и URL в консоли Яндекса приходилось бы переписывать.
 
-## Постоянный домен вместо случайного
+## Данные, снимки, бэкапы
 
-Быстрый туннель выдаёт новый `*.trycloudflare.com` при каждом перезапуске. Как только надоест
-править URL в консоли Диалогов — переходи на именованный туннель. Нужен аккаунт Cloudflare и
-домен, делегированный на их NS.
+Всё живёт в одном файле `~/babytracker/data/babytracker.db`.
+
+Физическое удаление событий невозможно: его запрещает триггер SQLite (см. §9 контракта).
+Любая правка журналируется и обратима, а перед каждым запуском модели снимается копия базы
+в `data/snapshots/` (хранятся последние 50). Это защищает от ошибок модели — но **не от потери
+самой машины**. Это история жизни ребёнка, восстановить её неоткуда, так что внешний бэкап нужен:
 
 ```bash
-ssh -t codex-vm
-cloudflared tunnel login                        # откроется браузер
-cloudflared tunnel create babytracker
-cloudflared tunnel route dns babytracker baby.example.com
+# .backup корректно снимает копию работающей базы; обычный cp при WAL может дать битый файл
+ssh $BABYTRACKER_HOST 'sqlite3 ~/babytracker/data/babytracker.db ".backup /tmp/baby.db"'
+scp $BABYTRACKER_HOST:/tmp/baby.db ./backups/baby-$(date +%F).db
 ```
 
-Затем `~/.cloudflared/config.yml`:
-
-```yaml
-tunnel: babytracker
-credentials-file: /home/dmitry/.cloudflared/<UUID>.json
-ingress:
-  - hostname: baby.example.com
-    service: http://localhost:8787
-  - service: http_status:404
-```
-
-И в `infra/systemd/babytracker-tunnel.service` заменить строку `ExecStart` на
-`%h/.local/bin/cloudflared tunnel --no-autoupdate run babytracker`, после чего
-`./infra/deploy.sh`. Адрес вебхука станет постоянным.
-
-## Резервные копии
-
-Все данные — один файл `~/babytracker/data/babytracker.db`. Это история жизни ребёнка,
-восстановить её неоткуда: бэкап нужен, и лучше не откладывать.
-
-```bash
-# Корректный бэкап работающей базы (просто cp при включённом WAL может дать битый файл)
-ssh codex-vm 'sqlite3 ~/babytracker/data/babytracker.db ".backup ~/baby-backup.db"'
-scp codex-vm:~/baby-backup.db ./backups/baby-$(date +%F).db
-```
+Поставь это в cron на своей машине — раз в сутки достаточно.
 
 ## Деньги
 
-Каждая непонятая fast-path'ом фраза запускает `claude -p`. Один замер на VM дал
-**около $0.09 за вызов** — основное съедает разовая загрузка системного промпта.
-При 30 фразах в день это порядка $80 в месяц, что для домашнего проекта многовато.
+Разбор идёт на `claude-opus-5`. Замер на соседней машине дал **около $0.09 за вызов** на модели
+попроще; Opus заметно дороже, реальную цифру смотри по логам после первых дней.
 
-Чем сбивать, по возрастанию усилий:
+Основная защита от счёта — **не звать модель без нужды**. Политика `LLM_QUEUE_POLICY=smart`
+(по умолчанию) зовёт Opus только когда fast-path не понял фразу или когда это команда управления
+данными («удали», «отмени», «исправь»). Обычное «Андрей заснул» разбирается локально и стоит ноль.
 
-1. `CLAUDE_MODEL=claude-haiku-4-5-20251001` — разбор коротких русских фраз haiku тянет
-   уверенно, а стоит кратно дешевле. **Начни с этого.**
-2. Расширять fast-path: каждая фраза, которую он научился понимать сам, стоит ноль.
-3. Если станет критично — заменить spawn CLI на прямой вызов Messages API с
-   кэшированием промпта, без накладных расходов на системный промпт агента.
+Если счёт всё равно великоват — по возрастанию усилий:
 
-Следить за расходом: `ssh codex-vm 'journalctl --user -u babytracker | grep cost'`.
+1. `LLM_QUEUE_POLICY=unknown` — звать только на совсем непонятое.
+2. Расширять словарь fast-path по логам `/api/utterances`: каждая выученная фраза стоит ноль.
+3. `CLAUDE_MODEL=claude-haiku-4-5-20251001` для разбора — но тогда широкий SQL-доступ лучше
+   урезать обратно до узких тулов: слабой модели опасно давать писать произвольный SQL.

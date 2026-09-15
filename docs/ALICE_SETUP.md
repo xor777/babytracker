@@ -7,11 +7,12 @@
 
 ## Шаг 0. Получить публичный URL
 
-Алиса ходит только по HTTPS с валидным сертификатом. codex-vm сидит за NAT без публичного
-IP, поэтому наружу её выводит Cloudflare Tunnel.
+Алиса ходит только по HTTPS с валидным сертификатом. Как его получить — зависит от сервера,
+варианты (Caddy или Cloudflare Tunnel) разобраны в [DEPLOY.md](DEPLOY.md). Ниже — для быстрого
+туннеля, который работает даже за NAT и без домена.
 
 ```bash
-ssh codex-vm 'bash ~/babytracker/infra/tunnel-url.sh'
+ssh $BABYTRACKER_HOST 'bash ~/babytracker/infra/tunnel-url.sh'
 ```
 
 Скрипт напечатает `Webhook URL` — строку вида
@@ -68,14 +69,14 @@ ssh codex-vm 'bash ~/babytracker/infra/tunnel-url.sh'
 Параллельно смотри, что происходит на сервере:
 
 ```bash
-ssh codex-vm 'journalctl --user -u babytracker -f'
+ssh $BABYTRACKER_HOST 'journalctl --user -u babytracker -f'
 ```
 
 В логе при первом запросе будет видно `alice_user_id` — **скопируй его** и пропиши на сервере,
 чтобы вебхук перестал принимать кого попало:
 
 ```bash
-ssh codex-vm
+ssh $BABYTRACKER_HOST
 nano ~/babytracker/.env          # ALICE_ALLOWED_USER_IDS=<id сюда>
                                  # ALICE_SKILL_ID=<id навыка из консоли>
 systemctl --user restart babytracker
@@ -110,5 +111,5 @@ systemctl --user restart babytracker
 | «Навык не отвечает» | Ответ дольше 3 секунд. `journalctl --user -u babytracker -f` — ищи, что тормозит в горячем пути |
 | Ошибка в консоли на Webhook URL | Туннель упал: `systemctl --user status babytracker-tunnel`, URL мог смениться |
 | Отвечает, но события не появляются | Смотри `/api/utterances` — фраза записалась? Дальше `status` разбора |
-| Разбор вечно `pending` | Worker или claude CLI. `ssh codex-vm 'claude -p "тест"'` — проверь авторизацию |
+| Разбор вечно `pending` | Worker или claude CLI. `ssh $BABYTRACKER_HOST 'claude -p "тест"'` — проверь авторизацию |
 | На станции «не знаю такого навыка» | Не опубликован приватно, либо станция на другом Яндекс-аккаунте |

@@ -3,7 +3,7 @@
 # Запускать с Mac из корня репозитория: ./infra/deploy.sh
 set -euo pipefail
 
-HOST="${BABYTRACKER_HOST:-codex-vm}"
+HOST="${BABYTRACKER_HOST:?укажи целевой сервер: BABYTRACKER_HOST=my-server ./infra/deploy.sh}"
 REMOTE_DIR="babytracker"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -40,7 +40,7 @@ echo "==> pnpm install"
 pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
 echo "==> сборка"
-pnpm --filter ./apps/server build
+pnpm --filter ./apps/server typecheck
 pnpm --filter ./apps/dashboard build
 
 echo "==> systemd"

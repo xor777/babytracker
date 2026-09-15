@@ -9,7 +9,7 @@ WorkingDirectory=%h/babytracker/apps/server
 EnvironmentFile=%h/babytracker/.env
 Environment=PATH=%h/.local/node/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_ENV=production
-ExecStart=%h/.local/node/bin/node dist/index.js
+ExecStart=%h/.local/node/bin/node src/index.ts
 Restart=always
 RestartSec=3
 StandardOutput=journal
