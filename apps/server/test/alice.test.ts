@@ -603,3 +603,145 @@ test('битый id в ручках устройств отклоняется, �
   const after = await say(h.app, { accountId: 'account-A', applicationId: 'speaker-1' });
   assert.equal(UNKNOWN_RE.test(textOf(after)), false);
 });
+
+/* ------------------------------------------------------------------ */
+/* Кому принадлежит микрофон после ответа                              */
+/*                                                                      */
+/* Прод-инцидент: «Алиса, скажи дневнику Андрея, что он закончил есть   */
+/* грудь» — записали верно, но сессию не закрыли. Следующая фраза       */
+/* «включи свет в гостиной» прилетела НАМ: в дневнике мусор, свет не    */
+/* включился. Навык сломал бытовое пользование колонкой.                */
+/* ------------------------------------------------------------------ */
+
+/** Тело запроса с раздельным управлением session.new и командой. */
+function sessionBody(opts: { isNew?: boolean; command?: string }): Record<string, unknown> {
+  const session: Record<string, unknown> = {
+    message_id: 0,
+    session_id: 'mic-session',
+    skill_id: 'skill-1',
+    user: { user_id: 'account-mic' },
+    application: { application_id: 'speaker-mic' },
+    user_id: 'legacy-mic',
+  };
+  if (opts.isNew !== undefined) session.new = opts.isNew;
+
+  return {
+    meta: { locale: 'ru-RU', timezone: 'Europe/Moscow', interfaces: {} },
+    session,
+    request: {
+      type: 'SimpleUtterance',
+      command: opts.command ?? '',
+      original_utterance: opts.command ?? '',
+      nlu: { tokens: [], entities: [], intents: {} },
+    },
+    version: '1.0',
+  };
+}
+
+const endSession = (res: { json: () => unknown }): boolean =>
+  (res.json() as { response: { end_session: boolean } }).response.end_session;
+
+test('одной фразой: отвечаем и ОТПУСКАЕМ микрофон', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  // «Алиса, скажи дневнику Андрея, что он закончил есть грудь»
+  const res = await h.app.inject({
+    method: 'POST',
+    url: URL_OK,
+    payload: sessionBody({ isNew: true, command: 'андрей закончил есть грудь' }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(
+    endSession(res),
+    true,
+    'сессию обязаны закрыть, иначе следующая бытовая команда прилетит нам',
+  );
+});
+
+test('явный запуск без команды: держим микрофон для диктовки', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const res = await h.app.inject({
+    method: 'POST',
+    url: URL_OK,
+    payload: sessionBody({ isNew: true, command: '' }),
+  });
+
+  assert.equal(endSession(res), false, 'человек открыл диалог, чтобы надиктовать несколько событий');
+  assert.match(textOf(res), /Привет/);
+});
+
+test('продолжение внутри диктовки: держим до «хватит»', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  await h.app.inject({ method: 'POST', url: URL_OK, payload: sessionBody({ isNew: true, command: '' }) });
+
+  for (const command of ['андрей заснул', 'андрей проснулся', 'покормили из бутылочки']) {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: URL_OK,
+      payload: sessionBody({ isNew: false, command }),
+    });
+    assert.equal(endSession(res), false, `«${command}» не должна обрывать диктовку`);
+  }
+
+  const bye = await h.app.inject({
+    method: 'POST',
+    url: URL_OK,
+    payload: sessionBody({ isNew: false, command: 'хватит' }),
+  });
+  assert.equal(endSession(bye), true, '«хватит» закрывает диалог');
+});
+
+test('ПРОД-СЦЕНАРИЙ: после одной фразы чужая команда к нам не попадает', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const first = await h.app.inject({
+    method: 'POST',
+    url: URL_OK,
+    payload: sessionBody({ isNew: true, command: 'андрей закончил есть грудь' }),
+  });
+  assert.equal(endSession(first), true);
+
+  // Алиса забрала управление, поэтому «включи свет» до нас не доходит вовсе.
+  // В дневнике — ровно то, что сказал человек, и ни одной лишней фразы.
+  const utterances = listUtterances(h.db);
+  assert.equal(utterances.length, 1, 'ровно одна фраза');
+  assert.equal(utterances[0]?.raw_text, 'андрей закончил есть грудь');
+  assert.equal(
+    utterances.some((u) => /свет|гостин/i.test(u.raw_text)),
+    false,
+    'чужих команд в ленте быть не должно',
+  );
+});
+
+test('одношаговые вопрос и мусор тоже отпускают микрофон', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  for (const command of ['сколько он сегодня спал', 'абырвалг колбаса', 'спит ли он']) {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: URL_OK,
+      payload: sessionBody({ isNew: true, command }),
+    });
+    assert.equal(endSession(res), true, `«${command}»: одна фраза — один ответ`);
+  }
+});
+
+test('без поля session.new микрофон отпускается: удержание дороже ошибки', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const res = await h.app.inject({
+    method: 'POST',
+    url: URL_OK,
+    payload: sessionBody({ command: 'андрей заснул' }),
+  });
+  assert.equal(endSession(res), true);
+});

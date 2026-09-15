@@ -347,14 +347,39 @@ export function handleAliceRequest(
   const now = new Date();
   const command = extractCommand(body);
   const sessionId = body.session?.session_id ?? null;
-  const isNew = body.session?.new === true;
 
-  // Приветствие: новая сессия без команды.
-  if (isNew && command.trim().length === 0) {
+  /*
+   * Держать ли микрофон после ответа (§3.1 + разбор прод-инцидента).
+   *
+   * Что случилось: на «Алиса, скажи дневнику Андрея, что он закончил есть грудь»
+   * мы записали событие и оставили сессию открытой. Следующая фраза человека —
+   * «включи свет в гостиной» — прилетела НАМ вместо Алисы. В дневнике появился
+   * мусор, а свет не включился. Это хуже грязи в ленте: навык сломал бытовое
+   * пользование колонкой.
+   *
+   * Различаем по документации Яндекса: при простом запуске («запусти дневник»)
+   * request.command ПУСТОЙ, при запуске с командой («скажи дневнику, что…»)
+   * в него попадает весь текст, кроме активационной фразы. Отсюда:
+   *
+   *   new=true  + команда пустая  -> человек открыл диалог, чтобы диктовать -> держим
+   *   new=true  + команда есть    -> сказал всё одной фразой -> отвечаем и ОТПУСКАЕМ
+   *   new=false + любая команда   -> он внутри диктовки -> держим до «хватит»
+   *
+   * Если поля session.new нет вовсе, считаем сессию новой: отпустить микрофон
+   * безопаснее, чем удержать. Именно удержание и стоило заказчику света.
+   */
+  const isContinuation = body.session?.new === false;
+  const hasCommand = command.trim().length > 0;
+  const oneShot = !isContinuation && hasCommand;
+  /** Держим микрофон только там, где человек явно собрался диктовать дальше. */
+  const keepOpen = !oneShot;
+
+  // Приветствие: явный запуск навыка без команды — человек собрался диктовать.
+  if (!isContinuation && !hasCommand) {
     return { body: aliceReply(greetingText(cfg.childName), false), fast: null };
   }
 
-  if (command.trim().length === 0) {
+  if (!hasCommand) {
     return {
       body: aliceReply('Скажите, например: «заснул» или «проснулся».', false),
       fast: null,
@@ -475,7 +500,7 @@ export function handleAliceRequest(
   // Воркер стартует немедленно (§9.4), а не ждёт следующего тика.
   if (decision.queue) setImmediate(() => ctx.notifyWorker());
 
-  return { body: aliceReply(text, false), fast };
+  return { body: aliceReply(text, !keepOpen), fast };
 }
 
 /* ------------------------------------------------------------------ */

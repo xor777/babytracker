@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { TrackerEvent } from '../types';
-import { formatMinutes, HOUR } from '../lib/format';
+import { formatMinutes, HOUR, parseTs } from '../lib/format';
 import { toSegments } from '../lib/sleep';
 
 interface Props {
@@ -10,9 +10,11 @@ interface Props {
 
 const W = 892;
 const H = 156; // = высота .panel__body у панели 240 px
-const TRACK_Y = 26;
-const TRACK_H = 72;
+const TRACK_Y = 14;
+const TRACK_H = 62;
 const TRACK_BOTTOM = TRACK_Y + TRACK_H;
+const FEED_Y = 86;
+const FEED_H = 26;
 const SPAN = 24 * HOUR;
 
 function shortDuration(ms: number): string {
@@ -28,11 +30,19 @@ export function DayTimeline({ events, now }: Props) {
   const from = anchor - SPAN;
 
   const segments = useMemo(() => toSegments(events, from, anchor), [events, from, anchor]);
+  const feedMarks = useMemo(
+    () =>
+      events
+        .filter((ev) => ev.type === 'feed' && !ev.deleted_at)
+        .map((ev) => parseTs(ev.started_at))
+        .filter((ms): ms is number => ms != null && ms >= from && ms <= anchor)
+        .sort((a, b) => a - b),
+    [events, from, anchor],
+  );
 
   const totalMs = segments.reduce((acc, s) => acc + (s.end - s.start), 0);
   const x = (t: number) => ((t - from) / SPAN) * W;
 
-  // Часовые отметки + подсветка ночных часов
   const ticks: { t: number; hour: number; major: boolean }[] = [];
   const firstHour = Math.ceil(from / HOUR) * HOUR;
   for (let t = firstHour; t <= anchor; t += HOUR) {
@@ -53,7 +63,9 @@ export function DayTimeline({ events, now }: Props) {
       <div className="panel__head">
         <h2 className="panel__title">Последние 24 часа</h2>
         <span className="panel__rule" />
-        <span className="panel__meta">сон {formatMinutes(totalMs / 60000)}</span>
+        {/* Цвет подписи = цвет дорожки: это и легенда тоже. */}
+        <span className="panel__meta panel__meta--sleep">сон {formatMinutes(totalMs / 60000)}</span>
+        <span className="panel__meta panel__meta--feed">еда {feedMarks.length}</span>
       </div>
       <div className="panel__body">
         <svg className="chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
@@ -65,7 +77,6 @@ export function DayTimeline({ events, now }: Props) {
             </linearGradient>
           </defs>
 
-          {/* ночь */}
           {nightBands.map((b, i) => (
             <rect
               key={`n${i}`}
@@ -77,7 +88,6 @@ export function DayTimeline({ events, now }: Props) {
             />
           ))}
 
-          {/* корпус ленты */}
           <rect
             x="0"
             y={TRACK_Y}
@@ -88,7 +98,6 @@ export function DayTimeline({ events, now }: Props) {
             strokeWidth="1"
           />
 
-          {/* часовые риски */}
           {ticks.map((tick) => (
             <line
               key={tick.t}
@@ -101,7 +110,7 @@ export function DayTimeline({ events, now }: Props) {
             />
           ))}
 
-          {/* интервалы сна */}
+          {/* сон */}
           {segments.map((seg) => {
             const x1 = x(seg.start);
             const width = Math.max(3, x(seg.end) - x1);
@@ -131,10 +140,33 @@ export function DayTimeline({ events, now }: Props) {
             );
           })}
 
+          {/* кормления — вторая дорожка */}
+          <line
+            x1="0"
+            x2={W}
+            y1={FEED_Y + FEED_H}
+            y2={FEED_Y + FEED_H}
+            stroke="rgba(77,240,169,0.22)"
+            strokeWidth="1"
+          />
+          {feedMarks.map((ms) => (
+            <rect
+              key={ms}
+              className="seg-appear"
+              style={{ transformOrigin: `0 ${FEED_Y + FEED_H}px` }}
+              x={Math.min(W - 7, Math.max(0, x(ms) - 3.5))}
+              y={FEED_Y}
+              width="7"
+              height={FEED_H}
+              rx="2"
+              fill="var(--green)"
+              opacity="0.92"
+            />
+          ))}
+
           {/* подписи часов */}
           {ticks
             .filter((t) => t.major)
-            // у правого края подпись налезала бы на отметку «сейчас»
             .filter((t) => x(t.t) < W - 40)
             .map((tick) => {
               const cx = x(tick.t);
@@ -143,7 +175,7 @@ export function DayTimeline({ events, now }: Props) {
                 <text
                   key={`l${tick.t}`}
                   x={edge ? 0 : cx}
-                  y={H - 20}
+                  y={H - 8}
                   textAnchor={edge ? 'start' : 'middle'}
                   className="axis-label"
                   fill={tick.hour === 0 ? 'var(--violet)' : 'var(--text-faint)'}
@@ -153,11 +185,10 @@ export function DayTimeline({ events, now }: Props) {
               );
             })}
 
-          {/* отметка «сейчас» */}
           <g className="now-marker">
-            <line x1={W - 1} x2={W - 1} y1={TRACK_Y - 10} y2={TRACK_BOTTOM + 8} stroke="var(--accent)" strokeWidth="3" />
+            <line x1={W - 1} x2={W - 1} y1={TRACK_Y - 8} y2={FEED_Y + FEED_H} stroke="var(--accent)" strokeWidth="3" />
             <polygon
-              points={`${W - 11},${TRACK_Y - 20} ${W + 9},${TRACK_Y - 20} ${W - 1},${TRACK_Y - 8}`}
+              points={`${W - 11},${TRACK_Y - 14} ${W + 9},${TRACK_Y - 14} ${W - 1},${TRACK_Y - 3}`}
               fill="var(--accent)"
             />
           </g>

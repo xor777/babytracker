@@ -20,6 +20,8 @@ const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-03-01';
 const TOGGLE_MIN_SEC = Number(process.env.MOCK_TOGGLE_SEC ?? 45);
 /** MOCK_NO_CLAUDE=1 — воркер без LLM: фразы уходят в skipped, /healthz это сообщает. */
 const NO_CLAUDE = process.env.MOCK_NO_CLAUDE === '1';
+/** MOCK_OPEN_FEED=fresh|stale — незакрытое кормление: идёт прямо сейчас или забыто. */
+const OPEN_FEED = process.env.MOCK_OPEN_FEED ?? '';
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 
 const MINUTE = 60_000;
@@ -43,6 +45,26 @@ function localMidnight(daysAgo) {
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - daysAgo);
   return d.getTime();
+}
+
+function makeEvent(type, subtype, startMs, endMs, valueNum, valueUnit, note) {
+  return {
+    id: ++eventSeq,
+    child_id: 'andrey',
+    type,
+    subtype,
+    started_at: iso(startMs),
+    ended_at: endMs == null ? null : iso(endMs),
+    value_num: valueNum ?? null,
+    value_unit: valueUnit ?? null,
+    note: note ?? null,
+    source: 'alice-fast',
+    utterance_id: null,
+    confidence: 0.95,
+    created_at: iso(startMs),
+    updated_at: iso(startMs),
+    deleted_at: null,
+  };
 }
 
 function addSleep(startMs, durMin, subtype) {
@@ -85,9 +107,50 @@ function seed() {
       addSleep(midnight + 16.7 * HOUR + rand(-40, 40) * MINUTE, rand(25, 70) * mood, 'nap');
     }
   }
+  // Кормления и подгузники (контракт §10.1: 8–12 кормлений и 6+ мокрых в сутки).
+  for (let daysAgo = 14; daysAgo >= 0; daysAgo--) {
+    const midnight = localMidnight(daysAgo);
+    const feeds = Math.round(rand(8, 11));
+    for (let i = 0; i < feeds; i++) {
+      const at = midnight + ((i + 0.5) * 24 * HOUR) / feeds + rand(-35, 35) * MINUTE;
+      if (at > Date.now()) continue;
+      // Объём есть только у бутылочки; грудь — длительность (§10.2).
+      if (Math.random() < 0.55) {
+        events.push(makeEvent('feed', 'bottle', at, at, Math.round(rand(60, 140)), 'ml'));
+      } else {
+        const min = Math.round(rand(10, 25));
+        events.push(makeEvent('feed', 'breast', at, at + min * MINUTE, min, 'min', 'left'));
+      }
+    }
+    const diapers = Math.round(rand(5, 9));
+    for (let i = 0; i < diapers; i++) {
+      const at = midnight + ((i + 0.5) * 24 * HOUR) / diapers + rand(-40, 40) * MINUTE;
+      if (at > Date.now()) continue;
+      const r = Math.random();
+      events.push(makeEvent('diaper', r < 0.55 ? 'wet' : r < 0.85 ? 'dirty' : 'both', at, at));
+    }
+  }
+
+  // Взвешивания: вес при рождении как точка отсчёта, дальше редкие замеры.
+  const birth = localMidnight(14) + 9 * HOUR;
+  events.push(makeEvent('measure', 'weight', birth, birth, 4620, 'g', 'вес при рождении'));
+  [10, 6, 2].forEach((daysAgo, i) => {
+    const at = localMidnight(daysAgo) + 9 * HOUR;
+    if (at > Date.now()) return;
+    events.push(makeEvent('measure', 'weight', at, at, [4480, 4590, 4760][i], 'g'));
+  });
+
+  if (OPEN_FEED) {
+    // «начал кушать» сказали, «поел» — нет. fresh: идёт; stale: фразу забыли.
+    const startedAgoMin = OPEN_FEED === 'stale' ? 190 : 9;
+    const at = Date.now() - startedAgoMin * MINUTE;
+    events.push({ ...makeEvent('feed', 'breast', at, null, null, null, 'left') });
+  }
+
   events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
   // Инвариант контракта §1: открытый сон может быть только один — последний.
-  for (const ev of events.slice(0, -1)) {
+  const sleeps = events.filter((e) => e.type === 'sleep');
+  for (const ev of sleeps.slice(0, -1)) {
     if (!ev.ended_at) ev.ended_at = iso(Date.parse(ev.started_at) + 60 * MINUTE);
   }
 
@@ -100,18 +163,24 @@ function seed() {
     'сколько он сегодня спал',
   ];
   phrases.forEach((raw, i) => {
+    // Смесь статусов как на бою: уверенный fast-path → skipped (модель не звали),
+    // вопрос → skipped с kind=query_state, остальное → done после модели.
+    const kind = raw.includes('сколько') ? 'query_state' : i % 2 ? 'sleep_end' : 'sleep_start';
+    const skipped = kind !== 'sleep_end' || i % 4 === 1;
     utterances.push({
       id: ++utteranceSeq,
       raw_text: raw,
       alice_user_id: 'mock-user',
       session_id: 'mock',
       received_at: iso(Date.now() - (phrases.length - i) * 17 * MINUTE),
-      status: 'done',
+      status: skipped ? 'skipped' : 'done',
       // Наружу сервер отдаёт разобранный объект, а не JSON-строку.
-      fast_result: { kind: i % 2 ? 'sleep_end' : 'sleep_start', confidence: 0.9 },
-      llm_result: null,
-      llm_error: null,
-      attempts: 1,
+      fast_result: { kind, confidence: 0.95 },
+      llm_result: skipped ? null : { kind, confidence: 0.82 },
+      llm_error: skipped
+        ? `не отправлено модели: fast-path уверенно разобрал как ${kind} (0.95 >= 0.8)`
+        : null,
+      attempts: skipped ? 0 : 1,
       processed_at: iso(Date.now() - (phrases.length - i) * 17 * MINUTE + 1200),
     });
   });
@@ -256,7 +325,26 @@ function pushUtterance(raw, kind) {
   });
   broadcast('state', buildState());
 
-  // Без claude воркер сразу помечает фразу skipped — это штатно, не ошибка.
+  // Как настоящий сервер: если fast-path разобрал уверенно, модель не зовём —
+  // фраза сразу уходит в skipped, и это успех, а не сбой.
+  if (kind && !NO_CLAUDE) {
+    setTimeout(() => {
+      u.status = 'skipped';
+      u.processed_at = iso(Date.now());
+      u.llm_error = `не отправлено модели: fast-path уверенно разобрал как ${kind} (0.95 >= 0.8)`;
+      broadcast('utterance', {
+        id: u.id,
+        raw_text: u.raw_text,
+        status: u.status,
+        fast_result: u.fast_result,
+        llm_result: null,
+      });
+      broadcast('state', buildState());
+    }, 900);
+    return;
+  }
+
+  // Без claude воркер помечает skipped вообще всё, включая непонятое.
   if (NO_CLAUDE) {
     setTimeout(() => {
       u.status = 'skipped';
@@ -299,6 +387,7 @@ function pushUtterance(raw, kind) {
 
 let nextToggle = Date.now() + TOGGLE_MIN_SEC * 1000;
 let nextNoise = Date.now() + 18_000;
+let nextFeed = Date.now() + 25_000;
 
 function tick() {
   const now = Date.now();
@@ -358,6 +447,31 @@ function tick() {
       pushUtterance(SLEEP_PHRASES[Math.floor(Math.random() * SLEEP_PHRASES.length)], 'sleep_start');
     }
     nextToggle = now + rand(TOGGLE_MIN_SEC, TOGGLE_MIN_SEC * 2) * 1000;
+  }
+
+  if (now >= nextFeed) {
+    const bottle = Math.random() < 0.6;
+    // Грудь начинается открытым событием и закрывается отдельной фразой —
+    // ровно как в жизни, где вторую фразу иногда забывают.
+    const ev = bottle
+      ? makeEvent('feed', 'bottle', now, now, Math.round(rand(60, 140)), 'ml')
+      : makeEvent('feed', 'breast', now, null, null, null, 'left');
+    events.push(ev);
+    broadcast('event', { action: 'created', event: ev });
+    if (!bottle) {
+      setTimeout(() => {
+        if (ev.ended_at) return;
+        const end = Date.now();
+        ev.ended_at = iso(end);
+        ev.value_num = Math.max(1, Math.round((end - Date.parse(ev.started_at)) / MINUTE));
+        ev.value_unit = 'min';
+        ev.updated_at = iso(end);
+        broadcast('event', { action: 'updated', event: ev });
+        broadcast('state', buildState());
+      }, rand(45, 100) * 1000);
+    }
+    pushUtterance(bottle ? `андрей поел ${ev.value_num} мл` : 'покормили грудью', null);
+    nextFeed = now + rand(70, 150) * 1000;
   }
 
   if (now >= nextNoise) {

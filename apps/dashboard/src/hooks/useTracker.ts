@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   apiUrl,
-  fetchDaily,
   fetchHealth,
-  fetchSleepEvents,
+  fetchMeasures,
+  fetchRecentEvents,
   fetchState,
   fetchUtterances,
 } from '../api';
 import type {
-  DailySleep,
   EventMessage,
   Health,
   LinkStatus,
@@ -19,7 +18,6 @@ import type {
 import { upsertEvent } from '../lib/sleep';
 
 const UTTERANCE_LIMIT = 20;
-const DAILY_DAYS = 14;
 /** Раз в столько мс освежаем REST-данные даже при живом SSE (страховка от рассинхрона). */
 const SLOW_REFRESH_MS = 10 * 60 * 1000;
 /** Если EventSource закрылся насовсем — пересоздаём сами. */
@@ -50,8 +48,10 @@ function signature(s: TrackerState): string {
 
 export interface TrackerData {
   state: TrackerState | null;
+  /** Все события за последние 30 часов: сон, кормления, подгузники, замеры. */
   events: TrackerEvent[];
-  days: DailySleep[];
+  /** Взвешивания за всю историю — от веса при рождении. */
+  measures: TrackerEvent[];
   utterances: Utterance[];
   link: LinkStatus;
   /** /healthz, если сервер его отдал. null — просто не знаем. */
@@ -67,7 +67,7 @@ export interface TrackerData {
 export function useTracker(): TrackerData {
   const [state, setState] = useState<TrackerState | null>(null);
   const [events, setEvents] = useState<TrackerEvent[]>([]);
-  const [days, setDays] = useState<DailySleep[]>([]);
+  const [measures, setMeasures] = useState<TrackerEvent[]>([]);
   const [utterances, setUtterances] = useState<Utterance[]>([]);
   const [link, setLink] = useState<LinkStatus>('connecting');
   const [health, setHealth] = useState<Health | null>(null);
@@ -124,20 +124,20 @@ export function useTracker(): TrackerData {
   const refreshAll = useCallback(async (): Promise<boolean> => {
     const results = await Promise.allSettled([
       fetchState(),
-      fetchDaily(DAILY_DAYS),
+      fetchMeasures(),
       fetchUtterances(UTTERANCE_LIMIT),
-      fetchSleepEvents(),
+      fetchRecentEvents(),
     ]);
     if (!mountedRef.current) return false;
 
     let ok = false;
-    const [stateRes, dailyRes, uttRes, eventsRes] = results;
+    const [stateRes, measuresRes, uttRes, eventsRes] = results;
     if (stateRes.status === 'fulfilled') {
       applyState(stateRes.value);
       ok = true;
     }
-    if (dailyRes.status === 'fulfilled' && dailyRes.value.length) {
-      setDays(dailyRes.value);
+    if (measuresRes.status === 'fulfilled') {
+      setMeasures(measuresRes.value);
       ok = true;
     }
     if (uttRes.status === 'fulfilled') {
@@ -222,6 +222,14 @@ export function useTracker(): TrackerData {
             ? prev.filter((item) => item.id !== msg.event.id)
             : upsertEvent(prev, msg.event),
         );
+        // Замеры живут отдельным списком (вся история, а не 30 часов).
+        if (msg.event.type === 'measure') {
+          setMeasures((prev) =>
+            msg.action === 'deleted'
+              ? prev.filter((item) => item.id !== msg.event.id)
+              : upsertEvent(prev, msg.event),
+          );
+        }
       });
 
       es.addEventListener('utterance', (ev) => {
@@ -331,5 +339,5 @@ export function useTracker(): TrackerData {
     };
   }, []);
 
-  return { state, events, days, utterances, link, health, lastSyncAt, clockOffset, booting };
+  return { state, events, measures, utterances, link, health, lastSyncAt, clockOffset, booting };
 }

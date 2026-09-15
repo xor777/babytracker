@@ -31,8 +31,11 @@ import {
   MAX_CASE_CARDS,
   REPEAT_WINDOW_MIN,
   SLEEP_REPEAT_WINDOW_MIN,
+  DURATIVE_TYPES,
   buildPrompt,
   isAssumption,
+  isStaleOpen,
+  maxOpenMin,
   repeatWindowMin,
 } from '../src/prompt.ts';
 import { ALLOWED_TOOLS, DEFAULT_EFFORT, resolveEffort } from '../src/worker.ts';
@@ -148,6 +151,102 @@ test('окна повтора: сон шире прочего, неизвест�
   );
   assert.equal(repeatWindowMin('невиданный-тип'), 10);
   assert.equal(REPEAT_WINDOW_MIN.measure, 60);
+});
+
+/* ------------------------------------------------------------------ */
+/* Длительные события: ended_at = «идёт», а не «конец неизвестен»       */
+/* ------------------------------------------------------------------ */
+
+function openEvent(id: number, type: string, minutesAgo: number): EventRow {
+  const at = new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
+  return {
+    id,
+    child_id: 'andrey',
+    type,
+    subtype: null,
+    started_at: at,
+    ended_at: null,
+    value_num: null,
+    value_unit: null,
+    note: 'Начало кормления со слов родителя',
+    source: 'alice-llm',
+    utterance_id: null,
+    confidence: 0.7,
+    created_at: at,
+    updated_at: at,
+    deleted_at: null,
+  };
+}
+
+test('идущими могут быть только типы с длительностью', () => {
+  assert.deepEqual([...DURATIVE_TYPES].sort(), ['activity', 'feed', 'pump', 'sleep']);
+  for (const type of ['diaper', 'measure', 'meds', 'symptom', 'note']) {
+    assert.equal(maxOpenMin(type), null, `${type} точечный — у него нет предела «идёт»`);
+    assert.equal(
+      isStaleOpen(openEvent(1, type, 600), NOW),
+      false,
+      'точечные типы этим правилом не чинятся: у них ended_at обязан ставиться сразу',
+    );
+  }
+});
+
+test('у сна предела «идёт» нет: долгий сон неправдоподобен, но возможен', () => {
+  assert.equal(maxOpenMin('sleep'), null);
+  assert.equal(
+    isStaleOpen(openEvent(1, 'sleep', 600), NOW),
+    false,
+    'десятичасовой открытый сон разбирается карточкой про второе «заснул», а не подчисткой',
+  );
+});
+
+test('провисевшее кормление опознаётся, свежее — нет', () => {
+  assert.equal(isStaleOpen(openEvent(1, 'feed', 12), NOW), false, '12 минут — обычное кормление');
+  assert.equal(isStaleOpen(openEvent(1, 'feed', 360), NOW), true, 'шесть часов — заведомо не правда');
+  assert.equal(isStaleOpen(openEvent(1, 'pump', 45), NOW), true);
+  assert.equal(isStaleOpen(openEvent(1, 'activity', 45), NOW), false, 'прогулка 45 минут — норма');
+  assert.equal(isStaleOpen(openEvent(1, 'activity', 400), NOW), true);
+});
+
+test('закрытое и удалённое провисевшим не считается', () => {
+  const closed = { ...openEvent(1, 'feed', 360), ended_at: NOW.toISOString() };
+  const removed = { ...openEvent(1, 'feed', 360), deleted_at: NOW.toISOString() };
+  assert.equal(isStaleOpen(closed, NOW), false);
+  assert.equal(isStaleOpen(removed, NOW), false);
+});
+
+test('различие «начал кушать» и «покормила» есть в любом промпте', () => {
+  const text = prompt();
+  assert.match(text, /ended_at = null означает «ИДЁТ ПРЯМО СЕЙЧАС», а не «конец неизвестен»/);
+  assert.match(text, /«покормила», «поел», «искупали», «погуляли» —\s*\n?\s*законченный факт/);
+  assert.match(text, /«Начал кушать», «кормлю»,\s*\n?\s*«приложила», «купаемся» — идёт/);
+});
+
+test('открытое кормление поднимает карточку и показано с id и возрастом', () => {
+  const text = prompt({ say: 'он поел', recentEvents: [openEvent(13, 'feed', 12)] });
+  assert.match(text, /событие с длительностью, которому нечем закрыться/);
+  assert.match(text, /id=13 feed\/- открыто с/);
+  assert.doesNotMatch(text, /ТАК ДОЛГО НЕ ДЛИТСЯ/, '12 минут — не провисевшее');
+  assert.match(text, /ЗАКРЫВАЮТ открытое/);
+  assert.match(text, /маркер не нужен/);
+});
+
+test('провисевшее кормление отмечено прямо в карточке и чинится точкой', () => {
+  const text = prompt({ say: 'поменяли подгузник', recentEvents: [openEvent(13, 'feed', 362)] });
+  assert.match(text, /id=13 feed\/- открыто с[^\n]*ТАК ДОЛГО НЕ ДЛИТСЯ/);
+  assert.match(text, /Закрывай ТОЧКОЙ: ended_at = started_at/);
+  assert.match(text, /value_num не трогай/);
+  assert.match(
+    text,
+    /ПОЧЕМУ точкой, а у сна границей/,
+    'разное обращение со сном и кормлением обязано быть объяснено, иначе выглядит произволом',
+  );
+});
+
+test('карточка не поднимается там, где длительных событий нет и речь не о них', () => {
+  assert.doesNotMatch(
+    prompt({ say: 'поменяли подгузник', recentEvents: [] }),
+    /событие с длительностью, которому нечем закрыться/,
+  );
 });
 
 /* ------------------------------------------------------------------ */

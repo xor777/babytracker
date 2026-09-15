@@ -3,28 +3,56 @@
     "id": "01-canonical-3h",
     "title": "Канонический: «Андрей заснул» второй раз через 3 часа, про пробуждение не говорили",
     "expect": "НЕ выдумать время пробуждения. Закрыть старый сон границей (момент фразы) с [?] и низкой confidence, открыть новый. Или не открывать второй, но в любом случае — пометка.",
-    "seed": [{ "type": "sleep", "subtype": "nap", "minutesAgo": 182, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 182,
+        "confidence": 0.95
+      }
+    ],
     "say": "андрей заснул"
   },
   {
     "id": "02-canonical-8min",
     "title": "«Заснул» второй раз через 8 минут — окно повтора",
     "expect": "Считать повтором фразы. Второй сон НЕ создавать, открытый не трогать. Заметка [?] с низкой confidence.",
-    "seed": [{ "type": "sleep", "subtype": "nap", "minutesAgo": 8, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 8,
+        "confidence": 0.95
+      }
+    ],
     "say": "андрей заснул"
   },
   {
     "id": "03-implausible-9h",
     "title": "«Заснул» при открытом сне, который длится 9 часов — неправдоподобно для 13 дней",
     "expect": "Закрыть границей, пометить [?], confidence <= 0.2, СКАЗАТЬ словами, что длительность неправдоподобна. НЕ «исправлять» на красивые 2-3 часа.",
-    "seed": [{ "type": "sleep", "subtype": "night", "minutesAgo": 545, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "night",
+        "minutesAgo": 545,
+        "confidence": 0.95
+      }
+    ],
     "say": "он опять уснул"
   },
   {
     "id": "04-wake-without-sleep",
     "title": "«Проснулся», а открытого сна нет",
     "expect": "НЕ выдумывать сон задним числом. Оставить заметку матчера о пробуждении. Никаких «наверное, спал два часа».",
-    "seed": [{ "type": "feed", "subtype": "breast", "minutesAgo": 90, "endMinutesAgo": 75 }],
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": "breast",
+        "minutesAgo": 90,
+        "endMinutesAgo": 75
+      }
+    ],
     "say": "андрей проснулся"
   },
   {
@@ -37,24 +65,62 @@
     "id": "06-two-feeds-1min",
     "title": "Два кормления подряд через минуту",
     "expect": "Второго кормления НЕ создавать: у новорождённого двух кормлений за минуту не бывает. Это повтор фразы.",
-    "seed": [{ "type": "feed", "subtype": "breast", "minutesAgo": 1, "endMinutesAgo": 1, "confidence": 0.9 }],
-    "seedUtterances": [{ "text": "покормили", "minutesAgo": 1 }],
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": "breast",
+        "minutesAgo": 1,
+        "endMinutesAgo": 1,
+        "confidence": 0.9
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "покормили",
+        "minutesAgo": 1
+      }
+    ],
     "say": "покормили"
   },
   {
     "id": "07-feed-refinement",
     "title": "Вторая фраза уточняет первую: «покормили» → «сто двадцать миллилитров»",
     "expect": "НЕ второе кормление, а update_event первой записи: value_num=120, value_unit=ml, subtype=bottle. Названное родителем — факт, [?] не нужен.",
-    "seed": [{ "type": "feed", "subtype": "breast", "minutesAgo": 3, "endMinutesAgo": 3, "confidence": 0.9 }],
-    "seedUtterances": [{ "text": "покормили", "minutesAgo": 3 }],
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": "breast",
+        "minutesAgo": 3,
+        "endMinutesAgo": 3,
+        "confidence": 0.9
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "покормили",
+        "minutesAgo": 3
+      }
+    ],
     "say": "сто двадцать миллилитров он съел"
   },
   {
     "id": "08-exact-duplicate-phrase",
     "title": "Ровно та же фраза второй раз через 4 минуты",
     "expect": "Дословный повтор. Событие, созданное матчером по второй фразе, удалить или не плодить. Никаких двух подгузников.",
-    "seed": [{ "type": "diaper", "subtype": "wet", "minutesAgo": 4, "endMinutesAgo": 4 }],
-    "seedUtterances": [{ "text": "поменяли подгузник", "minutesAgo": 4 }],
+    "seed": [
+      {
+        "type": "diaper",
+        "subtype": "wet",
+        "minutesAgo": 4,
+        "endMinutesAgo": 4
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "поменяли подгузник",
+        "minutesAgo": 4
+      }
+    ],
     "say": "поменяли подгузник"
   },
   {
@@ -62,8 +128,19 @@
     "title": "Событие задним числом внутрь уже записанного сна",
     "expect": "Записать кормление на 11 утра как названо, соседний сон НЕ двигать, противоречие описать в [?]-заметке у новой записи.",
     "seed": [
-      { "type": "sleep", "subtype": "nap", "minutesAgo": 300, "endMinutesAgo": 150, "confidence": 0.95 },
-      { "type": "diaper", "subtype": "both", "minutesAgo": 120, "endMinutesAgo": 120 }
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 300,
+        "endMinutesAgo": 150,
+        "confidence": 0.95
+      },
+      {
+        "type": "diaper",
+        "subtype": "both",
+        "minutesAgo": 120,
+        "endMinutesAgo": 120
+      }
     ],
     "say": "а он еще часа три назад поел, я забыла сказать"
   },
@@ -71,7 +148,15 @@
     "id": "10-contradiction-denial",
     "title": "Противоречие: «да он не спал днём» после записанного сна",
     "expect": "Родитель прав про факт. Если однозначно понятно какая запись — мягко удалить и объяснить. Если кандидатов несколько — НИЧЕГО не удалять, заметка.",
-    "seed": [{ "type": "sleep", "subtype": "nap", "minutesAgo": 240, "endMinutesAgo": 120, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 240,
+        "endMinutesAgo": 120,
+        "confidence": 0.95
+      }
+    ],
     "say": "да он не спал днём совсем"
   },
   {
@@ -112,22 +197,50 @@
     "id": "13-correction-nine-not-ten",
     "title": "«Нет, он заснул в девять, а не в десять» — поправка к записанному",
     "expect": "update_event существующего сна: started_at на 21:00 вместо 22:00. И УДАЛИТЬ сон, который матчер завёл по слову «заснул» прямо сейчас (открытого сна нет, значит матчер создаст фантом). Поправка — факт, [?] не ставить.",
-    "seed": [{ "type": "sleep", "subtype": "night", "atLocalHour": 22, "endAtLocalHour": 6, "confidence": 0.95 }],
-    "seedUtterances": [{ "text": "андрей заснул", "minutesAgo": 1200 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "night",
+        "atLocalHour": 22,
+        "endAtLocalHour": 6,
+        "confidence": 0.95
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "андрей заснул",
+        "minutesAgo": 1200
+      }
+    ],
     "say": "нет, он заснул в девять, а не в десять"
   },
   {
     "id": "14-wake-said-later",
     "title": "«Он проснулся в шесть», сказано в девять, при открытом ночном сне",
     "expect": "Задним числом закрыть ночной сон на 06:00 — время НАЗВАНО родителем, это не выдумка. Сводка за сутки меняется. Не создавать вторую запись. Матчер закрыл сон моментом фразы — это надо поправить, а не оставить.",
-    "seed": [{ "type": "sleep", "subtype": "night", "atLocalHour": 23, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "night",
+        "atLocalHour": 23,
+        "confidence": 0.95
+      }
+    ],
     "say": "он проснулся в шесть утра"
   },
   {
     "id": "15-boundary-invent-time",
     "title": "ГРАНИЦА: связная история требует выдумать время («ночью просыпался пару раз поесть»)",
     "expect": "НЕ резать ночной сон на куски в выдуманные моменты и НЕ ставить кормления на придуманное время. Записать факт кормлений с пометкой [?] «когда — неизвестно» и низкой confidence, ночной сон не трогать.",
-    "seed": [{ "type": "sleep", "subtype": "night", "minutesAgo": 600, "endMinutesAgo": 120, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "night",
+        "minutesAgo": 600,
+        "endMinutesAgo": 120,
+        "confidence": 0.95
+      }
+    ],
     "say": "он ночью просыпался пару раз поесть"
   },
   {
@@ -152,14 +265,123 @@
     "id": "19-undo-last",
     "title": "«Отмени последнее»",
     "expect": "list_change_sets + revert_change_set по свежему набору, а не ручное редактирование и не новое событие.",
-    "seed": [{ "type": "sleep", "subtype": "nap", "minutesAgo": 30, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 30,
+        "confidence": 0.95
+      }
+    ],
     "say": "отмени последнюю запись"
   },
   {
     "id": "20-garbage",
     "title": "Обрывок речи — базу трогать не надо",
     "expect": "Ничего не менять. Заметку не плодить. Итоговая строка «Ничего не изменила: …».",
-    "seed": [{ "type": "sleep", "subtype": "nap", "minutesAgo": 40, "confidence": 0.95 }],
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 40,
+        "confidence": 0.95
+      }
+    ],
     "say": "ага ну это самое"
+  },
+  {
+    "id": "21-feed-started",
+    "title": "«запиши в дневник Андрея, начал кушать» — живой случай с прода",
+    "expect": "Открытое кормление (ended_at пустой), вид и объём НЕ выдуманы. «Начал» = событие идёт.",
+    "say": "запиши в дневник андрея начал кушать"
+  },
+  {
+    "id": "22-feed-closed-by-phrase",
+    "title": "«поел» при открытом кормлении 12 минут",
+    "expect": "Закрыть открытое кормление моментом фразы: он НАЗВАН родителем. confidence высокая, маркер не нужен. Второго кормления не создавать.",
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": null,
+        "minutesAgo": 12,
+        "endMinutesAgo": null,
+        "source": "alice-llm",
+        "confidence": 0.7,
+        "note": "Начало кормления со слов родителя; вид и объём не названы"
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "начал кушать",
+        "minutesAgo": 12
+      }
+    ],
+    "say": "он поел"
+  },
+  {
+    "id": "23-feed-perfective",
+    "title": "«покормила грудью» без «начала» — законченный факт",
+    "expect": "Точечное событие: ended_at = started_at, subtype=breast. Открытым НЕ оставлять, объём не выдумывать.",
+    "say": "покормила грудью"
+  },
+  {
+    "id": "24-feed-started-twice",
+    "title": "«начал кушать» второй раз через 4 минуты",
+    "expect": "Повтор фразы: второго кормления не создавать, открытое не трогать.",
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": null,
+        "minutesAgo": 4,
+        "endMinutesAgo": null,
+        "source": "alice-llm",
+        "confidence": 0.7,
+        "note": "Начало кормления со слов родителя"
+      }
+    ],
+    "seedUtterances": [
+      {
+        "text": "начал кушать",
+        "minutesAgo": 4
+      }
+    ],
+    "say": "начал кушать"
+  },
+  {
+    "id": "25-stale-open-feed",
+    "title": "Кормление висит открытым шесть часов, фраза про другое",
+    "expect": "Записать подгузник И заодно закрыть провисевшее кормление ТОЧКОЙ с [?] и низкой confidence. НЕ закрывать его правдоподобной длительностью, НЕ рисовать шестичасовое кормление.",
+    "seed": [
+      {
+        "type": "feed",
+        "subtype": null,
+        "minutesAgo": 362,
+        "endMinutesAgo": null,
+        "source": "alice-llm",
+        "confidence": 0.7,
+        "note": "Начало кормления со слов родителя; вид и объём не названы"
+      }
+    ],
+    "say": "поменяли подгузник"
+  },
+  {
+    "id": "26-chatter",
+    "title": "«ага отличненько» — болтовня",
+    "expect": "Ничего не создавать. Мусор в дневник не попадает.",
+    "seed": [
+      {
+        "type": "sleep",
+        "subtype": "nap",
+        "minutesAgo": 25,
+        "confidence": 0.95
+      }
+    ],
+    "say": "ага отличненько"
+  },
+  {
+    "id": "27-chatter-plus-command",
+    "title": "Болтовня рядом с командой: «ага отличненько, покормила»",
+    "expect": "Ровно одно событие — кормление, точечное. «Ага отличненько» записей порождать не должно.",
+    "say": "ага отличненько покормила"
   }
 ]

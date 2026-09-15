@@ -1,27 +1,29 @@
 import type { TrackerState } from '../types';
-import { splitMinutes } from '../lib/format';
+import type { DaySummary } from '../lib/day';
+import { plural, splitMinutes } from '../lib/format';
+import { formatTime } from '../lib/format';
 
 interface Props {
   today: TrackerState['today'];
+  day: DaySummary;
 }
 
-interface StatProps {
+function Stat({
+  label,
+  color,
+  value,
+  sub,
+}: {
   label: string;
   color: string;
-  children: React.ReactNode;
-  bar?: number;
-}
-
-function Stat({ label, color, children, bar }: StatProps) {
+  value: React.ReactNode;
+  sub: string;
+}) {
   return (
     <div className="stat" style={{ ['--stat-color' as string]: color }}>
       <span className="stat__label">{label}</span>
-      <span className="stat__value">{children}</span>
-      {bar != null && (
-        <span className="stat__bar">
-          <i style={{ width: `${Math.min(100, Math.max(0, bar * 100)).toFixed(1)}%` }} />
-        </span>
-      )}
+      <span className="stat__value">{value}</span>
+      <span className="stat__sub">{sub}</span>
     </div>
   );
 }
@@ -42,7 +44,38 @@ function Duration({ min }: { min: number }) {
   );
 }
 
-export function SummaryPanel({ today }: Props) {
+function hhmm(min: number): string {
+  const h = Math.floor(min / 60);
+  return `${h}:${String(Math.round(min % 60)).padStart(2, '0')}`;
+}
+
+export function SummaryPanel({ today, day }: Props) {
+  const { feeds, diapers } = day;
+
+  const sleepSub =
+    today.sleepSessions > 0
+      ? `${today.sleepSessions} ${plural(today.sleepSessions, 'сон', 'сна', 'снов')} · макс ${hhmm(today.longestSleepMin)}`
+      : 'пока не спал';
+
+  // «—» вместо «0»: мы не знаем, что кормлений не было — мы знаем, что их
+  // не записывали. Ноль на стене в детской читался бы как тревога.
+  const feedSub = !feeds.everRecorded
+    ? 'пока не записывали'
+    : feeds.count === 0
+      ? 'сегодня записей нет'
+      : [
+          feeds.withMl > 0 ? `${Math.round(feeds.totalMl)} мл` : null,
+          feeds.last ? `в ${formatTime(feeds.last.started_at)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+  const diaperSub = !diapers.everRecorded
+    ? 'пока не записывали'
+    : diapers.count === 0
+      ? 'сегодня записей нет'
+      : `${diapers.wet} мокрых, ${diapers.dirty} грязных`;
+
   return (
     <section className="panel">
       <div className="panel__head">
@@ -50,15 +83,24 @@ export function SummaryPanel({ today }: Props) {
         <span className="panel__rule" />
       </div>
       <div className="panel__body summary">
-        <Stat label="Сон всего" color="var(--cyan-soft)" bar={today.sleepTotalMin / (24 * 60)}>
-          <Duration min={today.sleepTotalMin} />
-        </Stat>
-        <Stat label="Засыпаний" color="var(--violet)">
-          {today.sleepSessions}
-        </Stat>
-        <Stat label="Дольше всего" color="var(--green)">
-          <Duration min={today.longestSleepMin} />
-        </Stat>
+        <Stat
+          label="Сон"
+          color="var(--cyan-soft)"
+          value={<Duration min={today.sleepTotalMin} />}
+          sub={sleepSub}
+        />
+        <Stat
+          label="Кормлений"
+          color="var(--green)"
+          value={feeds.everRecorded ? feeds.count : '—'}
+          sub={feedSub}
+        />
+        <Stat
+          label="Подгузников"
+          color="var(--violet)"
+          value={diapers.everRecorded ? diapers.count : '—'}
+          sub={diaperSub}
+        />
       </div>
     </section>
   );

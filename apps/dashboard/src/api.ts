@@ -1,4 +1,4 @@
-import type { DailySleep, Health, TrackerEvent, TrackerState, Utterance } from './types';
+import type { Health, TrackerEvent, TrackerState, Utterance } from './types';
 
 /**
  * База API. В dev — пустая строка (работает vite-прокси на 8787).
@@ -42,9 +42,10 @@ export async function fetchState(signal?: AbortSignal): Promise<TrackerState> {
   return getJson<TrackerState>('/api/state', signal);
 }
 
-export async function fetchDaily(days = 14, signal?: AbortSignal): Promise<DailySleep[]> {
-  const payload = await getJson<unknown>(`/api/sleep/daily?days=${days}`, signal);
-  return pickArray<DailySleep>(payload, 'days', 'daily', 'items');
+/** Все взвешивания за всю историю: ряд веса начинается с веса при рождении. */
+export async function fetchMeasures(signal?: AbortSignal): Promise<TrackerEvent[]> {
+  const payload = await getJson<unknown>('/api/events?type=measure&limit=200', signal);
+  return pickArray<TrackerEvent>(payload, 'events', 'items', 'rows');
 }
 
 export async function fetchUtterances(limit = 20, signal?: AbortSignal): Promise<Utterance[]> {
@@ -52,11 +53,15 @@ export async function fetchUtterances(limit = 20, signal?: AbortSignal): Promise
   return pickArray<Utterance>(payload, 'utterances', 'items', 'rows');
 }
 
-/** Сны за последние 24 часа + небольшой запас назад, чтобы поймать начало ночного сна. */
-export async function fetchSleepEvents(signal?: AbortSignal): Promise<TrackerEvent[]> {
+/**
+ * Все события за последние 30 часов — не только сон: лента суток, счётчики
+ * кормлений и подгузников считаются на клиенте, в /api/state их нет.
+ * Запас в 6 часов сверх суток нужен, чтобы поймать начало ночного сна.
+ */
+export async function fetchRecentEvents(signal?: AbortSignal): Promise<TrackerEvent[]> {
   const from = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
   const payload = await getJson<unknown>(
-    `/api/events?type=sleep&from=${encodeURIComponent(from)}&limit=200`,
+    `/api/events?from=${encodeURIComponent(from)}&limit=400`,
     signal,
   );
   return pickArray<TrackerEvent>(payload, 'events', 'items', 'rows');
