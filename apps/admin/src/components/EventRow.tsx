@@ -19,11 +19,7 @@ export function EventRow({ event, busy, onOpen, onRestore }: Props) {
   const deleted = Boolean(event.deleted_at);
   const shaky = event.confidence != null && event.confidence < SHAKY;
 
-  const wrapClass = [
-    'event-wrap',
-    deleted ? 'event--deleted' : '',
-    busy ? 'event--busy' : '',
-  ]
+  const wrapClass = ['event-wrap', deleted ? 'event--deleted' : '', busy ? 'event--busy' : '']
     .filter(Boolean)
     .join(' ');
 
@@ -66,6 +62,25 @@ export function EventRow({ event, busy, onOpen, onRestore }: Props) {
             <span className="badge">{sourceShort(event.source)}</span>
           </span>
         </span>
+
+        {/*
+         * Явная кнопка правки. Строка и так нажимается целиком, но об этом никто
+         * не догадывался: «не могу редактировать» была жалоба именно на невидимость
+         * действия, а не на его отсутствие.
+         */}
+        {!deleted ? (
+          <span className="event__edit" aria-hidden="true">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Править
+          </span>
+        ) : null}
       </button>
 
       {deleted ? (

@@ -24,6 +24,8 @@
  *
  *   node mock-server.mjs              → http://localhost:8787
  *   MOCK_401=1 node mock-server.mjs              → /api отвечает 401
+ *   MOCK_EMPTY=1 node mock-server.mjs            → только вес при рождении:
+ *                                                  проверить экраны на пустой базе
  *   MOCK_NO_UTTERANCES=1 node mock-server.mjs    → падает только /api/utterances:
  *                                                  цитаты обязаны остаться на месте
  *
@@ -36,7 +38,9 @@ import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const CHILD_NAME = process.env.CHILD_NAME ?? 'Андрей';
-const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-03-01';
+const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-09-02';
+/** MOCK_EMPTY=1 — как на проде у двухнедельного: только вес при рождении. */
+const EMPTY = process.env.MOCK_EMPTY === '1';
 const FORCE_401 = process.env.MOCK_401 === '1';
 /** Роняет только /api/utterances: цитаты обязаны выжить — они приходят с событиями. */
 const NO_UTTERANCES = process.env.MOCK_NO_UTTERANCES === '1';
@@ -67,7 +71,12 @@ function at(daysAgo, h, m = 0) {
   return d.getTime();
 }
 
-function say(rawText, receivedMs, status = 'done') {
+/**
+ * @param kind что понял быстрый матчер (§4). Админка по нему отличает вопрос
+ *   к Алисе от фразы, которую действительно никто не разобрал, — без него
+ *   безобидное «сколько он спал» выглядит поломкой разбора.
+ */
+function say(rawText, receivedMs, status = 'done', kind = null) {
   const u = {
     id: ++uttSeq,
     raw_text: rawText,
@@ -75,7 +84,7 @@ function say(rawText, receivedMs, status = 'done') {
     session_id: 'mock-session',
     received_at: iso(receivedMs),
     status,
-    fast_result: null,
+    fast_result: kind ? { kind, confidence: 0.9 } : null,
     llm_result: null,
     llm_error: status === 'failed' ? 'timeout: claude не ответил за 60 с' : null,
     attempts: status === 'failed' ? 3 : 1,
@@ -239,7 +248,8 @@ function seedDay(daysAgo) {
   if (daysAgo === 6 || daysAgo === 3 || daysAgo === 0) {
     const ms = at(daysAgo, 11, 10);
     if (past(ms)) {
-      const grams = 7480 + (6 - daysAgo) * 35;
+      // Ребёнку две недели: вес идёт от провала первых суток обратно к рождению.
+      const grams = 4395 + (6 - daysAgo) * 66;
       const u = say(`взвесили, ${(grams / 1000).toFixed(2).replace('.', ',')} килограмма`, ms);
       add({
         type: 'measure',
@@ -256,7 +266,7 @@ function seedDay(daysAgo) {
   if (daysAgo === 6 || daysAgo === 0) {
     const ms = at(daysAgo, 11, 14);
     if (past(ms)) {
-      const cm = 67.5 + (6 - daysAgo) * 0.12;
+      const cm = 54.4 + (6 - daysAgo) * 0.22;
       const u = say(`рост ${cm.toFixed(1).replace('.', ',')}`, ms);
       add({
         type: 'measure',
@@ -272,7 +282,7 @@ function seedDay(daysAgo) {
         type: 'measure',
         subtype: 'head',
         started_at: ms + MINUTE,
-        value_num: 43.2 + (6 - daysAgo) * 0.05,
+        value_num: 36.2 + (6 - daysAgo) * 0.11,
         value_unit: 'cm',
         source: 'alice-llm',
         confidence: 0.88,
@@ -280,6 +290,20 @@ function seedDay(daysAgo) {
       });
     }
   }
+}
+
+/**
+ * Фразы без событий — четыре штатных и один настоящий пробел.
+ * Ровно на этой разнице заказчик и споткнулся: вопрос к Алисе показывался
+ * как сбой разбора.
+ */
+function seedPhrases() {
+  say('сколько он сегодня спал', at(0, 16, 10), 'skipped', 'query_state');
+  say('что там с андреем', at(0, 14, 5), 'skipped', 'query_state');
+  say('андрей проснулся', at(0, 12, 30), 'skipped', 'sleep_end');
+  say('хватит', at(0, 12, 31), 'skipped', 'exit');
+  // а это уже пробел: матчер не понял, модель не приходила
+  say('он какой-то беспокойный и кряхтит', at(0, 15, 40), 'skipped', 'unknown');
 }
 
 /**
@@ -422,14 +446,31 @@ function seedInteresting() {
   });
 
   // 8. Фраза, которую разбор не осилил: события нет вовсе. В ленте видно как пробел.
-  say('он сегодня какой-то не такой, покряхтывает', at(0, 15, 30), 'failed');
+  say('он сегодня какой-то не такой, покряхтывает', at(0, 15, 30), 'failed', 'unknown');
 
   // 9. И одна фраза прямо сейчас в очереди.
-  say('поменяла подгузник и покормила', Date.now() - 4000, 'pending');
+  say('поменяла подгузник и покормила', Date.now() - 4000, 'pending', 'unknown');
 }
 
-for (let d = 6; d >= 0; d--) seedDay(d);
-seedInteresting();
+// Вес при рождении — точка отсчёта для графика веса. Берётся как самое раннее
+// измерение, поэтому просто кладём его первым.
+const BIRTH_MS = Date.parse(`${CHILD_BIRTHDATE}T04:35:00`);
+add({
+  type: 'measure',
+  subtype: 'weight',
+  started_at: BIRTH_MS,
+  value_num: 4620,
+  value_unit: 'g',
+  note: 'вес при рождении',
+  confidence: 0.95,
+  utterance: say('вес при рождении 4,62', BIRTH_MS, 'done', 'unknown'),
+});
+
+if (!EMPTY) {
+  for (let d = 6; d >= 0; d--) seedDay(d);
+  seedInteresting();
+  seedPhrases();
+}
 events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
 
 // ------------------------------------------------------------------ выборки
@@ -588,6 +629,10 @@ function buildState() {
 const changeSets = [];
 let csSeq = 0;
 
+/**
+ * @param utteranceId обязателен для фраз: по нему админка понимает, ЧТО сделала
+ *   фраза. Без него «проснулся», закрывший сон, выглядит не сделавшим ничего.
+ */
 function newChangeSet(summary, rows, utteranceId = null) {
   const cs = {
     id: `cs-${String(++csSeq).padStart(4, '0')}`,
@@ -610,6 +655,41 @@ function newChangeSet(summary, rows, utteranceId = null) {
 for (const row of events.filter((e) => e.deleted_at)) {
   const cs = newChangeSet(`Удаление события ${row.id} моделью`, [{ ...row, deleted_at: null }]);
   cs.created_at = row.deleted_at;
+}
+
+/*
+ * Живой случай с прода: «андрей проснулся» не создаёт события, а ЗАКРЫВАЕТ начатый
+ * ранее сон. Событие принадлежит другой, более ранней фразе, поэтому связь видна
+ * только через набор изменений. Без этого случая мок снова спрятал бы дефект.
+ */
+if (!EMPTY) {
+  const openSleep = [...events]
+    .reverse()
+    .find((e) => e.type === 'sleep' && e.ended_at && !e.deleted_at);
+  if (openSleep) {
+    const wokeAt = Date.parse(openSleep.ended_at);
+    const u = say('андрей проснулся', wokeAt, 'skipped', 'sleep_end');
+    const cs = newChangeSet(
+      'Быстрый разбор фразы: «андрей проснулся»',
+      // снимок «до»: сон ещё шёл
+      [{ ...openSleep, ended_at: null }],
+      u.id,
+    );
+    cs.created_at = iso(wokeAt);
+  }
+
+  // Фраза, создавшая записи, тоже должна отменяться целиком.
+  const composite = events.filter((e) => e.utterance_id != null && e.confidence === 0.41);
+  if (composite.length) {
+    const cs = newChangeSet(
+      'Разбор фразы моделью: «Андрей покушал и уснул»',
+      composite.map((e) => ({ ...e })),
+      composite[0].utterance_id,
+    );
+    // созданные записи: снимок «до» пустой, откат их спрячет
+    cs.before = cs.before.map((r) => ({ ...r, __created: true }));
+    cs.created_at = composite[0].created_at;
+  }
 }
 
 function changeSetDto(cs) {
@@ -820,7 +900,14 @@ const server = http.createServer(async (req, res) => {
     for (const before of cs.before) {
       const row = events.find((e) => e.id === before.id);
       if (!row) continue;
-      Object.assign(row, before, { updated_at: iso(Date.now()) });
+      if (before.__created) {
+        // строку создал этот набор — физически удалить нельзя, значит прячем (§9.1)
+        row.deleted_at = row.deleted_at ?? iso(Date.now());
+        row.updated_at = iso(Date.now());
+      } else {
+        const { __created, ...snapshot } = before;
+        Object.assign(row, snapshot, { updated_at: iso(Date.now()) });
+      }
       restored.push(toDto(row));
     }
     cs.reverted_at = iso(Date.now());
@@ -865,6 +952,7 @@ server.listen(PORT, () => {
   console.log(`mock BabyTracker API  → http://localhost:${PORT}`);
   console.log(`  события: ${events.length}, фразы: ${utterances.length}`);
   if (FORCE_401) console.log('  MOCK_401=1 — /api отвечает 401');
+  if (EMPTY) console.log('  MOCK_EMPTY=1 — только вес при рождении');
   if (NO_UTTERANCES) console.log('  MOCK_NO_UTTERANCES=1 — /api/utterances отвечает 500');
   if (fs.existsSync(DIST)) console.log(`  собранная админка → http://localhost:${PORT}/dash`);
 });

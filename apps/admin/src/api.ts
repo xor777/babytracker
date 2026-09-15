@@ -1,5 +1,6 @@
 import { ApiError } from './types';
 import type {
+  ChangeSet,
   DailyStats,
   EventPatch,
   NormRange,
@@ -132,13 +133,6 @@ export async function deleteEvent(id: number): Promise<DeleteResult> {
 
 // ------------------------------------------------------------------ откат
 
-interface ChangeSetDto {
-  id: string;
-  created_at: string;
-  reverted_at: string | null;
-  events: number[];
-}
-
 /**
  * Возврат удалённого идёт единственной дорогой, которая у сервера есть, — через журнал
  * ревизий (§9.6). Отдельной ручки «восстановить событие» не существует, и снять
@@ -149,13 +143,18 @@ export async function revertChangeSet(changeSetId: string): Promise<TrackerEvent
   return pickArray<TrackerEvent>(payload?.restored, 'restored');
 }
 
+/** Журнал изменений: по нему видно, что фраза сделала с данными (§9.2). */
+export async function fetchChangeSets(limit = 200, signal?: AbortSignal): Promise<ChangeSet[]> {
+  const payload = await request<any>(`/api/change-sets?limit=${limit}`, { signal });
+  return pickArray<ChangeSet>(payload, 'changeSets', 'change_sets', 'items');
+}
+
 /**
  * Каким изменением событие удалили, если мы удаляли его не в этой сессии.
  * Список наборов уже несёт `events: number[]`, поэтому хватает одного запроса.
  */
 export async function findChangeSetForEvent(eventId: number): Promise<string | null> {
-  const payload = await request<any>('/api/change-sets?limit=200');
-  const sets = pickArray<ChangeSetDto>(payload, 'changeSets', 'change_sets', 'items');
+  const sets = await fetchChangeSets(200);
   // Список приходит от свежих к старым — берём первый непогашенный, который трогал событие.
   const found = sets.find((cs) => !cs.reverted_at && Array.isArray(cs.events) && cs.events.includes(eventId));
   return found?.id ?? null;

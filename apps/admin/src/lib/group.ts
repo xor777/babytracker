@@ -5,7 +5,7 @@
  * и в том порядке, в котором прозвучали («покушал и уснул» — сначала еда), иначе не видно,
  * как разбор превратил фразу в записи, и ошибку не поймать.
  */
-import type { GrowthPoint, TrackerEvent, Utterance } from '../types';
+import type { ChangeSet, GrowthPoint, TrackerEvent, Utterance } from '../types';
 import { localDateKey, parseTs, startOfLocalDay } from './format';
 
 export interface EventGroup {
@@ -15,13 +15,33 @@ export interface EventGroup {
   events: TrackerEvent[];
   /** Время самого позднего события грозди — по нему гроздь стоит в ленте. */
   anchor: number;
+  /** Наборы изменений этой фразы (§9.2) — по ним видно, что она сделала. */
+  changeSets: ChangeSet[];
+  /**
+   * События, которые фраза ИЗМЕНИЛА, но не создавала: «проснулся» закрывает
+   * чужой сон. Без них такая фраза выглядит не сделавшей ничего, хотя она
+   * поменяла дневник.
+   */
+  touched: TrackerEvent[];
+}
+
+/** Набор, который сам является откатом другого. Предлагать «отменить» его не надо. */
+export function isRevertSet(cs: ChangeSet): boolean {
+  return (cs.summary ?? '').startsWith('Откат набора изменений');
+}
+
+/** Наборы, которые ещё можно отменить. */
+export function undoableSets(sets: ChangeSet[]): ChangeSet[] {
+  return sets.filter((cs) => !cs.reverted_at && !isRevertSet(cs));
 }
 
 export interface DaySection {
   key: string;
   dayMs: number;
   groups: EventGroup[];
-  total: number;
+  /** Считаем раздельно: иначе заголовок пишет «0 записей» над пятью карточками. */
+  events: number;
+  phrases: number;
 }
 
 /**
@@ -56,6 +76,8 @@ export function attachUtterances(
 export function buildSections(
   events: TrackerEvent[],
   orphans: Utterance[] = [],
+  setsByUtterance: Map<number, ChangeSet[]> = new Map(),
+  eventsById: Map<number, TrackerEvent> = new Map(),
 ): DaySection[] {
   const days = new Map<string, Map<string, EventGroup>>();
 
@@ -86,6 +108,8 @@ export function buildSections(
         utterance: event.utterance ?? null,
         events: [event],
         anchor: ms,
+        changeSets: [],
+        touched: [],
       });
     }
   }
@@ -102,7 +126,31 @@ export function buildSections(
       utterance: u,
       events: [],
       anchor: ms,
+      changeSets: [],
+      touched: [],
     });
+  }
+
+  // Привязываем наборы изменений и «изменённые, но не созданные» события.
+  for (const groups of days.values()) {
+    for (const group of groups.values()) {
+      const uid = group.utterance?.id;
+      if (uid == null) continue;
+      group.changeSets = setsByUtterance.get(uid) ?? [];
+      const own = new Set(group.events.map((e) => e.id));
+      const seen = new Set<number>();
+      for (const cs of group.changeSets) {
+        if (isRevertSet(cs)) continue;
+        for (const id of cs.events ?? []) {
+          if (own.has(id) || seen.has(id)) continue;
+          const found = eventsById.get(id);
+          if (found) {
+            seen.add(id);
+            group.touched.push(found);
+          }
+        }
+      }
+    }
   }
 
   const sections: DaySection[] = [];
@@ -117,7 +165,8 @@ export function buildSections(
       key: dayKey,
       dayMs: list.length ? startOfLocalDay(list[0].anchor) : 0,
       groups: list,
-      total: list.reduce((sum, g) => sum + g.events.length, 0),
+      events: list.reduce((sum, g) => sum + g.events.length, 0),
+      phrases: list.filter((g) => g.events.length === 0).length,
     });
   }
   sections.sort((a, b) => b.dayMs - a.dayMs);

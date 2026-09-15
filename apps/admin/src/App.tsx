@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { fetchState } from './api';
 import { ApiError } from './types';
 import { useHashRoute } from './hooks/useHashRoute';
+import { OverviewScreen } from './components/OverviewScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { StatsScreen } from './components/StatsScreen';
 import { plural } from './lib/format';
@@ -11,9 +12,15 @@ interface Child {
   ageDays: number;
 }
 
+/*
+ * Обзор первым и по умолчанию: девять из десяти заходов — это «что с ним сейчас
+ * и сколько он сегодня съел», а не разбор истории. Сводка вторая — туда идут
+ * осознанно, за динамикой. Журнал третий: это инструмент починки, нужный реже.
+ */
 const TABS = [
-  { id: 'history' as const, label: 'Журнал' },
+  { id: 'overview' as const, label: 'Обзор' },
   { id: 'stats' as const, label: 'Сводка' },
+  { id: 'history' as const, label: 'Журнал' },
 ];
 
 export function App() {
@@ -117,7 +124,9 @@ export function App() {
       </header>
 
       <main className="main">
-        {route === 'history' ? <HistoryScreen onBusy={onBusy} /> : <StatsScreen />}
+        {route === 'overview' ? <OverviewScreen /> : null}
+        {route === 'stats' ? <StatsScreen /> : null}
+        {route === 'history' ? <HistoryScreen onBusy={onBusy} /> : null}
       </main>
     </div>
   );

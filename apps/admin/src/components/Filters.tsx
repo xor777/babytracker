@@ -7,17 +7,18 @@ interface Props {
   value: HistoryFilters;
   onChange: (next: HistoryFilters) => void;
   total: number;
+  phrases: number;
   deletedCount: number;
 }
 
-const RANGES = [
+export const RANGES = [
   { days: 1, label: 'Сегодня' },
-  { days: 3, label: '3 дня' },
   { days: 7, label: 'Неделя' },
   { days: 30, label: 'Месяц' },
+  { days: 400, label: 'Всё' },
 ];
 
-export function Filters({ value, onChange, total, deletedCount }: Props) {
+export function Filters({ value, onChange, total, phrases, deletedCount }: Props) {
   const toggleType = (id: string) => {
     const has = value.types.includes(id);
     onChange({
@@ -78,9 +79,12 @@ export function Filters({ value, onChange, total, deletedCount }: Props) {
         ))}
       </div>
 
+      {/* Считаем ровно то, что нарисовано: карточки фраз — не записи, и молчать
+          о них нельзя, иначе «0 записей» висит над пятью блоками. */}
       <p className="filters__meta">
         {total} {plural(total, 'запись', 'записи', 'записей')}
-        {value.showDeleted && deletedCount > 0 ? `, из них удалённых ${deletedCount}` : ''}
+        {phrases > 0 ? ` · ${phrases} ${plural(phrases, 'фраза', 'фразы', 'фраз')} без записей` : ''}
+        {value.showDeleted && deletedCount > 0 ? `, удалённых ${deletedCount}` : ''}
       </p>
     </div>
   );

@@ -1174,3 +1174,646 @@ textarea.input {
     grid-column: 1 / -1;
   }
 }
+
+/* ============================================================
+   Обзор: что сейчас и что было сегодня
+   ============================================================ */
+
+.hero {
+  margin: 12px 0 10px;
+  padding: 18px 16px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--tone, var(--cyan));
+  border-radius: var(--radius);
+}
+
+.hero__state {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tone, var(--cyan));
+}
+
+.hero__timer {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hero__hm {
+  font-size: 46px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.hero__sec {
+  font-size: 20px;
+  color: var(--text-3);
+}
+
+.hero__sub {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.hero__pending {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* --- «когда в последний раз» --- */
+
+.lastrow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lastcard {
+  min-width: 0;
+  padding: 10px 10px 11px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.lastcard__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--tone, var(--text-2));
+}
+
+.lastcard__value {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.lastcard__sub,
+.lastcard__empty {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--mono);
+}
+
+.lastcard__empty {
+  margin-top: 6px;
+  font-family: var(--sans);
+  line-height: 1.3;
+}
+
+/* --- плитки итогов суток --- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tile {
+  min-width: 0;
+  padding: 10px 10px 11px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.tile__value {
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--tone, var(--text));
+}
+
+.tile__label {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.25;
+}
+
+.tile__hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.overview__norm {
+  margin-top: 14px;
+}
+
+.overview__norm-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.card__note {
+  margin-top: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Полоса суток
+   ============================================================ */
+
+.strip {
+  position: relative;
+  padding-top: 2px;
+}
+
+.strip__row {
+  position: relative;
+  width: 100%;
+}
+
+.strip__row--sleep {
+  height: 26px;
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.strip__sleep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  background: var(--t-sleep);
+  opacity: 0.75;
+  border-radius: 2px;
+}
+
+.strip__sleep--open {
+  background: linear-gradient(90deg, var(--t-sleep), rgba(162, 115, 255, 0.35));
+}
+
+.strip__now {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  opacity: 0.9;
+}
+
+.strip__row--marks {
+  height: 11px;
+  margin-top: 3px;
+}
+
+.strip__mark {
+  position: absolute;
+  top: 2px;
+  width: 2px;
+  height: 7px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+
+.strip__row--marks[data-kind='feed'] .strip__mark {
+  background: var(--t-feed);
+}
+
+.strip__row--marks[data-kind='diaper'] .strip__mark {
+  background: var(--t-diaper);
+}
+
+.strip__axis {
+  position: relative;
+  height: 14px;
+  margin-top: 2px;
+}
+
+.strip__tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.strip__tick:first-child {
+  transform: none;
+}
+
+.strip__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.strip__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.strip__key::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.strip__key[data-kind='sleep']::before {
+  background: var(--t-sleep);
+}
+
+.strip__key[data-kind='feed']::before {
+  background: var(--t-feed);
+}
+
+.strip__key[data-kind='diaper']::before {
+  background: var(--t-diaper);
+}
+
+.strip__hint {
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Столбцы по дням
+   ============================================================ */
+
+.bars {
+  margin-top: 4px;
+}
+
+.bars__plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 96px;
+  padding: 0 1px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bars__band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: currentColor;
+  opacity: 0.1;
+  border-top: 1px dashed currentColor;
+  border-bottom: 1px dashed currentColor;
+  pointer-events: none;
+}
+
+.bars__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed currentColor;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bars__col {
+  position: relative;
+  flex: 1;
+  min-width: 3px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 2px 2px 0 0;
+}
+
+.bars__col--today {
+  background: rgba(122, 190, 212, 0.07);
+}
+
+.bars__fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  opacity: 0.85;
+}
+
+.bars__col--today .bars__fill {
+  opacity: 0.6;
+}
+
+.bars__axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.bars__bandnote {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Вес
+   ============================================================ */
+
+.weight {
+  display: block;
+  width: 100%;
+  height: 132px;
+  margin-top: 6px;
+  overflow: visible;
+}
+
+.weight__base {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  fill: var(--text-3);
+}
+
+.weight__axis {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--text-3);
+}
+
+.metric__quiet {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.chart-empty {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Пустые состояния
+   ============================================================ */
+
+.empty {
+  margin: 14px 0;
+  padding: 22px 18px 20px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.empty--inline {
+  padding: 16px;
+  text-align: left;
+}
+
+.empty__mark {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 18px;
+  color: var(--cyan);
+  background: rgba(63, 233, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(63, 233, 255, 0.25);
+}
+
+.empty__title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.empty__text {
+  margin-top: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ============================================================
+   Журнал: явная правка
+   ============================================================ */
+
+.event {
+  grid-template-columns: 30px 1fr auto;
+  grid-template-areas: 'icon body right' 'icon edit right';
+}
+
+.event__icon {
+  grid-area: icon;
+}
+
+.event__body {
+  grid-area: body;
+}
+
+.event__right {
+  grid-area: right;
+}
+
+/* Подпись «Править» рядом с записью: тап по строке и так работал, но об этом
+   невозможно было догадаться — отсюда и жалоба «не могу редактировать». */
+.event__edit {
+  grid-area: edit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.event:active .event__edit {
+  color: var(--cyan);
+}
+
+.group__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.group__empty-detail {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  word-break: break-word;
+}
+
+.said--gap {
+  background: linear-gradient(180deg, rgba(255, 180, 60, 0.08), rgba(255, 180, 60, 0));
+}
+
+.said--gap .said__text::before,
+.said--gap .said__text::after {
+  color: var(--amber);
+}
+
+@media (min-width: 760px) {
+  .hero__hm {
+    font-size: 54px;
+  }
+
+  .lastrow {
+    gap: 10px;
+  }
+
+  .weight {
+    height: 170px;
+  }
+
+  .bars__plot {
+    height: 130px;
+  }
+}
+
+/* ============================================================
+   Фраза, изменившая существующую запись, и отмена
+   ============================================================ */
+
+.changed {
+  padding: 10px 12px 12px;
+}
+
+.changed__title {
+  font-size: 12.5px;
+  color: var(--text-2);
+  margin-bottom: 7px;
+}
+
+.changed__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--tone, var(--line-strong));
+}
+
+.changed__row + .changed__row {
+  margin-top: 6px;
+}
+
+.changed__row:active {
+  background: var(--bg-hover);
+}
+
+.changed__icon {
+  flex: none;
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--tone, var(--text-2));
+}
+
+.changed__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.changed__name {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tone, var(--text));
+}
+
+.changed__detail {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.changed__open {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* --- полоса отмены --- */
+
+.undo {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--line);
+  background: rgba(122, 190, 212, 0.04);
+}
+
+.undo__hint {
+  flex: 1;
+  min-width: 140px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+
+.undo__btn {
+  flex: none;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cyan);
+  border: 1px solid rgba(63, 233, 255, 0.35);
+}
+
+.undo__btn[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.undo__cancel {
+  flex: none;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  border: 1px solid var(--line);
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   deleteEvent,
+  fetchChangeSets,
   fetchEvents,
   fetchUtterances,
   findChangeSetForEvent,
@@ -8,9 +9,10 @@ import {
   revertChangeSet,
 } from '../api';
 import { ApiError } from '../types';
-import type { EventPatch, LoadState, TrackerEvent, Utterance } from '../types';
+import type { ChangeSet, EventPatch, LoadState, TrackerEvent, Utterance } from '../types';
 import { attachUtterances, buildSections } from '../lib/group';
-import { DAY, localDateKey, parseTs } from '../lib/format';
+import { DAY, localDateKey, parseTs, startOfLocalDay } from '../lib/format';
+import { classifyPhrase } from '../lib/utterance';
 
 export interface HistoryFilters {
   /** Глубина ленты в сутках: 1 / 3 / 7 / 30. */
@@ -20,7 +22,10 @@ export interface HistoryFilters {
   showDeleted: boolean;
 }
 
-const DEFAULT_FILTERS: HistoryFilters = { days: 3, types: [], showDeleted: false };
+/** Пресеты периода. «Всё» — с запасом на всю жизнь ребёнка. */
+export const RANGE_PRESETS = [1, 7, 30, 400];
+
+const DEFAULT_FILTERS: HistoryFilters = { days: 7, types: [], showDeleted: false };
 
 /**
  * Текущая локальная дата. Телефон, оставленный открытым через полночь, иначе
@@ -44,13 +49,17 @@ export function useHistory() {
   const [filters, setFilters] = useState<HistoryFilters>(DEFAULT_FILTERS);
   const [rows, setRows] = useState<TrackerEvent[]>([]);
   const [utterances, setUtterances] = useState<Utterance[]>([]);
+  const [changeSets, setChangeSets] = useState<ChangeSet[]>([]);
   const [status, setStatus] = useState<LoadState>('idle');
   const [error, setError] = useState<string | null>(null);
   /** Некритичная поломка: лента жива, но чего-то не хватает. Молчать о ней нельзя. */
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [busySet, setBusySet] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const dayKey = useDayKey();
+  /** Подобрали ли уже стартовый период под реальные данные (делается один раз). */
+  const autoRanged = useRef(false);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
 
@@ -93,9 +102,15 @@ export function useHistory() {
        * нельзя — именно молчаливый catch однажды спрятал отсутствие фраз целиком.
        */
       try {
-        const said = await fetchUtterances(200, ac.signal);
+        // Наборы изменений идут вместе с фразами: без них не видно, что фраза
+        // изменила существующую запись, и «проснулся» выглядит пустышкой.
+        const [said, sets] = await Promise.all([
+          fetchUtterances(200, ac.signal),
+          fetchChangeSets(200, ac.signal).catch(() => [] as ChangeSet[]),
+        ]);
         if (!alive) return;
         setUtterances(said);
+        setChangeSets(sets);
         setNotice(null);
       } catch (err) {
         if (!alive || (err as Error)?.name === 'AbortError') return;
@@ -112,6 +127,34 @@ export function useHistory() {
       ac.abort();
     };
   }, [from, nonce]);
+
+  /*
+   * Стартовый период подбираем под данные, а не наоборот. У двухнедельного ребёнка
+   * записей может не быть неделю: фиксированное «Сегодня» показывало бы пустой экран,
+   * на котором не за что даже нажать, — ровно на это и жаловались.
+   */
+  useEffect(() => {
+    if (autoRanged.current) return;
+    const ac = new AbortController();
+    (async () => {
+      try {
+        const [newest] = await fetchEvents({ limit: 1 }, ac.signal);
+        if (autoRanged.current) return;
+        autoRanged.current = true;
+        const ms = parseTs(newest?.started_at);
+        if (ms == null) return;
+        const ageDays = Math.floor((Date.now() - startOfLocalDay(ms)) / DAY) + 1;
+        const fit = RANGE_PRESETS.find((d) => d >= ageDays) ?? RANGE_PRESETS.at(-1)!;
+        setFilters((f) => (fit > f.days ? { ...f, days: fit } : f));
+      } catch (err) {
+        // Прерванный запрос — не отказ: в StrictMode первый прогон эффекта всегда
+        // отменяется, и пометив попытку выполненной, мы бы отключили подбор совсем.
+        if ((err as Error)?.name === 'AbortError') return;
+        autoRanged.current = true; // не вышло — остаёмся на пресете по умолчанию
+      }
+    })();
+    return () => ac.abort();
+  }, []);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -168,6 +211,31 @@ export function useHistory() {
    * Возврат идёт через откат набора изменений (§9.6) — другого пути у сервера нет.
    * Если удаляли не мы, набор находим по журналу; если и там пусто, честно говорим.
    */
+  /**
+   * Отмена того, что сделала фраза (§9.6). Работает и для созданных записей
+   * (сервер их прячет), и для изменённых (восстанавливает прежнее состояние).
+   * После отката перечитываем всё: у наборов меняется reverted_at.
+   */
+  const undoChangeSet = useCallback(
+    async (changeSetId: string): Promise<string | null> => {
+      setBusySet(changeSetId);
+      try {
+        await revertChangeSet(changeSetId);
+        setError(null);
+        setNonce((n) => n + 1);
+        return null;
+      } catch (err) {
+        const message =
+          err instanceof ApiError ? err.message : 'Отменить не получилось. Попробуйте ещё раз.';
+        setError(message);
+        return message;
+      } finally {
+        setBusySet(null);
+      }
+    },
+    [],
+  );
+
   const restore = useCallback(
     (id: number) =>
       run(id, async () => {
@@ -188,6 +256,24 @@ export function useHistory() {
 
   const withText = useMemo(() => attachUtterances(rows, utterances), [rows, utterances]);
 
+  const setsByUtterance = useMemo(() => {
+    const map = new Map<number, ChangeSet[]>();
+    for (const cs of changeSets) {
+      if (cs.utterance_id == null) continue;
+      const list = map.get(cs.utterance_id);
+      if (list) list.push(cs);
+      else map.set(cs.utterance_id, [cs]);
+    }
+    return map;
+  }, [changeSets]);
+
+  /** Все известные события по id — включая удалённые: изменённое могли и удалить. */
+  const eventsById = useMemo(() => {
+    const map = new Map<number, TrackerEvent>();
+    for (const e of withText) map.set(e.id, e);
+    return map;
+  }, [withText]);
+
   const visible = useMemo(() => {
     const typeSet = new Set(filters.types);
     return withText.filter((e) => {
@@ -198,10 +284,9 @@ export function useHistory() {
   }, [withText, filters.types, filters.showDeleted]);
 
   /**
-   * Фразы, не породившие ни одной записи. Показываем не все: разобранная фраза часто
-   * не создаёт события, а правит существующее («проснулся» закрывает открытый сон) —
-   * такие в ленте были бы ложной тревогой. Настоящий пробел — это упавший или
-   * ещё не доехавший разбор.
+   * Фразы без единой записи. Показываем только те, что действительно требуют
+   * внимания: вопросы к Алисе и команды, отработавшие штатно, — не дневник
+   * ребёнка и не проблема (см. lib/utterance.ts).
    */
   const orphans = useMemo(() => {
     if (filters.types.length) return [];
@@ -209,15 +294,27 @@ export function useHistory() {
     const fromMs = parseTs(from) ?? 0;
     return utterances.filter((u) => {
       if (used.has(u.id)) return false;
-      if (u.status === 'done') return false;
       const ms = parseTs(u.received_at);
-      return ms != null && ms >= fromMs;
+      if (ms == null || ms < fromMs) return false;
+      // Фраза, изменившая данные, показывается ВСЕГДА — даже если разбор
+      // отработал штатно: человек должен видеть, что дневник поменялся, и мочь
+      // это отменить.
+      const sets = setsByUtterance.get(u.id) ?? [];
+      if (sets.some((cs) => (cs.events?.length ?? 0) > 0)) return true;
+      return classifyPhrase(u).show;
     });
-  }, [utterances, withText, from, filters.types.length]);
+  }, [utterances, withText, from, filters.types.length, setsByUtterance]);
 
-  const sections = useMemo(() => buildSections(visible, orphans), [visible, orphans]);
+  const sections = useMemo(
+    () => buildSections(visible, orphans, setsByUtterance, eventsById),
+    [visible, orphans, setsByUtterance, eventsById],
+  );
 
   const deletedCount = useMemo(() => withText.filter((e) => e.deleted_at).length, [withText]);
+  const phraseCount = useMemo(
+    () => sections.reduce((sum, s) => sum + s.phrases, 0),
+    [sections],
+  );
 
   return {
     filters,
@@ -229,7 +326,10 @@ export function useHistory() {
     setError,
     reload,
     busyId,
+    busySet,
+    undoChangeSet,
     deletedCount,
+    phraseCount,
     total: visible.length,
     save,
     remove,

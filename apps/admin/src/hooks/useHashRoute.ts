@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type Route = 'history' | 'stats';
+export type Route = 'overview' | 'stats' | 'history';
 
-const ROUTES: Route[] = ['history', 'stats'];
+const ROUTES: Route[] = ['overview', 'stats', 'history'];
 
 function read(): Route {
   const raw = window.location.hash.replace(/^#\/?/, '');
-  return (ROUTES as string[]).includes(raw) ? (raw as Route) : 'history';
+  return (ROUTES as string[]).includes(raw) ? (raw as Route) : 'overview';
 }
 
 /**

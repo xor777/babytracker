@@ -131,6 +131,33 @@ export function formatWhen(
   return sameDay ? clock : `${formatDayShort(ms)}, ${clock}`;
 }
 
+/** «14,5 ч» — компактно для плиток, где «14 ч 32 мин» не помещается. */
+export function formatHours(min: number | null | undefined): string {
+  const total = Math.max(0, Math.round(min ?? 0));
+  if (total < 60) return `${total} мин`;
+  const h = total / 60;
+  return `${h.toFixed(1).replace('.', ',')} ч`;
+}
+
+/** «1:23» + отдельные секунды — для тикающего таймера текущего состояния. */
+export function splitStopwatch(ms: number): { hm: string; sec: string } {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return { hm: h > 0 ? `${h}:${pad2(m)}` : String(m), sec: pad2(s) };
+}
+
+/** «20 минут назад», «1 ч 10 мин назад», «вчера в 23:40». */
+export function formatAgo(value: string | number | null | undefined, now = Date.now()): string {
+  const ms = typeof value === 'number' ? value : parseTs(value);
+  if (ms == null) return '—';
+  const diff = now - ms;
+  if (diff < MINUTE) return 'только что';
+  if (diff < DAY) return `${formatMinutes(Math.round(diff / MINUTE))} назад`;
+  return formatWhen(ms);
+}
+
 export function formatNumber(value: number | null | undefined, digits = 0): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return value.toFixed(digits).replace('.', ',');

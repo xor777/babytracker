@@ -28,6 +28,11 @@ export interface Utterance {
   processed_at?: string | null;
   status?: UtteranceStatus | string;
   llm_error?: string | null;
+  /**
+   * Что понял быстрый матчер (§4). По нему отличается вопрос к Алисе
+   * («сколько спал») от фразы, которую действительно никто не разобрал.
+   */
+  fast_result?: unknown;
 }
 
 /** §1 — строка events. `utterance` подмешивает сервер (§10.4), но мы умеем и без неё. */
@@ -113,9 +118,39 @@ export interface StatsResponse {
   days: DailyStats[];
 }
 
-/** §3.2 — нужен только для шапки: имя и возраст. */
+/**
+ * §9.2 — набор изменений. Ключевая вещь для журнала: фраза может не создать
+ * ни одного события, а изменить существующее («проснулся» закрывает сон).
+ * Связь «фраза → что она сделала» живёт только здесь, в `utterance_id` и `events`.
+ */
+export interface ChangeSet {
+  id: string;
+  utterance_id: number | null;
+  summary: string | null;
+  created_at: string;
+  reverted_at: string | null;
+  revisions: number;
+  events: number[];
+}
+
+/** §3.2 — текущее состояние: шапка и раздел «Обзор». */
 export interface TrackerState {
+  now?: string;
   child?: { name?: string; birthDate?: string; ageDays?: number };
+  sleep?: {
+    status?: 'asleep' | 'awake' | string;
+    since?: string | null;
+    currentDurationMin?: number;
+    lastSleep?: { startedAt: string; endedAt: string; durationMin: number } | null;
+  };
+  today?: {
+    date?: string;
+    sleepTotalMin?: number;
+    sleepSessions?: number;
+    longestSleepMin?: number;
+  };
+  /** Сколько фраз Алисы ещё разбирается. */
+  pending?: number;
 }
 
 /** Точка ростовой кривой — собираем из событий measure. */

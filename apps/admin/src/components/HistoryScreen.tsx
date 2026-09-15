@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { TrackerEvent } from '../types';
 import { useHistory } from '../hooks/useHistory';
 import { dayTitle, formatDay, plural } from '../lib/format';
-import { Filters } from './Filters';
+import { Filters, RANGES } from './Filters';
 import { GroupCard } from './GroupCard';
 import { EventSheet } from './EventSheet';
 
@@ -14,10 +14,10 @@ export function HistoryScreen({ onBusy }: Props) {
   const h = useHistory();
   const [openId, setOpenId] = useState<number | null>(null);
   const [undoId, setUndoId] = useState<number | null>(null);
+  const [undone, setUndone] = useState(false);
 
   useEffect(() => onBusy(h.status === 'loading'), [h.status, onBusy]);
 
-  // Лист всегда показывает свежую версию записи: после сохранения она приезжает с сервера.
   const openEvent: TrackerEvent | null =
     openId == null
       ? null
@@ -44,11 +44,29 @@ export function HistoryScreen({ onBusy }: Props) {
     [h],
   );
 
+  const undo = useCallback(
+    async (changeSetId: string) => {
+      const error = await h.undoChangeSet(changeSetId);
+      if (!error) setUndone(true);
+      return error;
+    },
+    [h],
+  );
+
+  useEffect(() => {
+    if (!undone) return;
+    const t = setTimeout(() => setUndone(false), 6000);
+    return () => clearTimeout(t);
+  }, [undone]);
+
   useEffect(() => {
     if (undoId == null) return;
     const t = setTimeout(() => setUndoId(null), 9000);
     return () => clearTimeout(t);
   }, [undoId]);
+
+  const wider = RANGES.find((r) => r.days > h.filters.days);
+  const empty = h.status !== 'loading' && h.sections.length === 0 && !h.error;
 
   return (
     <>
@@ -56,6 +74,7 @@ export function HistoryScreen({ onBusy }: Props) {
         value={h.filters}
         onChange={h.setFilters}
         total={h.total}
+        phrases={h.phraseCount}
         deletedCount={h.deletedCount}
       />
 
@@ -78,20 +97,78 @@ export function HistoryScreen({ onBusy }: Props) {
         <p className="placeholder">Загружаю историю…</p>
       ) : null}
 
-      {h.status !== 'loading' && h.sections.length === 0 && !h.error ? (
-        <p className="placeholder">
-          <span className="placeholder__big">Здесь пусто</span>
-          За выбранный период записей нет. Попробуйте период побольше или снимите фильтр по типу.
-        </p>
+      {/*
+       * Пустой журнал обязан объяснять, что здесь бывает и что с этим можно делать:
+       * человек, у которого записей ещё нет, иначе видит голый экран без единой
+       * кнопки — и решает, что правка сломана.
+       */}
+      {empty ? (
+        <div className="empty">
+          <div className="empty__mark" aria-hidden="true">
+            ✎
+          </div>
+          <h2 className="empty__title">
+            {h.filters.types.length ? 'По этому фильтру пусто' : 'Записей за период нет'}
+          </h2>
+          <p className="empty__text">
+            Сюда попадает всё, что вы говорите Алисе: «Андрей заснул», «покормила»,
+            «поменяли подгузник». Рядом с каждой записью видно исходную фразу — так
+            заметно, если разбор ошибся.
+          </p>
+          <p className="empty__text">
+            Любую запись можно поправить или удалить: нажмите на неё — откроется
+            карточка с кнопками. Удаление мягкое, вернуть можно всегда.
+          </p>
+          <div className="empty__actions">
+            {h.filters.types.length ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => h.setFilters({ ...h.filters, types: [] })}
+              >
+                Показать все типы
+              </button>
+            ) : null}
+            {wider ? (
+              <button
+                type="button"
+                className="btn btn--primary"
+                style={{ flex: 'none' }}
+                onClick={() => h.setFilters({ ...h.filters, days: wider.days })}
+              >
+                Посмотреть за {wider.label.toLowerCase()}
+              </button>
+            ) : null}
+            {!h.filters.showDeleted && h.deletedCount > 0 ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => h.setFilters({ ...h.filters, showDeleted: true })}
+              >
+                Показать удалённые ({h.deletedCount})
+              </button>
+            ) : null}
+          </div>
+        </div>
       ) : null}
 
       {h.sections.map((section) => (
         <section key={section.key}>
           <header className="dayhead">
             <h2 className="dayhead__title">{dayTitle(section.dayMs)}</h2>
-            <span className="dayhead__date">{formatDay(section.dayMs)}</span>
+            {/* «2 сентября · 2 сентября» — для дней старше позавчера заголовок
+                и есть дата, дублировать её незачем. */}
+            {dayTitle(section.dayMs) !== formatDay(section.dayMs) ? (
+              <span className="dayhead__date">{formatDay(section.dayMs)}</span>
+            ) : null}
             <span className="dayhead__count">
-              {section.total} {plural(section.total, 'запись', 'записи', 'записей')}
+              {section.events > 0
+                ? `${section.events} ${plural(section.events, 'запись', 'записи', 'записей')}`
+                : null}
+              {section.events > 0 && section.phrases > 0 ? ' · ' : null}
+              {section.phrases > 0
+                ? `${section.phrases} ${plural(section.phrases, 'фраза', 'фразы', 'фраз')}`
+                : null}
             </span>
           </header>
           {section.groups.map((group) => (
@@ -99,8 +176,10 @@ export function HistoryScreen({ onBusy }: Props) {
               key={group.key}
               group={group}
               busyId={h.busyId}
+              busySet={h.busySet}
               onOpen={(e) => setOpenId(e.id)}
               onRestore={restore}
+              onUndo={undo}
             />
           ))}
         </section>
@@ -123,6 +202,10 @@ export function HistoryScreen({ onBusy }: Props) {
           <button type="button" className="toast__btn" onClick={() => restore(undoId)}>
             Вернуть
           </button>
+        </div>
+      ) : undone ? (
+        <div className="toast" role="status">
+          <span>Готово: дневник вернулся к прежнему состоянию.</span>
         </div>
       ) : null}
     </>
