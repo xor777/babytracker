@@ -96,7 +96,7 @@ export function App() {
       <header className="topbar">
         <div className="topbar__row">
           <div className="brand">
-            <span className="brand__name">{child?.name ?? 'BabyTracker'}</span>
+            <span className="brand__name">{child?.name ?? 'ANDREYTRACKER'}</span>
             {child ? (
               <span className="brand__age">
                 {child.ageDays} {plural(child.ageDays, 'день', 'дня', 'дней')}
