@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BabyTracker</string>
+
+    <string name="error_title">НЕТ СВЯЗИ С ДАШБОРДОМ</string>
+    <string name="error_hint">OK — повторить сейчас   ·   МЕНЮ или долгое НАЗАД — перезагрузить</string>
+    <string name="retry_in">Повтор через %1$d с   ·   попытка %2$d</string>
+    <string name="retry_now">Подключаюсь…</string>
+    <string name="exit_confirm">Ещё раз НАЗАД — выйти из приложения</string>
+    <string name="reloading">Перезагружаю дашборд…</string>
+    <string name="url_changed">Новый адрес: %1$s</string>
+</resources>

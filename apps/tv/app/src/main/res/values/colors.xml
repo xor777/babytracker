@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Настоящий чёрный: экран висит сутками, бережём OLED. -->
+    <color name="bt_bg">#FF000000</color>
+    <color name="bt_cyan">#FF00E5FF</color>
+    <color name="bt_magenta">#FFFF2FD0</color>
+    <color name="bt_text">#FFDCEEF6</color>
+    <color name="bt_dim">#FF6E828F</color>
+</resources>

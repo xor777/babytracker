@@ -1,0 +1,20 @@
+[Unit]
+Description=BabyTracker server (Alice webhook + API + SSE + claude worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/babytracker/apps/server
+EnvironmentFile=%h/babytracker/.env
+Environment=PATH=%h/.local/node/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+ExecStart=%h/.local/node/bin/node dist/index.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=babytracker
+
+[Install]
+WantedBy=default.target

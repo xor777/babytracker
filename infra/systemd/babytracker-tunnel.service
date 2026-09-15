@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloudflare Tunnel for BabyTracker (публичный HTTPS для вебхука Алисы)
+After=network-online.target babytracker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Быстрый туннель: без аккаунта Cloudflare, URL вида https://<random>.trycloudflare.com.
+# Минус — URL меняется при каждом перезапуске. Как перейти на постоянный домен,
+# написано в docs/DEPLOY.md.
+ExecStart=%h/.local/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8787
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=babytracker-tunnel
+
+[Install]
+WantedBy=default.target
