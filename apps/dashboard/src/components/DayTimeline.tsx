@@ -168,10 +168,15 @@ export function DayTimeline({ events, now }: Props) {
           {/* подписи часов */}
           {ticks
             .filter((t) => t.major)
-            .filter((t) => x(t.t) < W - 40)
+            // У правого края подпись налезала бы на отметку «сейчас», а у левого
+            // прижатая к нулю подпись слипалась со следующей — такую пропускаем.
+            .filter((t) => {
+              const cx = x(t.t);
+              return cx >= 26 && cx < W - 40;
+            })
             .map((tick) => {
               const cx = x(tick.t);
-              const edge = cx < 34;
+              const edge = cx < 40;
               return (
                 <text
                   key={`l${tick.t}`}

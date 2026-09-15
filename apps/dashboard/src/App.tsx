@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useClock } from './hooks/useClock';
 import { isDebug, useStage, type StageInfo } from './hooks/useStage';
 import { useTracker } from './hooks/useTracker';
@@ -10,6 +10,7 @@ import { DayTimeline } from './components/DayTimeline';
 import { WeightPanel } from './components/WeightPanel';
 import { UtteranceFeed } from './components/UtteranceFeed';
 import { StatusBar } from './components/StatusBar';
+import { Calibration } from './components/Calibration';
 import { findOngoing, localDate, summarizeDay } from './lib/day';
 import { DISPLAY_TZ, TZ_IS_EXPLICIT } from './lib/tz';
 import { parseTs } from './lib/format';
@@ -65,9 +66,44 @@ function Boot({ link }: { link: string }) {
   );
 }
 
+/**
+ * Включение калибровки без пересборки APK: адрес в TV-приложении зашит,
+ * поэтому ?calib=1 заказчику недоступен — зато пульт до WebView доходит.
+ * Четыре одинаковых нажатия подряд переключают экран калибровки.
+ */
+function useCalibrationToggle(initial: boolean): boolean {
+  const [on, setOn] = useState(initial);
+
+  useEffect(() => {
+    let seq: string[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onKey = (e: KeyboardEvent) => {
+      seq = [...seq, e.key].slice(-4);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        seq = [];
+      }, 4000);
+      if (seq.length === 4 && seq.every((k) => k === seq[0])) {
+        seq = [];
+        setOn((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  return on;
+}
+
 export default function App() {
   const stage = useStage();
   const debug = isDebug();
+  const calibration = useCalibrationToggle(
+    debug || new URLSearchParams(window.location.search).has('calib'),
+  );
   const tick = useClock();
   const { state, events, measures, utterances, link, health, lastSyncAt, clockOffset, booting, persist } =
     useTracker();
@@ -99,6 +135,7 @@ export default function App() {
 
   return (
     <>
+      {calibration && <Calibration stage={stage} />}
       {debug && (
         <DebugPanel
           stage={stage}

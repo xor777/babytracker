@@ -13,6 +13,8 @@ export interface StageInfo {
   /** Размер области, в которую реально вписываемся. */
   w: number;
   h: number;
+  /** Ужимали ли вьюпорт до расчётного (он оказался больше). */
+  capped: boolean;
   scale: number;
   safe: number;
   /** Что сказали разные источники — видно в ?debug=1. */
@@ -36,7 +38,7 @@ function readSafeFactor(): number {
  * реально видно на экране (визуальный вьюпорт), и тогда clientWidth врёт —
  * страница верстается на 1920, а видно 1280, и правый край уезжает за кадр.
  */
-function measure(): { w: number; h: number; ox: number; oy: number; info: Omit<StageInfo, 'scale' | 'safe' | 'w' | 'h'> } {
+function measure(): { w: number; h: number; ox: number; oy: number; info: Omit<StageInfo, 'scale' | 'safe' | 'w' | 'h' | 'capped'> } {
   const el = document.documentElement;
   const vv = window.visualViewport;
   const ws: number[] = [];
@@ -75,6 +77,7 @@ export function useStage(): StageInfo {
   const [info, setInfo] = useState<StageInfo>(() => ({
     w: DESIGN_W,
     h: DESIGN_H,
+    capped: false,
     scale: 1,
     safe: DEFAULT_SAFE,
     client: '—',
@@ -88,11 +91,27 @@ export function useStage(): StageInfo {
     const root = document.documentElement.style;
     let last = '';
 
+    const grow = new URLSearchParams(window.location.search).get('grow') === '1';
+
     const apply = () => {
       const { w, h, ox, oy, info: raw } = measure();
-      const scale = Math.min(w / DESIGN_W, h / DESIGN_H) * safe;
-      const x = ox + (w - DESIGN_W * scale) / 2;
-      const y = oy + (h - DESIGN_H * scale) / 2;
+
+      /*
+       * Вьюпорту БОЛЬШЕ расчётного не доверяем.
+       *
+       * На телевизоре WebView отдал область шире, чем реально видно на панели,
+       * и прежняя формула честно растягивала сцену на эти лишние пиксели —
+       * правая четверть уезжала за край, хотя в DOM всё было целое. Поэтому:
+       * не увеличиваем сцену сверх 1:1 и держим её внутри первых 1920×1080
+       * пикселей вьюпорта, которые видны наверняка.
+       *
+       * ?grow=1 — вернуть прежнее поведение для действительно большого экрана.
+       */
+      const boxW = grow ? w : Math.min(w, DESIGN_W);
+      const boxH = grow ? h : Math.min(h, DESIGN_H);
+      const scale = Math.min(boxW / DESIGN_W, boxH / DESIGN_H) * safe;
+      const x = ox + (boxW - DESIGN_W * scale) / 2;
+      const y = oy + (boxH - DESIGN_H * scale) / 2;
 
       root.setProperty('--stage-scale', scale.toFixed(4));
       root.setProperty('--stage-x', `${x.toFixed(1)}px`);
@@ -101,7 +120,7 @@ export function useStage(): StageInfo {
       const key = `${w}|${h}|${scale}|${raw.visual}`;
       if (key !== last) {
         last = key;
-        setInfo({ w, h, scale, safe, ...raw });
+        setInfo({ w, h, capped: !grow && (w > DESIGN_W || h > DESIGN_H), scale, safe, ...raw });
       }
     };
 
