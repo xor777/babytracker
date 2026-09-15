@@ -14,12 +14,16 @@ plugins {
  */
 val dashboardUrl: String =
     (project.findProperty("DASHBOARD_URL") as String?)?.trim()?.takeIf { it.isNotEmpty() }
-        ?: "http://192.168.1.10:8787/"
+        ?: "https://bt.nuanu.ai/"
 
 /**
  * Белый список хостов, на которые приложению вообще разрешено ходить: и для навигации
  * внутри WebView, и для подмены адреса через adb. По умолчанию — только хост из
  * DASHBOARD_URL; плюс в коде всегда разрешены адреса локальной сети.
+ *
+ * bt.adbgw.ru сюда намеренно НЕ попадает: этот домен идёт прямо на IP и оставлен
+ * вебхуку Алисы, а телевизору нужен путь через Cloudflare. Нужен он для отладки —
+ * передайте оба через запятую: -PDASHBOARD_URL_HOSTS=bt.nuanu.ai,bt.adbgw.ru
  */
 val dashboardHosts: String =
     (project.findProperty("DASHBOARD_URL_HOSTS") as String?)?.trim()?.takeIf { it.isNotEmpty() }
