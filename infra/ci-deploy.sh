@@ -30,6 +30,26 @@ log "выкатываю $NEXT — $(git log -1 --pretty=%s)"
 # словить OOM. Swap на машине есть, но лучше в него не упираться.
 export NODE_OPTIONS="--max-old-space-size=512"
 
+# .env создаётся один раз и больше не трогается: секрет вебхука должен пережить
+# любую выкатку, иначе URL в консоли Яндекс Диалогов пришлось бы переписывать.
+if [ ! -f .env ]; then
+  log "первый запуск: создаю .env и генерирую секрет вебхука"
+  SECRET=$(openssl rand -hex 16)
+  sed -e "s|^ALICE_WEBHOOK_SECRET=.*|ALICE_WEBHOOK_SECRET=$SECRET|" \
+      -e "s|^DB_PATH=.*|DB_PATH=$HOME/babytracker/data/babytracker.db|" \
+      .env.example > .env
+  chmod 600 .env
+fi
+mkdir -p data
+
+# Юниты ставим на каждой выкатке: так правки в infra/systemd/ доезжают до прода
+# сами, а не ждут, пока кто-то вспомнит про них и скопирует руками.
+log "systemd-юниты"
+mkdir -p "$HOME/.config/systemd/user"
+cp infra/systemd/babytracker.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable babytracker.service >/dev/null 2>&1 || true
+
 log "зависимости"
 pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -3
 

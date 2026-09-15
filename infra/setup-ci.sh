@@ -26,17 +26,27 @@ ssh-keygen -t ed25519 -N '' -C "babytracker-ci" -f "$WORK/ci_key" -q
 log "Прописываю его на сервере с forced command"
 ssh "$HOST" bash -s -- "$(cat "$WORK/ci_key.pub")" <<'REMOTE'
 set -euo pipefail
-PUB="$1"
+# ssh склеивает аргументы в одну строку, и удалённый шелл разбирает её заново —
+# кавычки теряются, поэтому публичный ключ приезжает разбитым на слова.
+# Собираем обратно через "$*", иначе в authorized_keys ляжет огрызок "ssh-ed25519".
+PUB="$*"
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 # Старую запись убираем, чтобы повторный запуск не плодил дубликаты
 grep -v 'babytracker-ci' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.new || true
 cat >> ~/.ssh/authorized_keys.new <<LINE
-command="\$HOME/babytracker/infra/ci-deploy.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding $PUB
+command="$HOME/babytracker/infra/ci-deploy.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding $PUB
 LINE
 mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
-echo "authorized_keys обновлён"
+
+# Проверяем, что ключ приехал целиком, а не огрызком
+if ! grep -q 'babytracker-ci$' ~/.ssh/authorized_keys; then
+  echo "ОШИБКА: публичный ключ записан не полностью" >&2
+  grep -o 'ssh-ed25519.*' ~/.ssh/authorized_keys >&2
+  exit 1
+fi
+echo "authorized_keys обновлён, ключ записан целиком"
 REMOTE
 
 # ---------- 2. Ключ сервер -> GitHub ----------
