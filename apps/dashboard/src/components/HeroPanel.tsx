@@ -140,7 +140,11 @@ function StateHalf({
           {asleep ? 'уснул в ' : 'проснулся в '}
           <b>{formatTime(state.sleep.since)}</b>
           {asleep && subtypeLabel(openEvent?.subtype) ? ` · ${subtypeLabel(openEvent?.subtype)}` : ''}
-          {!asleep && last ? ` · прошлый сон ${formatMinutes(last.durationMin)}` : ''}
+          {/* Ноль минут — не длительность, а её отсутствие: «прошлый сон 0 м»
+              ничего не сообщает. Ср. «только что» у Past() выше. */}
+          {!asleep && last && last.durationMin > 0
+            ? ` · прошлый сон ${formatMinutes(last.durationMin)}`
+            : ''}
         </span>
       </div>
     </div>

@@ -24,9 +24,13 @@ interface LastCardProps {
 
 function LastCard({ label, tone, event, now, ongoing }: LastCardProps) {
   const at = parseTs(event?.started_at);
+  const mins = at != null ? Math.max(0, Math.round((now - at) / MINUTE)) : null;
+  // Только что записанное — «только что», а не «0 мин назад»: ноль минут
+  // не длительность, а её отсутствие (так же читает это и экран в детской).
+  const justNow = mins != null && mins < 1;
   // Три карточки в ряд на 390 px — это ~110 px на каждую. Всё, что длиннее
   // «2 ч 7 мин», рассыпается на три строки, поэтому «назад» уехало в подпись.
-  const ago = at != null ? formatMinutes(Math.round((now - at) / MINUTE)) : null;
+  const ago = mins == null ? null : justNow ? 'только что' : formatMinutes(mins);
 
   return (
     <div className="lastcard" style={{ '--tone': tone } as CSSProperties}>
@@ -41,7 +45,9 @@ function LastCard({ label, tone, event, now, ongoing }: LastCardProps) {
       ) : (
         <>
           <div className="lastcard__value">{ago}</div>
-          <div className="lastcard__sub">назад · {formatTime(at)}</div>
+          <div className="lastcard__sub">
+            {justNow ? formatTime(at) : `назад · ${formatTime(at)}`}
+          </div>
         </>
       )}
     </div>
@@ -108,7 +114,9 @@ export function OverviewScreen() {
             </div>
             <p className="hero__sub">
               {asleep ? 'уснул' : 'проснулся'} в {formatTime(sinceMs)}
-              {o.state?.sleep?.lastSleep && !asleep
+              {/* «прошлый сон 0 мин» — не факт о сне, а мусор: сон, закрытый
+                  в ту же минуту, о длительности ничего не говорит. */}
+              {o.state?.sleep?.lastSleep && !asleep && o.state.sleep.lastSleep.durationMin > 0
                 ? ` · прошлый сон ${formatMinutes(o.state.sleep.lastSleep.durationMin)}`
                 : ''}
             </p>

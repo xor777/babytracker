@@ -51,7 +51,9 @@ export function feedLabel(ev: TrackerEvent | null): string | null {
   if (!ev) return null;
   const what = (ev.subtype && SUBTYPE_LABEL.feed[ev.subtype]) || 'кормление';
   const n = ev.value_num;
-  if (typeof n === 'number' && Number.isFinite(n)) {
+  // Округление до нуля («0 мин», «0 мл») на весь экран кричит о том, чего не было:
+  // это не «покормили нулём», а «значения по сути нет». Тогда называем только чем.
+  if (typeof n === 'number' && Number.isFinite(n) && Math.round(n) > 0) {
     if (ev.value_unit === 'ml') return `${what} ${Math.round(n)} мл`;
     if (ev.value_unit === 'min') return `${what} ${Math.round(n)} мин`;
   }

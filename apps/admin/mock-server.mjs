@@ -450,6 +450,54 @@ function seedInteresting() {
 
   // 9. И одна фраза прямо сейчас в очереди.
   say('поменяла подгузник и покормила', Date.now() - 4000, 'pending', 'unknown');
+
+  /*
+   * 10. Точечное событие с прода: модель ставит ended_at РАВНЫМ started_at.
+   *     Длительности у подгузника нет по смыслу, и журнал печатал бессмысленное
+   *     «0 мин» — ровно эта строка была на скриншоте заказчика.
+   */
+  const t10 = at(0, 21, 4);
+  if (past(t10)) {
+    const u10 = say('что он пописал', t10);
+    add({
+      type: 'diaper',
+      subtype: 'wet',
+      started_at: t10,
+      ended_at: t10,
+      source: 'alice-llm',
+      confidence: 0.9,
+      utterance: u10,
+    });
+  }
+
+  // 11. То же самое у взвешивания: точка во времени, а не промежуток.
+  const t11 = at(1, 9, 20);
+  const u11 = say('взвесили, пять сто двадцать', t11);
+  add({
+    type: 'measure',
+    subtype: 'weight',
+    started_at: t11,
+    ended_at: t11,
+    value_num: 5120,
+    value_unit: 'g',
+    source: 'alice-llm',
+    confidence: 0.88,
+    utterance: u11,
+  });
+
+  // 12. Кормление короче полуминуты: длительность настоящая, но округляется в ноль.
+  const t12 = at(1, 3, 10);
+  const u12 = say('чуть-чуть приложила', t12);
+  add({
+    type: 'feed',
+    subtype: 'breast',
+    started_at: t12,
+    ended_at: t12 + 20 * 1000,
+    note: 'left',
+    source: 'alice-llm',
+    confidence: 0.6,
+    utterance: u12,
+  });
 }
 
 // Вес при рождении — точка отсчёта для графика веса. Берётся как самое раннее
@@ -690,6 +738,35 @@ if (!EMPTY) {
     cs.before = cs.before.map((r) => ({ ...r, __created: true }));
     cs.created_at = composite[0].created_at;
   }
+
+  /*
+   * Тот же случай, но разобранный МОДЕЛЬЮ, а не быстрым матчером: «что он
+   * проснулся» приходит со статусом done, событий не создаёт и закрывает
+   * начатый вечером ночной сон. Именно эта строка была на скриншоте заказчика
+   * как «странное событие»: в свёрнутом виде она показывала сырую цитату.
+   */
+  const nightStart = at(1, 22, 5);
+  const wokeUp = at(0, 5, 15);
+  const nightSleep = add({
+    type: 'sleep',
+    subtype: 'night',
+    started_at: nightStart,
+    ended_at: wokeUp,
+    source: 'alice-fast',
+    confidence: 0.95,
+    utterance: say('он заснул', nightStart, 'skipped', 'sleep_start'),
+  });
+  const uWoke = say('что он проснулся', wokeUp, 'done');
+  const csWoke = newChangeSet(
+    'Разбор фразы моделью: «что он проснулся»',
+    // снимок «до»: сон ещё шёл
+    [{ ...nightSleep, ended_at: null }],
+    uWoke.id,
+  );
+  csWoke.created_at = iso(wokeUp);
+
+  // события добавились после общей сортировки — восстанавливаем порядок
+  events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
 }
 
 function changeSetDto(cs) {

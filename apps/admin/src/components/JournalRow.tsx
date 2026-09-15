@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { EventRowData, PhraseRowData } from '../lib/journal';
 import type { TrackerEvent } from '../types';
 import { undoableSets } from '../lib/group';
-import { describeEvent, summaryLine } from '../lib/describe';
+import { describeEvent, describePhrase, hasTimeSpan, summaryLine } from '../lib/describe';
 import { formatTime, formatWhen, plural } from '../lib/format';
 import { sourceLabel, typeDef } from '../lib/taxonomy';
 
@@ -81,11 +81,13 @@ export function JournalEventRow({
           {reason ? <p className="jdet__warn">Стоит проверить: {reason}</p> : null}
           {note ? <p className="jdet__note">{note}</p> : null}
 
-          {lines.open || event.ended_at ? (
+          {/* «С 21:04 до 21:04» — такая же пустая строка, как «0 мин»: у точечного
+              события промежутка нет, и время уже стоит в свёрнутой строке. */}
+          {lines.open ? (
+            <p className="jdet__line">Началось в {formatTime(event.started_at)}, ещё идёт</p>
+          ) : hasTimeSpan(event) ? (
             <p className="jdet__line">
-              {event.ended_at
-                ? `С ${formatTime(event.started_at)} до ${formatTime(event.ended_at)}`
-                : `Началось в ${formatTime(event.started_at)}, ещё идёт`}
+              С {formatTime(event.started_at)} до {formatTime(event.ended_at)}
             </p>
           ) : null}
 
@@ -152,6 +154,11 @@ interface PhraseProps {
 /**
  * Фраза без созданных записей: либо она изменила существующую, либо её никто
  * не разобрал. И то и другое в журнале нужно, но в том же ритме, что события.
+ *
+ * Поэтому в свёрнутом виде стоит РАЗБОР («Сон, ночной — завершён, 7 ч 10 мин»),
+ * а сама цитата уезжает в разворот: строка «что он проснулся» выглядела
+ * необработанным мусором, хотя разбор отработал штатно. Цитата остаётся в
+ * строке только там, где её никто не разобрал и она сама — единственный факт.
  */
 export function JournalPhraseRow({ row, open, busySet, onToggle, onEdit, onUndo }: PhraseProps) {
   const { utterance, verdict, touched } = row;
@@ -159,11 +166,7 @@ export function JournalPhraseRow({ row, open, busySet, onToggle, onEdit, onUndo 
   const affected = new Set(live.flatMap((cs) => cs.events ?? []));
   const changed = touched.length > 0;
 
-  const summary = changed
-    ? `Изменила ${touched.length} ${plural(touched.length, 'запись', 'записи', 'записей')}`
-    : verdict.show
-      ? verdict.title
-      : 'Дневник не изменился';
+  const summary = describePhrase(utterance.raw_text, touched, row.changeSets);
 
   const cls = ['jrow', 'jrow--phrase', open ? 'jrow--open' : '', row.needsCheck ? 'jrow--check' : '']
     .filter(Boolean)
@@ -176,7 +179,9 @@ export function JournalPhraseRow({ row, open, busySet, onToggle, onEdit, onUndo 
         <span className="jrow__icon" aria-hidden="true">
           {changed ? '↻' : '‹›'}
         </span>
-        <span className="jrow__text jrow__text--said">«{utterance.raw_text}»</span>
+        <span className={`jrow__text${summary.quote ? ' jrow__text--said' : ''}`}>
+          {summary.text}
+        </span>
         {row.needsCheck ? (
           <span className="jrow__flag" aria-label="стоит проверить">
             ?
@@ -189,9 +194,31 @@ export function JournalPhraseRow({ row, open, busySet, onToggle, onEdit, onUndo 
 
       {open ? (
         <div className="jdet">
-          <p className={row.needsCheck ? 'jdet__warn' : 'jdet__line'}>{summary}</p>
+          {/* Цитата уехала сюда — но только если в строке стоит не она сама. */}
+          {summary.quote ? null : <p className="jdet__said">«{utterance.raw_text}»</p>}
+
+          {verdict.show ? (
+            <p className={row.needsCheck ? 'jdet__warn' : 'jdet__line'}>{verdict.title}</p>
+          ) : changed ? null : (
+            // Набор изменений есть, а самих записей в загруженном окне нет:
+            // сказать про фразу нечего, но и пустой разворот оставлять нельзя.
+            <p className="jdet__line">Дневник не изменился</p>
+          )}
           {verdict.show && verdict.detail ? (
             <p className="jdet__note">{verdict.detail}</p>
+          ) : null}
+
+          {changed ? (
+            <p className="jdet__line">
+              {touched.length === 1
+                ? 'Новых записей не создала — изменила уже существующую:'
+                : `Новых записей не создала — изменила ${touched.length} ${plural(
+                    touched.length,
+                    'запись',
+                    'записи',
+                    'записей',
+                  )}:`}
+            </p>
           ) : null}
 
           {touched.map((e) => (
