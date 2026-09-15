@@ -514,6 +514,40 @@ test('дверь стоит и без собранной статики: гол�
   assert.equal((await h.anon({ method: 'GET', url: '/healthz' })).statusCode, 200);
 });
 
+test('CORS не разрешает учётные данные: чужой сайт не прочитает дневник', async (t) => {
+  const h = await makeFullApp();
+  t.after(h.close);
+
+  /*
+   * Ловушка, в которую легко попасть именно после переезда на куки: кажется
+   * логичным разрешить отправку сессии на «свои» origin. Но `credentials`
+   * вместе с отражением Origin открывает чтение истории ребёнка любому сайту
+   * в соседней вкладке, а нужен он ровно нигде: оба интерфейса ходят к API
+   * с того же origin (в dev — через прокси Vite).
+   */
+  const preflight = await h.app.inject({
+    method: 'OPTIONS',
+    url: '/api/state',
+    headers: {
+      origin: 'https://evil.example',
+      'access-control-request-method': 'GET',
+    },
+  });
+  assert.equal(
+    preflight.headers['access-control-allow-credentials'],
+    undefined,
+    'разрешив учётные данные, мы отдадим дневник любому сайту',
+  );
+
+  // И сама кука чужому origin ничего не даёт: запрос приходит без неё.
+  const cross = await h.app.inject({
+    method: 'GET',
+    url: '/api/state',
+    headers: { origin: 'https://evil.example' },
+  });
+  assert.equal(cross.statusCode, 401);
+});
+
 test('ответы двери не кешируются: иначе 401 застрянет в прокси', async (t) => {
   const h = await makeFullApp();
   t.after(h.close);

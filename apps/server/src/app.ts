@@ -170,23 +170,31 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   /* ---------------------------------------------------------------- */
   const allowedOrigins = cfg.dashboardOrigin;
   /*
-   * Куку сессии браузер отправит на чужой origin только если сервер явно
-   * разрешил учётные данные. Разрешаем — но исключительно поимённому списку:
-   * `credentials: true` вместе с «отражать любой Origin» открыл бы чтение
-   * истории ребёнка любому сайту, который пользователь откроет в соседней
-   * вкладке. Список из одной звёздочки в этом смысле ничем не лучше пустого.
+   * `credentials: false` остаётся и после переезда на куки (§11) — это не
+   * недосмотр.
+   *
+   * Соблазн есть: раз сессия теперь в куке, кажется логичным разрешить её
+   * отправку на перечисленные origin. Но она там не нужна ни разу: в dev оба
+   * интерфейса ходят к API через прокси Vite, то есть с того же origin, а в
+   * бою всё отдаётся одним сервером. Зато цена ошибки высокая — `credentials`
+   * вместе с отражением Origin открыл бы чтение истории ребёнка любому сайту
+   * в соседней вкладке.
+   *
+   * Поэтому кросс-доменный запрос сюда просто приходит без куки и получает
+   * честный 401. Если когда-нибудь фронт действительно переедет на отдельный
+   * домен, включать это надо вместе с поимённым списком origin — и осознанно.
    */
-  const namedOrigins = allowedOrigins.length > 0 && !allowedOrigins.includes('*');
   void app.register(cors, {
-    origin: namedOrigins
-      ? (origin, cb) => {
-          // Запросы без Origin (curl, TV WebView с того же origin) пропускаем.
-          if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-          else cb(null, false);
-        }
-      : true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: namedOrigins,
+    origin:
+      allowedOrigins.length === 0 || allowedOrigins.includes('*')
+        ? true
+        : (origin, cb) => {
+            // Запросы без Origin (curl, TV WebView с того же origin) пропускаем.
+            if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+            else cb(null, false);
+          },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: false,
   });
 
   /* ---------------------------------------------------------------- */

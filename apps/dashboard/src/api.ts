@@ -43,8 +43,10 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     signal,
     headers: { accept: 'application/json' },
     cache: 'no-store',
-    // Кука сессии нужна и при отдельном dev-origin.
-    credentials: 'include',
+    // Кука сессии (§11). Явно `same-origin`, а не `include`: другого origin
+    // здесь не бывает, а `include` обещал бы отправку туда, куда сервер её
+    // всё равно не пустит — CORS у нас без credentials.
+    credentials: 'same-origin',
   });
   if (res.status === 401) {
     goToPairing();

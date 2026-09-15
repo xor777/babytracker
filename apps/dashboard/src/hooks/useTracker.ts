@@ -198,9 +198,10 @@ export function useTracker(): TrackerData {
 
     const connect = () => {
       if (closed) return;
-      // withCredentials — чтобы кука сессии (§11) уходила и при отдельном
-      // dev-origin. На том же origin флаг ни на что не влияет.
-      es = new EventSource(apiUrl('/api/stream'), { withCredentials: true });
+      // Куку сессии (§11) EventSource отправляет сам: поток всегда с того же
+      // origin. Это и есть выигрыш по сравнению с basic auth, при котором
+      // EventSource не умел слать Authorization вовсе.
+      es = new EventSource(apiUrl('/api/stream'));
 
       es.onopen = () => {
         if (closed) return;

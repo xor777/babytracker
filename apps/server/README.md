@@ -49,7 +49,10 @@ pnpm start
 | `WORKER_ENABLED` | `true` | Выключает фоновый разбор |
 | `LLM_QUEUE_POLICY` | `smart` | Когда звать модель: `smart` / `all` / `unknown` (§9.4) |
 | `LLM_CONFIDENCE_THRESHOLD` | `0.8` | Ниже этой уверенности fast-path зовём модель |
-| `DASHBOARD_ORIGIN` | пусто | Разрешённые CORS-origin через запятую (для Vite на 5173). Пусто или `*` = разрешать всем |
+| `DASHBOARD_ORIGIN` | пусто | Разрешённые CORS-origin через запятую (для Vite на 5173). Пусто или `*` = разрешать всем. Учётные данные CORS **не разрешает никогда** — см. «Аутентификация» |
+| `AUTH_COOKIE_SECURE` | `true` | Флаг `Secure` на куке сессии. `false` — **только** локальная разработка без TLS; сервер предупреждает при каждом старте |
+| `PAIR_CODE_TTL_SEC` | `600` | Срок жизни короткого кода сопряжения, 60..3600 |
+| `SESSION_TTL_DAYS` | `90` | Скользящий срок сессии телефона от последнего обращения. Сессия телевизора **бессрочна** независимо от этого значения |
 | `DASHBOARD_DIST` | `../dashboard/dist` | Каталог собранного дашборда телевизора, раздаётся по `/` |
 | `ADMIN_DIST` | `../admin/dist` | Каталог собранной админки, раздаётся по `/dash` |
 | `LOG_LEVEL` | `info` | Уровень pino |
@@ -138,19 +141,33 @@ curl -s -X POST "$B/alice/$SECRET" -H 'Content-Type: application/json' -d '{
 curl -s -X POST "$B/alice/ffffffffffffffffffffffffffffffff" -H 'Content-Type: application/json' \
   -d '{"session":{"user_id":"x"},"request":{"command":"андрей заснул"},"version":"1.0"}'
 
-# REST
-curl -s "$B/api/state"
-curl -s "$B/api/events?limit=5"
-curl -s "$B/api/sleep/daily?days=14"
-curl -s "$B/api/utterances?limit=10"
-curl -s "$B/healthz"
+# REST — всё, кроме /healthz, закрыто сессией устройства (§11).
+# Получить её для curl: node src/auth-cli.ts issue --label curl
+C="bt_session=<секрет из auth issue>"
+
+curl -s --cookie "$C" "$B/api/state"
+curl -s --cookie "$C" "$B/api/events?limit=5"
+curl -s --cookie "$C" "$B/api/sleep/daily?days=14"
+curl -s --cookie "$C" "$B/api/utterances?limit=10"
+curl -s "$B/healthz"                      # открыт без куки
+
+# без куки — 401, и это надо проверять регулярно
+curl -s -o /dev/null -w '%{http_code}\n' "$B/api/state"     # 401
+curl -s -o /dev/null -w '%{http_code}\n' "$B/"              # 401
+curl -s -o /dev/null -w '%{http_code}\n' "$B/pair"          # 200
 
 # ручная запись события (отладка)
-curl -s -X POST "$B/api/events" -H 'Content-Type: application/json' \
+curl -s --cookie "$C" -X POST "$B/api/events" -H 'Content-Type: application/json' \
   -d '{"type":"feed","subtype":"bottle","value_num":120,"value_unit":"ml"}'
 
 # SSE: держите открытым в соседнем терминале и шлите события из первого
-curl -sN "$B/api/stream"
+curl -sN --cookie "$C" "$B/api/stream"
+
+# сопряжение целиком, без браузера
+curl -s -X POST "$B/api/device/code" -H 'Content-Type: application/json' -d '{"kind":"tv"}'
+node src/auth-cli.ts approve <КОД-С-ЭКРАНА>
+curl -s -i -X POST "$B/api/device/token" -H 'Content-Type: application/json' \
+  -d '{"device_code":"<длинный код из первого ответа>"}'   # в ответе Set-Cookie
 ```
 
 В потоке SSE должны быть: `retry:`, `event: state` сразу после подключения, затем

@@ -129,8 +129,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...init?.headers,
       },
       cache: 'no-store',
-      // Кука сессии нужна и при отдельном dev-origin.
-      credentials: 'include',
+      // Кука сессии (§11). Явно `same-origin`: другого origin здесь не бывает.
+      credentials: 'same-origin',
     });
   } catch (cause) {
     if ((cause as Error)?.name === 'AbortError') throw cause;
