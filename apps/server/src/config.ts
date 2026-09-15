@@ -24,7 +24,10 @@ export interface Config {
   claudeModel: string;
   workerEnabled: boolean;
   dashboardOrigin: string[];
+  /** Собранный дашборд для телевизора — раздаётся по «/». */
   dashboardDist: string;
+  /** Собранная админка — раздаётся по «/dash». */
+  adminDist: string;
   llmQueuePolicy: LlmQueuePolicy;
   llmConfidenceThreshold: number;
 }
@@ -145,6 +148,7 @@ export function loadConfig(
     'DASHBOARD_DIST',
     path.resolve(cwd, '..', 'dashboard', 'dist'),
   );
+  const adminDistRaw = str(env, 'ADMIN_DIST', path.resolve(cwd, '..', 'admin', 'dist'));
 
   return {
     port,
@@ -167,6 +171,7 @@ export function loadConfig(
     dashboardDist: path.isAbsolute(dashboardDistRaw)
       ? dashboardDistRaw
       : path.resolve(cwd, dashboardDistRaw),
+    adminDist: path.isAbsolute(adminDistRaw) ? adminDistRaw : path.resolve(cwd, adminDistRaw),
     llmQueuePolicy: policyRaw as LlmQueuePolicy,
     llmConfidenceThreshold: threshold,
   };

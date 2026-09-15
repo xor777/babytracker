@@ -2,7 +2,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestApp } from './helpers.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { TEST_SECRET, aliceBody, makeTestApp, testConfig, testDb } from './helpers.ts';
+import { createApp } from '../src/app.ts';
 import { insertEvent, softDeleteEvent } from '../src/events.ts';
 import { insertUtterance } from '../src/utterances.ts';
 import { newChangeSetId, type JournalContext } from '../src/journal.ts';
@@ -534,4 +538,88 @@ test('новые типы §10.2 принимаются API', async (t) => {
     const res = await h.app.inject({ method: 'POST', url: '/api/events', payload });
     assert.equal(res.statusCode, 201, `тип ${payload.type} должен приниматься`);
   }
+});
+
+
+/* ------------------------------------------------------------------ */
+/* Раздача статики: телевизор по «/», админка по «/dash»                */
+/* ------------------------------------------------------------------ */
+
+test('раздача /dash не перехватывает api, alice и healthz', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-static-'));
+  const tv = path.join(dir, 'tv');
+  const admin = path.join(dir, 'admin', 'assets');
+  fs.mkdirSync(tv, { recursive: true });
+  fs.mkdirSync(admin, { recursive: true });
+  fs.writeFileSync(path.join(tv, 'index.html'), '<html>ТЕЛЕВИЗОР</html>');
+  fs.writeFileSync(path.join(dir, 'admin', 'index.html'), '<html>АДМИНКА</html>');
+  fs.writeFileSync(path.join(admin, 'app-abc123.js'), 'console.log("admin bundle")');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const cfg = testConfig({ DASHBOARD_DIST: tv, ADMIN_DIST: path.join(dir, 'admin') });
+  const db = testDb();
+  const { app, sse } = createApp({ cfg, db, logger: false });
+  await app.ready();
+  t.after(async () => {
+    sse.close();
+    await app.close();
+    db.close();
+  });
+
+  const get = (url: string) => app.inject({ method: 'GET', url });
+
+  const root = await get('/');
+  assert.equal(root.statusCode, 200);
+  assert.match(root.body, /ТЕЛЕВИЗОР/, '«/» — дашборд телевизора');
+
+  for (const url of ['/dash', '/dash/']) {
+    const res = await get(url);
+    assert.equal(res.statusCode, 200, `${url} должен отдавать админку`);
+    assert.match(res.body, /АДМИНКА/, `${url} — админка, а не дашборд`);
+    assert.match(String(res.headers['content-type']), /text\/html/);
+  }
+
+  const asset = await get('/dash/assets/app-abc123.js');
+  assert.equal(asset.statusCode, 200);
+  assert.match(asset.body, /admin bundle/);
+
+  // API, вебхук и healthz статика перехватывать не должна
+  assert.equal((await get('/api/state')).statusCode, 200);
+  assert.match(String((await get('/api/state')).headers['content-type']), /application\/json/);
+  assert.equal((await get('/healthz')).statusCode, 200);
+
+  const missingApi = await get('/api/net-takogo');
+  assert.equal(missingApi.statusCode, 404);
+  assert.match(String(missingApi.headers['content-type']), /application\/json/, 'не HTML');
+
+  const alice = await app.inject({
+    method: 'POST',
+    url: `/alice/${TEST_SECRET}`,
+    payload: aliceBody('андрей заснул'),
+  });
+  assert.equal(alice.statusCode, 200);
+  assert.match((alice.json() as { response: { text: string } }).response.text, /Записала/);
+
+  // SPA-fallback телевизора не съедает /dash
+  const unknownDash = await get('/dash/чего-нет');
+  assert.equal(unknownDash.statusCode, 404, 'у админки хэш-роутинг, fallback не нужен');
+  assert.equal(
+    unknownDash.body.includes('ТЕЛЕВИЗОР'),
+    false,
+    'под /dash дашборд телевизора показывать нельзя',
+  );
+
+  // а маршруты самого телевизора fallback по-прежнему обслуживает
+  const spa = await get('/какой-то/путь');
+  assert.equal(spa.statusCode, 200);
+  assert.match(spa.body, /ТЕЛЕВИЗОР/);
+});
+
+test('нет apps/admin/dist — сервер работает, /dash отдаёт 404', async (t) => {
+  const h = await makeTestApp({ ADMIN_DIST: '/nonexistent/admin/dist' });
+  t.after(() => h.close());
+
+  assert.equal((await h.app.inject({ method: 'GET', url: '/healthz' })).statusCode, 200);
+  assert.equal((await h.app.inject({ method: 'GET', url: '/api/state' })).statusCode, 200);
+  assert.equal((await h.app.inject({ method: 'GET', url: '/dash' })).statusCode, 404);
 });

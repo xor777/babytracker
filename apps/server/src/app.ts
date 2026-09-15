@@ -141,6 +141,41 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Админка по /dash. Собрана с base '/dash/' и хэш-роутингом          */
+  /* (/dash/#/history), поэтому SPA-fallback ей не нужен: достаточно    */
+  /* index.html на /dash и /dash/ плюс ассеты по /dash/assets/*.        */
+  /* ---------------------------------------------------------------- */
+  const adminIndexHtml = path.join(cfg.adminDist, 'index.html');
+  const adminAvailable =
+    (options.serveStatic ?? true) && fs.existsSync(cfg.adminDist) && fs.existsSync(adminIndexHtml);
+
+  if (adminAvailable) {
+    void app.register(fastifyStatic, {
+      root: cfg.adminDist,
+      prefix: '/dash/',
+      index: ['index.html'],
+      wildcard: true,
+      // sendFile уже добавлен первой регистрацией — второй раз декорировать нельзя
+      decorateReply: false,
+      cacheControl: true,
+      maxAge: '5m',
+    });
+
+    // /dash без слэша: отдаём index напрямую, без лишнего редиректа
+    app.get('/dash', (_request, reply) =>
+      reply.type('text/html; charset=utf-8').send(fs.createReadStream(adminIndexHtml)),
+    );
+
+    app.log.info({ dist: cfg.adminDist }, 'статика админки: раздаём по /dash');
+  } else if (options.serveStatic ?? true) {
+    app.log.warn(
+      { dist: cfg.adminDist },
+      'статика админки не найдена — /dash отдавать нечем, остальное работает как обычно. ' +
+        'Соберите админку (pnpm build) или укажите ADMIN_DIST.',
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
   registerApiRoutes(app, ctx);
   registerAliceRoutes(app, ctx);
 
@@ -153,7 +188,10 @@ export function createApp(options: CreateAppOptions): CreatedApp {
     const isAppRoute =
       !pathname.startsWith('/api') &&
       !pathname.startsWith('/alice') &&
-      !pathname.startsWith('/healthz');
+      !pathname.startsWith('/healthz') &&
+      // у админки хэш-роутинг: неизвестный /dash/... — это честный 404,
+      // а не повод показать дашборд телевизора
+      !pathname.startsWith('/dash');
 
     if (request.method === 'GET' && staticAvailable && isAppRoute) {
       return reply.type('text/html; charset=utf-8').send(fs.createReadStream(indexHtml));
