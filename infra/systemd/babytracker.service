@@ -9,6 +9,10 @@ WorkingDirectory=%h/babytracker/apps/server
 EnvironmentFile=%h/babytracker/.env
 Environment=PATH=%h/.local/node/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_ENV=production
+# Claude CLI должен работать через подписку (OAuth, `claude setup-token`).
+# Если в окружении окажется ANTHROPIC_API_KEY, CLI молча переключится на
+# поштучную оплату по API мимо подписки — поэтому гасим его явно.
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
 ExecStart=%h/.local/node/bin/node src/index.ts
 Restart=always
 RestartSec=3
