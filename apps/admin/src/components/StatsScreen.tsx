@@ -2,36 +2,40 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useStats } from '../hooks/useStats';
 import { growthSeries } from '../lib/group';
-import { formatGrams, formatMinutes, formatNumber, formatWeight, plural } from '../lib/format';
+import {
+  formatGrams,
+  formatMinutes,
+  formatNumber,
+  formatWeight,
+  localDateKey,
+  plural,
+} from '../lib/format';
 import { NormMeter } from './NormMeter';
 import { GrowthChart } from './GrowthChart';
 
 const DAYS = 7;
 
-function dayChipLabel(date: string, index: number): string {
-  if (index === 0) return 'Сегодня';
-  if (index === 1) return 'Вчера';
-  const [, m, d] = date.split('-');
-  return `${Number(d)}.${m}`;
-}
-
 export function StatsScreen() {
   const { stats, measures, status, error, reload } = useStats(DAYS);
   const [index, setIndex] = useState(0);
 
+  // fetchStats уже отсортировал по убыванию, но «сегодня» определяем датой, а не позицией:
+  // сервер отдаёт дни по возрастанию, и привязка к индексу приклеивала бы
+  // «сутки ещё не кончились» к чужому дню.
   const days = stats?.days ?? [];
+  const todayKey = localDateKey(Date.now());
   const day = days[Math.min(index, Math.max(0, days.length - 1))] ?? null;
-  const partial = index === 0;
+  const partial = day?.date === todayKey;
 
   const weight = useMemo(() => growthSeries(measures, 'weight'), [measures]);
   const height = useMemo(() => growthSeries(measures, 'height'), [measures]);
 
-  // Сколько сна набралось за неделю — маленький контекст рядом с цифрой дня.
-  const weekSleepAvg = useMemo(() => {
-    const closed = days.slice(1);
+  /** Средний сон по завершённым суткам — контекст рядом с цифрой дня. */
+  const pastSleepAvg = useMemo(() => {
+    const closed = days.filter((d) => d.date !== todayKey);
     if (!closed.length) return null;
     return Math.round(closed.reduce((s, d) => s + d.sleep.totalMin, 0) / closed.length);
-  }, [days]);
+  }, [days, todayKey]);
 
   if (status === 'error') {
     return (
@@ -48,8 +52,16 @@ export function StatsScreen() {
     return <p className="placeholder">{status === 'loading' ? 'Считаю…' : 'Данных пока нет.'}</p>;
   }
 
-  const wet = day.diaper.wet;
-  const dirty = day.diaper.dirty;
+  const dayLabel = (date: string): string => {
+    if (date === todayKey) return 'Сегодня';
+    const [, m, d] = date.split('-');
+    return `${Number(d)}.${m}`;
+  };
+
+  // «both» — это и мокрый, и грязный: сервер считает их отдельной колонкой,
+  // а к норме подгузник должен идти в оба зачёта.
+  const wet = day.diapers.wet + day.diapers.both;
+  const dirty = day.diapers.dirty + day.diapers.both;
 
   return (
     <>
@@ -63,14 +75,12 @@ export function StatsScreen() {
               aria-pressed={i === index}
               onClick={() => setIndex(i)}
             >
-              {dayChipLabel(d.date, i)}
+              {dayLabel(d.date)}
             </button>
           ))}
         </div>
         {partial ? (
-          <p className="filters__meta">
-            Сутки ещё не закончились — цифры за неполный день.
-          </p>
+          <p className="filters__meta">Сутки ещё не закончились — цифры за неполный день.</p>
         ) : null}
       </div>
 
@@ -80,36 +90,43 @@ export function StatsScreen() {
             <h2 className="card__title">Кормления</h2>
           </div>
           <div className="metric">
-            <span className="metric__value">{day.feed.count}</span>
+            <span className="metric__value">{day.feeds.total}</span>
             <span className="metric__unit">
-              {plural(day.feed.count, 'раз', 'раза', 'раз')} за сутки
+              {plural(day.feeds.total, 'раз', 'раза', 'раз')} за сутки
             </span>
           </div>
           <NormMeter
-            value={day.feed.count}
-            norm={day.norms?.feed}
+            value={day.feeds.total}
+            norm={day.norms?.feeds}
             partial={partial}
             tone="var(--t-feed)"
           />
-          {(day.feed.bottleMl ?? 0) > 0 || (day.feed.breastMin ?? 0) > 0 ? (
-            <div className="split" style={{ marginTop: 10 }}>
-              <div className="substat">
-                <div className="substat__label">из бутылочки</div>
-                <div className="substat__value">{formatNumber(day.feed.bottleMl)}</div>
-                <div className="substat__hint">мл всего</div>
+          <div className="split" style={{ marginTop: 10 }}>
+            <div className="substat">
+              <div className="substat__label">грудь / бутылочка</div>
+              <div className="substat__value">
+                {day.feeds.breast} / {day.feeds.bottle}
               </div>
-              <div className="substat">
-                <div className="substat__label">грудь</div>
-                <div className="substat__value">{formatNumber(day.feed.breastMin)}</div>
-                <div className="substat__hint">минут всего</div>
+              {day.feeds.solid > 0 ? (
+                <div className="substat__hint">прикорм {day.feeds.solid}</div>
+              ) : null}
+            </div>
+            <div className="substat">
+              <div className="substat__label">объём</div>
+              <div className="substat__value">
+                {day.feeds.volumeMl == null ? '—' : formatNumber(day.feeds.volumeMl)}
+              </div>
+              <div className="substat__hint">
+                {day.feeds.volumeMl == null ? 'не называли' : 'мл всего'}
               </div>
             </div>
-          ) : null}
+          </div>
         </section>
 
         <section className="card" style={{ '--tone': 'var(--t-diaper)' } as CSSProperties}>
           <div className="card__head">
             <h2 className="card__title">Подгузники</h2>
+            <span className="card__aside">всего {day.diapers.total}</span>
           </div>
 
           <div className="metric">
@@ -118,7 +135,7 @@ export function StatsScreen() {
           </div>
           <NormMeter
             value={wet}
-            norm={day.norms?.diaperWet}
+            norm={day.norms?.wetDiapers}
             partial={partial}
             tone="var(--t-diaper)"
           />
@@ -129,7 +146,7 @@ export function StatsScreen() {
           </div>
           <NormMeter
             value={dirty}
-            norm={day.norms?.diaperDirty}
+            norm={day.norms?.dirtyDiapers}
             partial={partial}
             tone="var(--t-diaper)"
           />
@@ -144,28 +161,21 @@ export function StatsScreen() {
           </div>
           <div className="metric">
             <span className="metric__value">{formatMinutes(day.sleep.totalMin)}</span>
-            {weekSleepAvg != null ? (
-              <span className="metric__aside">
-                за прошлые дни
-                <br />в среднем {formatMinutes(weekSleepAvg)}
-              </span>
-            ) : null}
           </div>
-          <NormMeter
-            value={day.sleep.totalMin}
-            norm={day.norms?.sleepMin}
-            partial={partial}
-            tone="var(--t-sleep)"
-            fmt={(n) => formatMinutes(n)}
-          />
+          {/* Ориентира по сну сервер не отдаёт — и придумывать свой мы не станем:
+              это была бы ровно та медицинская отсебятина, которой здесь не место. */}
           <div className="split" style={{ marginTop: 10 }}>
             <div className="substat">
-              <div className="substat__label">ночью</div>
-              <div className="substat__value">{formatMinutes(day.sleep.nightMin ?? 0)}</div>
+              <div className="substat__label">самый длинный отрезок</div>
+              <div className="substat__value">{formatMinutes(day.sleep.longestMin)}</div>
             </div>
             <div className="substat">
-              <div className="substat__label">днём</div>
-              <div className="substat__value">{formatMinutes(day.sleep.napMin ?? 0)}</div>
+              <div className="substat__label">
+                {partial ? 'в среднем за прошлые дни' : 'в среднем за неделю'}
+              </div>
+              <div className="substat__value">
+                {pastSleepAvg == null ? '—' : formatMinutes(pastSleepAvg)}
+              </div>
             </div>
           </div>
         </section>
@@ -195,13 +205,20 @@ export function StatsScreen() {
             tone="var(--t-measure)"
             format={(v) => `${formatNumber(v, 1)} см`}
           />
+          {day.measures.headCm != null ? (
+            <p className="legend">
+              <span>
+                окружность головы <b>{formatNumber(day.measures.headCm, 1)} см</b>
+              </span>
+            </p>
+          ) : null}
         </section>
       </div>
 
       <p className="footnote">
-        Ориентиры — общие цифры из рекомендаций для младенцев, а не оценка конкретного
-        дня: сутки бывают разные, и один непохожий день сам по себе ничего не значит.
-        Всё, что касается здоровья, обсуждайте с педиатром.
+        Ориентиры — общие цифры из рекомендаций для младенцев, а не оценка конкретного дня:
+        сутки бывают разные, и один непохожий день сам по себе ничего не значит. Всё, что
+        касается здоровья, обсуждайте с педиатром.
       </p>
     </>
   );

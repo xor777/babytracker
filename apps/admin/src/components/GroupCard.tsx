@@ -41,9 +41,14 @@ export function GroupCard({ group, busyId, onOpen, onRestore }: Props) {
   // Источник у всех записей грозди обычно один — показываем его в шапке, а не в каждой строке.
   const sources = [...new Set(events.map((e) => e.source).filter(Boolean))] as string[];
 
-  // Частая ошибка разбора — время: «уснул полчаса назад» уезжает на полсуток.
-  // Не обвиняем, просто отмечаем расхождение: решает человек.
+  /*
+   * Время фразы знаем не всегда: текст приходит вместе с событием, а received_at —
+   * только из /api/utterances. Если его нет, показываем время первой записи,
+   * а расхождение не считаем: сравнивать было бы не с чем.
+   */
   const saidAt = parseTs(utterance?.received_at);
+  const firstAt = parseTs(events[0]?.started_at ?? null);
+  const headTime = saidAt ?? firstAt;
   const shifted =
     saidAt != null &&
     events.some((e) => {
@@ -57,7 +62,7 @@ export function GroupCard({ group, busyId, onOpen, onRestore }: Props) {
         <div className={failed ? 'said said--failed' : 'said'}>
           <span className="said__text">{utterance.raw_text}</span>
           <span className="said__meta">
-            <span className="mono">{formatTime(utterance.received_at)}</span>
+            <span className="mono">{formatTime(headTime)}</span>
             {events.length > 1 ? (
               <span>
                 · {events.length}{' '}

@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 /**
  * Мок сервера BabyTracker для разработки админки /dash.
- * Чистый node, без зависимостей. Реализует docs/CONTRACT.md §3, §9.6 и §10.4:
+ * Чистый node, без зависимостей.
+ *
+ * ВАЖНО: формы ответов и границы валидации повторяют apps/server один в один —
+ * имена полей (`utterance_text`, `feeds`, `diapers`, `measures`, `norms.wetDiapers`),
+ * порядок дней в сводке (по возрастанию), потолок limit у /api/utterances (200),
+ * отсутствие `deleted_at` в схеме PATCH и возврат только через журнал ревизий.
+ * Любое расхождение здесь — это баг, который мок спрячет до самого прода.
  *
  *   GET    /api/events?from&to&type&limit&include_deleted
  *   POST   /api/events
- *   PATCH  /api/events/:id          — ручная правка
- *   DELETE /api/events/:id          — мягкое удаление (физического не существует, §9.1)
- *   POST   /api/events/:id/restore  — вернуть удалённое
- *   GET    /api/utterances?limit
+ *   PATCH  /api/events/:id                 — ручная правка (без deleted_at!)
+ *   DELETE /api/events/:id                 — мягкое удаление, отдаёт revertWith
+ *   GET    /api/change-sets?limit
+ *   POST   /api/change-sets/:id/revert     — единственный способ вернуть удалённое (§9.6)
+ *   GET    /api/utterances?limit           — максимум 200, иначе 400
  *   GET    /api/stats/daily?days
  *   GET    /api/state, /healthz
  *
@@ -16,7 +23,9 @@
  * которые хочется поправить руками: ровно то, ради чего админка и делается.
  *
  *   node mock-server.mjs              → http://localhost:8787
- *   MOCK_401=1 node mock-server.mjs   → всё под /api отвечает 401 (проверить обработку)
+ *   MOCK_401=1 node mock-server.mjs              → /api отвечает 401
+ *   MOCK_NO_UTTERANCES=1 node mock-server.mjs    → падает только /api/utterances:
+ *                                                  цитаты обязаны остаться на месте
  *
  * Если рядом лежит ./dist — отдаёт его по /dash, как это будет делать настоящий сервер.
  */
@@ -29,6 +38,8 @@ const PORT = Number(process.env.PORT ?? 8787);
 const CHILD_NAME = process.env.CHILD_NAME ?? 'Андрей';
 const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-03-01';
 const FORCE_401 = process.env.MOCK_401 === '1';
+/** Роняет только /api/utterances: цитаты обязаны выжить — они приходят с событиями. */
+const NO_UTTERANCES = process.env.MOCK_NO_UTTERANCES === '1';
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 
 const MINUTE = 60_000;
@@ -423,19 +434,27 @@ events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
 
 // ------------------------------------------------------------------ выборки
 
-function ageDays() {
+function ageDays(dateStr) {
   const birth = Date.parse(`${CHILD_BIRTHDATE}T00:00:00Z`);
-  return Math.max(0, Math.floor((Date.now() - birth) / DAY));
+  const at = dateStr ? Date.parse(`${dateStr}T12:00:00Z`) : Date.now();
+  return Math.max(0, Math.floor((at - birth) / DAY));
 }
 
-/** §10.1 — ориентиры по возрасту. */
-function norms() {
-  const age = ageDays();
+/** §10.1 — ровно та же форма, что отдаёт apps/server/src/taxonomy.ts normsForAge(). */
+function normsForAge(age) {
+  const day = Math.max(1, Math.floor(age) + 1);
+  const wetMin = day >= 5 ? 6 : day;
   return {
-    feed: { min: 8, max: 12 },
-    diaperWet: { min: age < 5 ? Math.max(1, age) : 6, max: null },
-    diaperDirty: { min: 3, max: 4 },
-    sleepMin: { min: 12 * 60, max: 16 * 60 },
+    ageDays: Math.max(0, Math.floor(age)),
+    feeds: { min: 8, max: 12, note: 'ориентир AAP для новорождённого: 8–12 кормлений за 24 часа' },
+    wetDiapers: {
+      min: wetMin,
+      note:
+        day >= 5
+          ? 'с 5-го дня — 6 и более мокрых подгузников в сутки'
+          : `день ${day}: ориентир — ${wetMin} мокрых подгузника в сутки`,
+    },
+    dirtyDiapers: { min: 3, max: 4, note: 'после первых дней — 3–4 грязных подгузника в сутки' },
   };
 }
 
@@ -447,22 +466,14 @@ function utteranceById(id) {
   return utterances.find((u) => u.id === id) ?? null;
 }
 
-/** Событие наружу — с приклеенной фразой (§10.4). */
+/**
+ * Событие наружу. Фраза — ПЛОСКИМ полем utterance_text, как в
+ * apps/server/src/events.ts (LEFT JOIN u.raw_text). Никакого вложенного объекта:
+ * настоящий сервер его не отдаёт, и админка не должна на него рассчитывать.
+ */
 function toDto(e) {
   const u = e.utterance_id != null ? utteranceById(e.utterance_id) : null;
-  return {
-    ...e,
-    utterance: u
-      ? {
-          id: u.id,
-          raw_text: u.raw_text,
-          received_at: u.received_at,
-          processed_at: u.processed_at,
-          status: u.status,
-          llm_error: u.llm_error,
-        }
-      : null,
-  };
+  return { ...e, utterance_text: u ? u.raw_text : null };
 }
 
 function localDateKey(ms) {
@@ -471,60 +482,66 @@ function localDateKey(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** Форма — как у dailyStats() на сервере, порядок дней ПО ВОЗРАСТАНИЮ. */
 function buildStats(days) {
   const out = [];
-  for (let i = 0; i < days; i++) {
+  for (let i = days - 1; i >= 0; i--) {
     const dayMs = at(i, 12);
     const key = localDateKey(dayMs);
     const dayEvents = live().filter((e) => localDateKey(Date.parse(e.started_at)) === key);
 
     const feeds = dayEvents.filter((e) => e.type === 'feed');
+    const volumes = feeds.filter((e) => e.value_unit === 'ml' && e.value_num != null);
     const diapers = dayEvents.filter((e) => e.type === 'diaper');
     const sleeps = dayEvents.filter((e) => e.type === 'sleep');
 
     let totalMin = 0;
-    let nightMin = 0;
-    let napMin = 0;
+    let longestMin = 0;
     for (const s of sleeps) {
       const a = Date.parse(s.started_at);
       const b = s.ended_at ? Date.parse(s.ended_at) : Date.now();
       const min = Math.max(0, Math.round((b - a) / MINUTE));
       totalMin += min;
-      if (s.subtype === 'night') nightMin += min;
-      else napMin += min;
+      longestMin = Math.max(longestMin, min);
     }
 
-    const lastOf = (subtype) => {
+    const lastOf = (subtype, convert = (v) => v) => {
       const rows = dayEvents
-        .filter((e) => e.type === 'measure' && e.subtype === subtype)
-        .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
-      return rows[0]?.value_num ?? null;
+        .filter((e) => e.type === 'measure' && e.subtype === subtype && e.value_num != null)
+        .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+      const found = rows.at(-1);
+      return found ? convert(found.value_num, found.value_unit) : null;
     };
 
+    const age = ageDays(key);
     out.push({
       date: key,
-      feed: {
-        count: feeds.length,
-        bottleMl: feeds
-          .filter((f) => f.value_unit === 'ml')
-          .reduce((s, f) => s + (f.value_num ?? 0), 0),
-        breastMin: feeds
-          .filter((f) => f.value_unit === 'min')
-          .reduce((s, f) => s + (f.value_num ?? 0), 0),
+      ageDays: age,
+      feeds: {
+        total: feeds.length,
+        breast: feeds.filter((f) => f.subtype === 'breast').length,
+        bottle: feeds.filter((f) => f.subtype === 'bottle').length,
+        solid: feeds.filter((f) => f.subtype === 'solid').length,
+        // объём необязателен (§10.2): ни одного названного — null, а не 0
+        volumeMl:
+          volumes.length === 0
+            ? null
+            : Math.round(volumes.reduce((s, f) => s + f.value_num, 0)),
       },
-      diaper: {
-        wet: diapers.filter((d) => d.subtype === 'wet' || d.subtype === 'both').length,
-        dirty: diapers.filter((d) => d.subtype === 'dirty' || d.subtype === 'both').length,
+      diapers: {
+        wet: diapers.filter((d) => d.subtype === 'wet').length,
+        dirty: diapers.filter((d) => d.subtype === 'dirty').length,
         both: diapers.filter((d) => d.subtype === 'both').length,
+        total: diapers.length,
       },
-      sleep: { totalMin, sessions: sleeps.length, nightMin, napMin },
-      measure: {
-        weightG: lastOf('weight'),
+      sleep: { totalMin, sessions: sleeps.length, longestMin },
+      measures: {
+        weightG: lastOf('weight', (v, u) => (u === 'kg' ? Math.round(v * 1000) : v)),
         heightCm: lastOf('height'),
         headCm: lastOf('head'),
-        tempC: lastOf('temp'),
+        tempMaxC: null,
       },
-      norms: norms(),
+      norms: normsForAge(age),
     });
   }
   return out;
@@ -559,14 +576,58 @@ function buildState() {
       date: today.date,
       sleepTotalMin: today.sleep.totalMin,
       sleepSessions: today.sleep.sessions,
-      longestSleepMin: 0,
+      longestSleepMin: today.sleep.longestMin,
     },
     pending: utterances.filter((u) => u.status === 'pending').length,
   };
 }
 
+// ------------------------------------------------------------ журнал (§9.2)
+
+/** @type {any[]} */
+const changeSets = [];
+let csSeq = 0;
+
+function newChangeSet(summary, rows, utteranceId = null) {
+  const cs = {
+    id: `cs-${String(++csSeq).padStart(4, '0')}`,
+    utterance_id: utteranceId,
+    summary,
+    created_at: iso(Date.now()),
+    reverted_at: null,
+    // снимок «до» — из него и восстанавливаем
+    before: rows.map((r) => ({ ...r })),
+  };
+  changeSets.push(cs);
+  return cs;
+}
+
+/**
+ * Событиям, помеченным удалёнными прямо в сиде, нужен набор изменений в журнале —
+ * иначе «Вернуть» для старого удаления нечем проверить: ровно этот путь ищет
+ * админка через GET /api/change-sets.
+ */
+for (const row of events.filter((e) => e.deleted_at)) {
+  const cs = newChangeSet(`Удаление события ${row.id} моделью`, [{ ...row, deleted_at: null }]);
+  cs.created_at = row.deleted_at;
+}
+
+function changeSetDto(cs) {
+  return {
+    id: cs.id,
+    utterance_id: cs.utterance_id,
+    summary: cs.summary,
+    created_at: cs.created_at,
+    reverted_at: cs.reverted_at,
+    revisions: cs.before.length,
+    events: cs.before.map((r) => r.id),
+  };
+}
+
+
 // ------------------------------------------------------------------ http
 
+/** Ровно те поля, что принимает patchEventSchema на сервере. deleted_at среди них НЕТ. */
 const PATCHABLE = new Set([
   'type',
   'subtype',
@@ -575,8 +636,35 @@ const PATCHABLE = new Set([
   'value_num',
   'value_unit',
   'note',
-  'deleted_at',
 ]);
+
+const EVENT_TYPES = new Set([
+  'sleep', 'feed', 'pump', 'diaper', 'measure', 'meds', 'symptom', 'activity', 'note',
+]);
+const VALUE_UNITS = new Set(['ml', 'g', 'kg', 'c', 'cm', 'min', 'mg']);
+
+/** Повторяет zod-проверки сервера: он тоже отвечает 400, а не «молча чинит». */
+function validatePatch(body) {
+  const patch = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (!PATCHABLE.has(key)) continue; // неизвестные ключи zod срезает
+    patch[key] = value;
+  }
+  if (Object.keys(patch).length === 0) return { error: 'нечего менять: тело пустое' };
+  if ('type' in patch && !EVENT_TYPES.has(patch.type)) return { error: 'неизвестный type' };
+  if ('value_unit' in patch && patch.value_unit != null && !VALUE_UNITS.has(patch.value_unit)) {
+    return { error: 'неизвестный value_unit' };
+  }
+  if ('value_num' in patch && patch.value_num != null && !Number.isFinite(patch.value_num)) {
+    return { error: 'value_num должен быть числом' };
+  }
+  for (const key of ['started_at', 'ended_at']) {
+    if (key in patch && patch[key] != null && Number.isNaN(Date.parse(patch[key]))) {
+      return { error: `${key} не разбирается как дата` };
+    }
+  }
+  return { patch };
+}
 
 function json(res, code, payload) {
   const body = JSON.stringify(payload);
@@ -663,14 +751,21 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/stats/daily') {
     const days = Math.min(90, Math.max(1, Number(parsed.searchParams.get('days') ?? 7)));
-    return json(res, 200, {
-      child: { name: CHILD_NAME, birthDate: CHILD_BIRTHDATE, ageDays: ageDays() },
-      days: buildStats(days),
-    });
+    return json(res, 200, { days: buildStats(days) });
   }
 
   if (pathname === '/api/utterances') {
-    const limit = Math.min(500, Number(parsed.searchParams.get('limit') ?? 20));
+    if (NO_UTTERANCES) return json(res, 500, { error: 'mock: ручка нарочно сломана' });
+    // Сервер режет limit схемой zod и отвечает 400, а не «подрезает молча».
+    // Мок обязан вести себя так же — иначе он спрячет ровно эту ошибку.
+    const raw = parsed.searchParams.get('limit');
+    const limit = raw == null ? 20 : Number(raw);
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 200) {
+      return json(res, 400, {
+        error: 'bad_request',
+        issues: [{ path: ['limit'], message: 'limit: максимум 200' }],
+      });
+    }
     const rows = [...utterances]
       .sort((a, b) => Date.parse(b.received_at) - Date.parse(a.received_at))
       .slice(0, limit);
@@ -709,34 +804,57 @@ const server = http.createServer(async (req, res) => {
     return json(res, 201, { event: toDto(row) });
   }
 
-  const match = pathname.match(/^\/api\/events\/(\d+)(\/restore)?$/);
+  // --- §9.6: журнал изменений. Единственная дорога вернуть удалённое.
+  if (pathname === '/api/change-sets' && req.method === 'GET') {
+    const limit = Math.min(200, Number(parsed.searchParams.get('limit') ?? 20));
+    const rows = [...changeSets].reverse().slice(0, limit).map(changeSetDto);
+    return json(res, 200, { changeSets: rows });
+  }
+
+  const csRevert = pathname.match(/^\/api\/change-sets\/([\w-]+)\/revert$/);
+  if (csRevert && req.method === 'POST') {
+    const cs = changeSets.find((c) => c.id === csRevert[1]);
+    if (!cs) return json(res, 404, { error: 'revert_failed', message: 'набор не найден' });
+    const alreadyReverted = Boolean(cs.reverted_at);
+    const restored = [];
+    for (const before of cs.before) {
+      const row = events.find((e) => e.id === before.id);
+      if (!row) continue;
+      Object.assign(row, before, { updated_at: iso(Date.now()) });
+      restored.push(toDto(row));
+    }
+    cs.reverted_at = iso(Date.now());
+    return json(res, 200, {
+      reverted: cs.id,
+      revertChangeSetId: `${cs.id}-rev`,
+      restored,
+      alreadyReverted,
+    });
+  }
+
+  const match = pathname.match(/^\/api\/events\/(\d+)$/);
   if (match) {
     const id = Number(match[1]);
     const row = events.find((e) => e.id === id);
-    if (!row) return json(res, 404, { error: 'событие не найдено' });
-
-    if (match[2] === '/restore' && req.method === 'POST') {
-      row.deleted_at = null;
-      row.updated_at = iso(Date.now());
-      return json(res, 200, { event: toDto(row) });
-    }
+    if (!row) return json(res, 404, { error: 'not_found', id });
 
     if (req.method === 'PATCH') {
       const body = await readBody(req);
-      if (!body) return json(res, 400, { error: 'тело не разобралось' });
-      for (const [key, value] of Object.entries(body)) {
-        if (!PATCHABLE.has(key)) continue;
-        row[key] = value;
-      }
-      row.updated_at = iso(Date.now());
-      return json(res, 200, { event: toDto(row) });
+      if (!body) return json(res, 400, { error: 'bad_request', issues: 'тело не разобралось' });
+      const { patch, error } = validatePatch(body);
+      if (error) return json(res, 400, { error: 'bad_request', issues: error });
+
+      const cs = newChangeSet(`Ручная правка события ${id} через дашборд`, [row]);
+      Object.assign(row, patch, { updated_at: iso(Date.now()) });
+      return json(res, 200, { event: toDto(row), changeSetId: cs.id });
     }
 
     if (req.method === 'DELETE') {
       // §9.1: физического удаления не существует, только deleted_at.
+      const cs = newChangeSet(`Удаление события ${id} через дашборд`, [row]);
       row.deleted_at = iso(Date.now());
       row.updated_at = row.deleted_at;
-      return json(res, 200, { event: toDto(row) });
+      return json(res, 200, { event: toDto(row), changeSetId: cs.id, revertWith: cs.id });
     }
   }
 
@@ -747,5 +865,6 @@ server.listen(PORT, () => {
   console.log(`mock BabyTracker API  → http://localhost:${PORT}`);
   console.log(`  события: ${events.length}, фразы: ${utterances.length}`);
   if (FORCE_401) console.log('  MOCK_401=1 — /api отвечает 401');
+  if (NO_UTTERANCES) console.log('  MOCK_NO_UTTERANCES=1 — /api/utterances отвечает 500');
   if (fs.existsSync(DIST)) console.log(`  собранная админка → http://localhost:${PORT}/dash`);
 });

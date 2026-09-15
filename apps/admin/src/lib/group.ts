@@ -24,17 +24,28 @@ export interface DaySection {
   total: number;
 }
 
-/** Сервер может отдавать фразу внутри события (§10.4) — если нет, джойним по utterance_id. */
+/**
+ * Приклеивает к событию фразу.
+ *
+ * Основной источник — плоское `utterance_text` в самом событии: оно приходит вместе
+ * с лентой и не зависит ни от какого второго запроса. Список `/api/utterances` лишь
+ * обогащает её статусом разбора и временем — если он не доехал, цитата всё равно есть.
+ */
 export function attachUtterances(
   events: TrackerEvent[],
   utterances: Utterance[],
 ): TrackerEvent[] {
-  if (!utterances.length) return events;
   const byId = new Map(utterances.map((u) => [u.id, u]));
   return events.map((e) => {
     if (e.utterance?.raw_text) return e;
-    const found = e.utterance_id != null ? byId.get(e.utterance_id) : undefined;
-    return found ? { ...e, utterance: found } : e;
+    if (e.utterance_id == null) return e;
+
+    const found = byId.get(e.utterance_id);
+    if (found?.raw_text) return { ...e, utterance: found };
+    if (e.utterance_text) {
+      return { ...e, utterance: { id: e.utterance_id, raw_text: e.utterance_text } };
+    }
+    return e;
   });
 }
 

@@ -47,7 +47,12 @@ export interface TrackerEvent {
   created_at?: string;
   updated_at?: string;
   deleted_at?: string | null;
-  /** Присоединённая фраза. Если сервер её не отдал — джойним сами по utterance_id. */
+  /**
+   * Исходная фраза плоским полем — так её отдаёт сервер (§10.4, LEFT JOIN по utterance_id).
+   * Это основной и самый надёжный источник текста: он приходит вместе с самим событием.
+   */
+  utterance_text?: string | null;
+  /** Та же фраза объектом: собирается на клиенте, со статусом разбора, если он известен. */
   utterance?: Utterance | null;
 }
 
@@ -63,35 +68,54 @@ export interface EventPatch {
   deleted_at?: string | null;
 }
 
-/** Норма-ориентир из §10.1: диапазон либо только нижняя граница. */
+/**
+ * Норма-ориентир из §10.1. `note` сервер пишет словами («с 5-го дня — 6 и более…») —
+ * показываем именно его, а не свою переформулировку.
+ */
 export interface NormRange {
   min?: number | null;
   max?: number | null;
+  note?: string | null;
 }
 
-/** Сводка за сутки. `GET /api/stats/daily` (§10.4). */
+/**
+ * Сводка за сутки — ровно то, что отдаёт `GET /api/stats/daily` (§10.4).
+ * Имена полей совпадают с сервером намеренно: любое «улучшение» здесь превращается
+ * в тихие нули на экране.
+ */
 export interface DailyStats {
   date: string;
-  feed: { count: number; bottleMl?: number | null; breastMin?: number | null };
-  diaper: { wet: number; dirty: number; both: number };
-  sleep: { totalMin: number; sessions: number; nightMin?: number | null; napMin?: number | null };
-  measure?: {
-    weightG?: number | null;
-    heightCm?: number | null;
-    headCm?: number | null;
-    tempC?: number | null;
+  ageDays?: number;
+  feeds: {
+    total: number;
+    breast: number;
+    bottle: number;
+    solid: number;
+    /** null — объём ни разу не называли. Это не ноль (§10.2). */
+    volumeMl: number | null;
+  };
+  diapers: { wet: number; dirty: number; both: number; total: number };
+  sleep: { totalMin: number; sessions: number; longestMin: number };
+  measures: {
+    weightG: number | null;
+    heightCm: number | null;
+    headCm: number | null;
+    tempMaxC: number | null;
   };
   norms?: {
-    feed?: NormRange;
-    diaperWet?: NormRange;
-    diaperDirty?: NormRange;
-    sleepMin?: NormRange;
+    feeds?: NormRange;
+    wetDiapers?: NormRange;
+    dirtyDiapers?: NormRange;
   };
 }
 
 export interface StatsResponse {
-  child?: { name?: string; birthDate?: string; ageDays?: number };
   days: DailyStats[];
+}
+
+/** §3.2 — нужен только для шапки: имя и возраст. */
+export interface TrackerState {
+  child?: { name?: string; birthDate?: string; ageDays?: number };
 }
 
 /** Точка ростовой кривой — собираем из событий measure. */

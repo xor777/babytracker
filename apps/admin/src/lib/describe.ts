@@ -1,7 +1,13 @@
 /** Событие → строчки, которые видит человек в ленте. */
 import type { TrackerEvent } from '../types';
 import { breastSide, subtypeLabel, typeDef, unitLabel } from './taxonomy';
-import { durationMin, formatMinutes, formatNumber, formatWeight } from './format';
+import { HOUR, durationMin, formatMinutes, formatNumber, formatWeight, parseTs } from './format';
+
+/**
+ * Дольше этого «идёт» — уже не идёт, а незакрытая запись: купание без ended_at
+ * иначе висело бы с бейджем «идёт» вечно.
+ */
+const STILL_GOING = 12 * HOUR;
 
 export interface EventLines {
   /** «Кормление» */
@@ -34,7 +40,12 @@ export function describeEvent(e: TrackerEvent): EventLines {
   let note = e.note?.trim() || null;
 
   const ranged = durationMin(e.started_at, e.ended_at);
-  const open = def.openable && !e.ended_at;
+  const startedMs = parseTs(e.started_at);
+  const open =
+    def.openable &&
+    !e.ended_at &&
+    startedMs != null &&
+    Date.now() - startedMs < STILL_GOING;
 
   const value = valueText(e);
   if (value) parts.push(value);

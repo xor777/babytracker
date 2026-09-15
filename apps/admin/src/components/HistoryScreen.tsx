@@ -21,21 +21,25 @@ export function HistoryScreen({ onBusy }: Props) {
   const openEvent: TrackerEvent | null =
     openId == null
       ? null
-      : (h.sections.flatMap((s) => s.groups).flatMap((g) => g.events).find((e) => e.id === openId) ??
-        null);
+      : (h.sections
+          .flatMap((s) => s.groups)
+          .flatMap((g) => g.events)
+          .find((e) => e.id === openId) ?? null);
 
   const remove = useCallback(
     async (id: number) => {
-      const ok = await h.remove(id);
-      if (ok) setUndoId(id);
+      const error = await h.remove(id);
+      if (!error) setUndoId(id);
+      return error;
     },
     [h],
   );
 
   const restore = useCallback(
     async (id: number) => {
-      await h.restore(id);
-      setUndoId((cur) => (cur === id ? null : cur));
+      const error = await h.restore(id);
+      if (!error) setUndoId((cur) => (cur === id ? null : cur));
+      return error;
     },
     [h],
   );
@@ -61,6 +65,12 @@ export function HistoryScreen({ onBusy }: Props) {
           <button type="button" className="banner__btn" onClick={h.reload}>
             Ещё раз
           </button>
+        </div>
+      ) : null}
+
+      {h.notice ? (
+        <div className="banner banner--quiet" role="status">
+          <span>{h.notice}</span>
         </div>
       ) : null}
 

@@ -7,7 +7,11 @@ export const DAY = 24 * HOUR;
 const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
 const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
 const dayShortFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
-const weekdayFmt = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
+const secFmt = new Intl.DateTimeFormat('ru-RU', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
 
 export function parseTs(iso: string | null | undefined): number | null {
   if (!iso) return null;
@@ -30,10 +34,6 @@ export function formatDay(ms: number): string {
 /** «15 сен» */
 export function formatDayShort(ms: number): string {
   return dayShortFmt.format(new Date(ms));
-}
-
-export function formatWeekday(ms: number): string {
-  return weekdayFmt.format(new Date(ms));
 }
 
 function pad2(n: number): string {
@@ -94,15 +94,6 @@ export function localInputToIso(value: string): string | null {
   return new Date(ms).toISOString();
 }
 
-/** YYYY-MM-DD (значение <input type="date">) → границы суток в ISO UTC. */
-export function dateKeyToRange(key: string): { from: string; to: string } | null {
-  const [y, m, d] = key.split('-').map(Number);
-  if (!y || !m || !d) return null;
-  const from = new Date(y, m - 1, d, 0, 0, 0, 0);
-  const to = new Date(y, m - 1, d + 1, 0, 0, 0, 0);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
-
 export function plural(n: number, one: string, few: string, many: string): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -124,12 +115,20 @@ export function formatGrams(grams: number | null | undefined): string {
   return formatWeight(grams);
 }
 
-/** «сегодня 13:05» / «13 сен 13:05» — когда одного времени мало. */
-export function formatWhen(value: string | number | null | undefined): string {
+/**
+ * «13:05» / «13 сен, 13:05» — когда одного времени мало.
+ * `withSeconds` показывает секунды: в редакторе важно видеть, что на самом деле в БД,
+ * потому что инпут времени их не показывает.
+ */
+export function formatWhen(
+  value: string | number | null | undefined,
+  withSeconds = false,
+): string {
   const ms = typeof value === 'number' ? value : parseTs(value);
   if (ms == null) return '--:--';
+  const clock = withSeconds ? secFmt.format(new Date(ms)) : formatTime(ms);
   const sameDay = startOfLocalDay(ms) === startOfLocalDay(Date.now());
-  return sameDay ? formatTime(ms) : `${formatDayShort(ms)}, ${formatTime(ms)}`;
+  return sameDay ? clock : `${formatDayShort(ms)}, ${clock}`;
 }
 
 export function formatNumber(value: number | null | undefined, digits = 0): string {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { fetchState } from './api';
 import { ApiError } from './types';
 import { useHashRoute } from './hooks/useHashRoute';
 import { HistoryScreen } from './components/HistoryScreen';
@@ -25,16 +26,12 @@ export function App() {
     const ac = new AbortController();
     (async () => {
       try {
-        const res = await fetch('/api/state', { signal: ac.signal, cache: 'no-store' });
-        if (res.status === 401) {
-          setAuthBlocked(true);
-          return;
-        }
-        if (!res.ok) throw new ApiError(res.status, 'state');
-        const data = await res.json();
+        const data = await fetchState(ac.signal);
         setChild({ name: data?.child?.name ?? 'Ребёнок', ageDays: data?.child?.ageDays ?? 0 });
-      } catch {
-        // Шапка — украшение: без неё экран обязан работать.
+      } catch (err) {
+        // Шапка — украшение: без неё экран обязан работать. Кроме 401 — он означает,
+        // что и остальные запросы не пройдут, и человеку нужно об этом сказать.
+        if (err instanceof ApiError && err.status === 401) setAuthBlocked(true);
       }
     })();
     return () => ac.abort();
