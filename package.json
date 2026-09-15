@@ -1,0 +1,14 @@
+{
+  "name": "babytracker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Голосовой трекер жизни ребёнка: Алиса -> сервер -> sci-fi дашборд на Android TV",
+  "packageManager": "pnpm@10.30.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* dev",
+    "build": "pnpm --filter ./apps/* build",
+    "test": "pnpm --filter ./apps/* test",
+    "typecheck": "pnpm --filter ./apps/* typecheck"
+  }
+}
