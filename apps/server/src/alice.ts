@@ -258,9 +258,17 @@ export function handleAliceRequest(
         journal,
       });
       if (res.status === 'already_open') {
+        // время берётся из уже записанного события, а не из неразобранной фразы,
+        // поэтому здесь оно точное
         text =
           `${cfg.childName} уже спит, с ${formatTimeLocal(res.event.started_at, cfg.tz)}. ` +
           `Это ${formatDurationRu(res.durationMin)}`;
+      } else if (fast.timeUnresolved) {
+        // Время во фразе названо, но не разобрано: называть вслух «в 17:32»
+        // нельзя — это и есть та самая правдоподобная неправда. Момент
+        // поправит модель, фраза уже ушла ей в очередь.
+        text = `Записала: ${cfg.childName} заснул. Время уточню`;
+        scheduleEventBroadcast(ctx, 'created', res.event.id);
       } else {
         text = `Записала: ${cfg.childName} заснул в ${formatTimeLocal(res.event.started_at, cfg.tz)}`;
         scheduleEventBroadcast(ctx, 'created', res.event.id);
@@ -276,7 +284,11 @@ export function handleAliceRequest(
         confidence: fast.confidence,
         journal,
       });
-      if (res.status === 'closed') {
+      if (res.status === 'closed' && fast.timeUnresolved) {
+        // длительность посчиталась бы от неверного момента — не озвучиваем
+        text = `Записала, что ${cfg.childName} проснулся. Время уточню`;
+        scheduleEventBroadcast(ctx, 'updated', res.event.id);
+      } else if (res.status === 'closed') {
         text = `${cfg.childName} проснулся. Спал ${formatDurationRuAcc(res.durationMin)}`;
         scheduleEventBroadcast(ctx, 'updated', res.event.id);
       } else {

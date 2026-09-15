@@ -18,6 +18,13 @@ import { civilToUtcMs, zonedParts } from './time.ts';
 const C_DIRECT = 0.95;
 /** Уверенность попадания по более вольному шаблону (запрос состояния). */
 const C_QUERY = 0.9;
+/**
+ * Тип события понятен, а вот время — нет: во фразе есть указание на время,
+ * которое не удалось превратить в абсолютный момент. Событие всё равно пишется
+ * (иначе при недоступной модели оно потерялось бы совсем), но заявлять 0.95
+ * матчер не вправе: записанное время почти наверняка неверное.
+ */
+const C_TIME_UNRESOLVED = 0.4;
 
 /* ------------------------------------------------------------------ */
 /* Нормализация                                                        */
@@ -294,12 +301,96 @@ export const DOMAIN_STEMS: Readonly<Record<string, readonly string[]>> = {
 
 /** Числительные словами — «минут пятнадцать» это одно число. */
 const NUMERAL_STEMS: readonly string[] = [
+  'полтор', 'полутор',
   'один', 'одну', 'одна', 'два', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь',
   'восемь', 'девять', 'десять', 'одиннадцат', 'двенадцат', 'тринадцат', 'четырнадцат',
   'пятнадцат', 'шестнадцат', 'семнадцат', 'восемнадцат', 'девятнадцат', 'двадцат',
   'тридцат', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяност',
   'двест', 'трист', 'полчаса', 'половин',
 ];
+
+/* ------------------------------------------------------------------ */
+/* Указание на время (§10.3)                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Слова, по которым видно, что мама назвала время события.
+ *
+ * Мама редко записывает событие ровно в тот момент, когда оно случилось:
+ * «заснул полчаса назад», «проснулся в три», «уснул после обеда» — обычный
+ * способ говорить. Если такое слово есть, а абсолютный момент получить
+ * не удалось, решать должна модель, а не матчер.
+ */
+const TIME_MARKER_TOKENS = new Set([
+  'назад',
+  'утром', 'утра', 'утру',
+  'днем', 'полдень', 'полудни',
+  'вечером', 'вечера', 'вечеру',
+  'ночью', 'ночи',
+  'недавно', 'давно', 'рано', 'поздно',
+  'вчера', 'позавчера',
+  'обед', 'обеда', 'обедом', 'обеде',
+  'завтрак', 'завтрака', 'завтраком',
+  'ужин', 'ужина', 'ужином',
+  'полдник', 'полдника',
+  'полчаса', 'полтора', 'полутора',
+  'минут', 'минуту', 'минуты', 'минута',
+  'час', 'часа', 'часов', 'часу',
+  'перед', 'после',
+]);
+
+const TIME_MARKER_PHRASES: readonly string[] = [
+  'только что',
+  'пару минут',
+  'пару часов',
+  'на днях',
+  'в обед',
+  'под утро',
+  'под вечер',
+  'к обеду',
+];
+
+/**
+ * Есть ли во фразе указание на время.
+ *
+ * Отдельно ловится конструкция «в <число>»: «в три», «в 15», «в половину».
+ */
+export function hasTimeReference(normalized: string): boolean {
+  if (normalized.length === 0) return false;
+  if (containsPhrase(padded(normalized), TIME_MARKER_PHRASES)) return true;
+
+  const tokens = tokenize(normalized);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === undefined) continue;
+    if (TIME_MARKER_TOKENS.has(token)) return true;
+
+    // «в три», «в 15», «во сколько-то»
+    if (token === 'в' || token === 'во') {
+      const next = tokens[i + 1];
+      if (next !== undefined && (/^\d+$/u.test(next) || startsWithAny(next, NUMERAL_STEMS))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * §10.3: во фразе названо время, а разрешить его в абсолютный момент не вышло.
+ *
+ * Именно этот случай дал тихую порчу данных на проде: «андрей заснул полтора
+ * часа назад» при пустом `nlu.entities` записался на «сейчас» с уверенностью
+ * 0.95 и поэтому не ушёл модели — правдоподобное, но неверное время без единого
+ * признака ошибки в интерфейсе.
+ *
+ * Пустой `nlu.entities` при наличии слов времени — тот же случай: NLU не
+ * справился, и решать должна модель.
+ */
+export function isTimeUnresolved(normalized: string, resolvedAt: string | undefined): boolean {
+  if (resolvedAt !== undefined) return false;
+  return hasTimeReference(normalized);
+}
 
 /** Слова, которые не считаются «значимыми» при подсчёте длины фразы. */
 const INSIGNIFICANT = new Set([
@@ -548,18 +639,22 @@ function isQuery(paddedText: string, tokens: string[]): boolean {
 
 function sleepResult(
   kind: 'sleep_start' | 'sleep_end',
-  confidence: number,
   at: string | undefined,
   mayContainMore: boolean,
+  timeUnresolved: boolean,
 ): FastResult {
+  // Тип события матчер распознал уверенно, но если время названо и не разобрано,
+  // заявлять 0.95 нечестно: записанный момент почти наверняка неверный.
+  const confidence = timeUnresolved ? C_TIME_UNRESOLVED : C_DIRECT;
+
   if (kind === 'sleep_start') {
     return at === undefined
-      ? { kind: 'sleep_start', confidence, mayContainMore }
-      : { kind: 'sleep_start', confidence, at, mayContainMore };
+      ? { kind: 'sleep_start', confidence, mayContainMore, timeUnresolved }
+      : { kind: 'sleep_start', confidence, at, mayContainMore, timeUnresolved };
   }
   return at === undefined
-    ? { kind: 'sleep_end', confidence, mayContainMore }
-    : { kind: 'sleep_end', confidence, at, mayContainMore };
+    ? { kind: 'sleep_end', confidence, mayContainMore, timeUnresolved }
+    : { kind: 'sleep_end', confidence, at, mayContainMore, timeUnresolved };
 }
 
 export interface MatchFastOptions {
@@ -584,7 +679,9 @@ export function matchFast(
   const tz = options.tz ?? 'Europe/Moscow';
 
   const normalized = normalize(command);
-  if (normalized.length === 0) return { kind: 'unknown', mayContainMore: false };
+  if (normalized.length === 0) {
+    return { kind: 'unknown', mayContainMore: false, timeUnresolved: false };
+  }
 
   const text = padded(normalized);
   const tokens = tokenize(normalized);
@@ -594,35 +691,41 @@ export function matchFast(
     computeMayContainMore({ raw: command, normalized, recognizedDomain });
 
   // 1. Выход — раньше всего: это управление диалогом, а не событие.
-  if (isExit(text, tokens)) return { kind: 'exit', mayContainMore: false };
+  if (isExit(text, tokens)) {
+    return { kind: 'exit', mayContainMore: false, timeUnresolved: false };
+  }
 
   const at = extractDateTime(nlu, now, tz);
+  // Время названо, но в абсолютный момент не превратилось — см. §10.3.
+  const timeUnresolved = isTimeUnresolved(normalized, at);
 
   // 2. Многословные маркеры пробуждения (в т.ч. «не спит») — до проверки отрицаний.
   if (containsPhrase(text, SLEEP_END_PHRASES)) {
-    return sleepResult('sleep_end', C_DIRECT, at, more('sleep'));
+    return sleepResult('sleep_end', at, more('sleep'), timeUnresolved);
   }
 
   // 3. Многословные маркеры засыпания.
   if (containsPhrase(text, SLEEP_START_PHRASES)) {
-    return sleepResult('sleep_start', C_DIRECT, at, more('sleep'));
+    return sleepResult('sleep_start', at, more('sleep'), timeUnresolved);
   }
 
-  // 4. Запрос состояния.
+  // 4. Запрос состояния: события не пишет, поэтому время ему безразлично.
   if (isQuery(text, tokens)) {
-    return { kind: 'query_state', confidence: C_QUERY, mayContainMore: false };
+    return { kind: 'query_state', confidence: C_QUERY, mayContainMore: false, timeUnresolved: false };
   }
 
   // 5. Отрицание рядом с ключевым словом сна — отдаём LLM, сами не гадаем.
-  if (hasNegatedSleepKeyword(tokens)) return { kind: 'unknown', mayContainMore: more(null) };
+  if (hasNegatedSleepKeyword(tokens)) {
+    return { kind: 'unknown', mayContainMore: more(null), timeUnresolved };
+  }
 
   // 6. Одиночные ключевые слова.
   if (hasAnyToken(tokens, SLEEP_END_TOKENS)) {
-    return sleepResult('sleep_end', C_DIRECT, at, more('sleep'));
+    return sleepResult('sleep_end', at, more('sleep'), timeUnresolved);
   }
   if (hasAnyToken(tokens, SLEEP_START_TOKENS)) {
-    return sleepResult('sleep_start', C_DIRECT, at, more('sleep'));
+    return sleepResult('sleep_start', at, more('sleep'), timeUnresolved);
   }
 
-  return { kind: 'unknown', mayContainMore: more(null) };
+  return { kind: 'unknown', mayContainMore: more(null), timeUnresolved };
 }

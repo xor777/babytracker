@@ -170,13 +170,33 @@ export interface YandexDateTimeValue {
 /* ------------------------------------------------------------------ */
 
 /**
- * §10.3: `mayContainMore` — признак того, что во фразе может быть что-то ещё,
- * кроме распознанного. При `true` фраза уходит модели независимо от confidence
- * и политики очереди. Без этого «покушал и уснул» молча теряет кормление.
+ * §10.3. Два независимых признака «не закрывай фразу одним матчером»:
+ *
+ * - `mayContainMore` — во фразе может быть ещё событие, кроме распознанного.
+ *   Без него «покушал и уснул» молча теряет кормление.
+ * - `timeUnresolved` — во фразе есть указание на время, а разрешить его
+ *   в абсолютный момент не удалось. Без него «заснул полтора часа назад»
+ *   записывается на «сейчас» с уверенностью 0.95: правдоподобно и неверно.
+ *
+ * Любой из них при `true` отправляет фразу модели независимо от confidence
+ * и политики очереди. Держать их раздельно важно: причина разная, и подсказка
+ * модели в промпте тоже разная.
  */
 export type FastResult =
-  | { kind: 'sleep_start'; confidence: number; at?: string; mayContainMore: boolean }
-  | { kind: 'sleep_end'; confidence: number; at?: string; mayContainMore: boolean }
-  | { kind: 'query_state'; confidence: number; mayContainMore: boolean }
-  | { kind: 'exit'; mayContainMore: boolean }
-  | { kind: 'unknown'; mayContainMore: boolean };
+  | {
+      kind: 'sleep_start';
+      confidence: number;
+      at?: string;
+      mayContainMore: boolean;
+      timeUnresolved: boolean;
+    }
+  | {
+      kind: 'sleep_end';
+      confidence: number;
+      at?: string;
+      mayContainMore: boolean;
+      timeUnresolved: boolean;
+    }
+  | { kind: 'query_state'; confidence: number; mayContainMore: boolean; timeUnresolved: boolean }
+  | { kind: 'exit'; mayContainMore: boolean; timeUnresolved: boolean }
+  | { kind: 'unknown'; mayContainMore: boolean; timeUnresolved: boolean };
