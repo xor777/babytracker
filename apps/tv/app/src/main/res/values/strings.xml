@@ -18,4 +18,5 @@
     <string name="reloading">Перезагружаю дашборд…</string>
     <string name="url_changed">Новый адрес: %1$s</string>
     <string name="url_reset">Адрес сброшен на значение из сборки</string>
+    <string name="url_rejected">Адрес отклонён, нет в белом списке: %1$s</string>
 </resources>

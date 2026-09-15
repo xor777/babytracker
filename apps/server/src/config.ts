@@ -25,7 +25,14 @@ export interface Config {
   workerEnabled: boolean;
   dashboardOrigin: string[];
   dashboardDist: string;
+  llmQueuePolicy: LlmQueuePolicy;
+  llmConfidenceThreshold: number;
 }
+
+/** §9.4: когда вообще звать модель. */
+export type LlmQueuePolicy = 'smart' | 'all' | 'unknown';
+
+export const LLM_QUEUE_POLICIES: readonly LlmQueuePolicy[] = ['smart', 'all', 'unknown'];
 
 export interface LoadConfigOptions {
   /** MCP-серверу секрет вебхука не нужен и не передаётся. */
@@ -117,6 +124,19 @@ export function loadConfig(
     problems.push(`WORKER_ENABLED="${workerRaw}" — ожидается true/false`);
   }
 
+  const policyRaw = str(env, 'LLM_QUEUE_POLICY', 'smart').toLowerCase();
+  if (!LLM_QUEUE_POLICIES.includes(policyRaw as LlmQueuePolicy)) {
+    problems.push(
+      `LLM_QUEUE_POLICY="${policyRaw}" — ожидается ${LLM_QUEUE_POLICIES.join(' | ')}`,
+    );
+  }
+
+  const thresholdRaw = str(env, 'LLM_CONFIDENCE_THRESHOLD', '0.8');
+  const threshold = Number.parseFloat(thresholdRaw);
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    problems.push(`LLM_CONFIDENCE_THRESHOLD="${thresholdRaw}" — ожидается число от 0 до 1`);
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const dbPathRaw = str(env, 'DB_PATH', './data/babytracker.db');
@@ -141,11 +161,13 @@ export function loadConfig(
     childName: str(env, 'CHILD_NAME', 'Андрей'),
     childBirthDate: birthDate,
     claudeBin: str(env, 'CLAUDE_BIN', 'claude'),
-    claudeModel: str(env, 'CLAUDE_MODEL', 'claude-sonnet-5'),
+    claudeModel: str(env, 'CLAUDE_MODEL', 'claude-opus-5'),
     workerEnabled: ['true', '1', 'yes'].includes(workerRaw),
     dashboardOrigin: list(env, 'DASHBOARD_ORIGIN'),
     dashboardDist: path.isAbsolute(dashboardDistRaw)
       ? dashboardDistRaw
       : path.resolve(cwd, dashboardDistRaw),
+    llmQueuePolicy: policyRaw as LlmQueuePolicy,
+    llmConfidenceThreshold: threshold,
   };
 }

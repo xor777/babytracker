@@ -1,0 +1,72 @@
+name: Тесты и выкатка
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Две выкатки одновременно на одну машину — верный способ получить
+# наполовину собранный сервис. Очередь, без отмены уже идущей.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Проверки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Типы
+        run: |
+          pnpm --filter ./apps/server typecheck
+          pnpm --filter ./apps/dashboard typecheck
+
+      - name: Тесты сервера
+        run: pnpm --filter ./apps/server test
+
+      - name: Сборка дашборда
+        run: pnpm --filter ./apps/dashboard build
+
+  deploy:
+    name: Выкатка на прод
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: SSH-ключ
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Ключ хоста берём из секрета, а не из ssh-keyscan: keyscan доверяет
+          # тому, что ответит сеть, и не защищает от подмены.
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Запуск выкатки
+        # На сервере этот ключ прибит forced command к infra/ci-deploy.sh,
+        # поэтому любая команда здесь роли не играет — сервер выполнит свой сценарий.
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=20 \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" deploy
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

@@ -1,3 +1,4 @@
+import java.net.URI
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,16 +7,23 @@ plugins {
 }
 
 /**
- * Адрес дашборда. Приоритет:
- *   1. -PDASHBOARD_URL=... (командная строка) или gradle.properties;
- *   2. переменная окружения DASHBOARD_URL;
- *   3. дефолт ниже.
+ * Адрес дашборда. Берётся из project property DASHBOARD_URL, то есть из
+ * `-PDASHBOARD_URL=...`, из переменной окружения `ORG_GRADLE_PROJECT_DASHBOARD_URL`
+ * или из gradle.properties — именно в этом порядке приоритета (правила Gradle).
  * Исходники ради смены адреса править не нужно.
  */
 val dashboardUrl: String =
     (project.findProperty("DASHBOARD_URL") as String?)?.trim()?.takeIf { it.isNotEmpty() }
-        ?: System.getenv("DASHBOARD_URL")?.trim()?.takeIf { it.isNotEmpty() }
         ?: "http://192.168.1.10:8787/"
+
+/**
+ * Белый список хостов, на которые приложению вообще разрешено ходить: и для навигации
+ * внутри WebView, и для подмены адреса через adb. По умолчанию — только хост из
+ * DASHBOARD_URL; плюс в коде всегда разрешены адреса локальной сети.
+ */
+val dashboardHosts: String =
+    (project.findProperty("DASHBOARD_URL_HOSTS") as String?)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: runCatching { URI(dashboardUrl).host }.getOrNull().orEmpty()
 
 android {
     namespace = "com.nuanu.babytracker.tv"
@@ -29,6 +37,7 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "DASHBOARD_URL", "\"$dashboardUrl\"")
+        buildConfigField("String", "DASHBOARD_URL_HOSTS", "\"$dashboardHosts\"")
     }
 
     buildFeatures {
@@ -54,8 +63,25 @@ android {
     }
 
     lint {
-        // Обёртка вокруг WebView: ловить релиз на предупреждениях линта незачем.
-        abortOnError = false
+        abortOnError = true
+        warningsAsErrors = false
+
+        // Ослабления TLS по умолчанию всего лишь warning и проезжают молча.
+        // У этих трёх нет ни одного законного применения в киоске на WebView —
+        // поднимаем до error, чтобы ./gradlew lintDebug падал на регрессии.
+        error += setOf(
+            "AcceptsUserCertificates",
+            "TrustAllX509TrustManager",
+            "WebViewClientOnReceivedSslError",
+        )
+
+        // InsecureBaseConfiguration НЕ поднимаем: cleartextTrafficPermitted=true
+        // здесь осознанный (сервер стартует по http в локалке, см. CONTRACT §7).
+        // Когда дашборд окончательно переедет на HTTPS — выключить cleartext
+        // в network_security_config.xml и добавить правило сюда же, в error.
+
+        // Версии зависимостей обновляем осознанно, а не по требованию линта.
+        disable += setOf("GradleDependency", "AndroidGradlePluginVersion", "OldTargetApi")
     }
 }
 

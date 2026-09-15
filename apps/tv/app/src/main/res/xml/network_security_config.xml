@@ -4,10 +4,14 @@
   запрещён, и страница просто не откроется. Разрешаем cleartext явно.
 -->
 <network-security-config>
+    <!--
+      Доверяем только системным CA. Пользовательские сертификаты НЕ добавляем:
+      дашборд переезжает на настоящий HTTPS, и любой подсунутый на телевизор CA
+      иначе штатно ломал бы TLS.
+    -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
-            <certificates src="user" />
         </trust-anchors>
     </base-config>
 </network-security-config>
