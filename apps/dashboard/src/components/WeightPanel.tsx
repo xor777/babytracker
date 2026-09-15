@@ -151,9 +151,12 @@ export function WeightPanel({ measures, now }: Props) {
             </span>
             {prev && (
               <span className="weight__delta weight__delta--dim">
-                <b>{formatDelta(last.grams - prev.grams)}</b> за{' '}
-                {daysBetween(prev.at, last.at)}{' '}
-                {plural(daysBetween(prev.at, last.at), 'день', 'дня', 'дней')}
+                {/* «за 0 дней» — пустой промежуток: взвесили дважды за один день.
+                    Тогда честнее назвать точку отсчёта, а не длину промежутка. */}
+                <b>{formatDelta(last.grams - prev.grams)}</b>{' '}
+                {daysBetween(prev.at, last.at) > 0
+                  ? `за ${daysBetween(prev.at, last.at)} ${plural(daysBetween(prev.at, last.at), 'день', 'дня', 'дней')}`
+                  : 'с прошлого взвешивания'}
               </span>
             )}
           </div>

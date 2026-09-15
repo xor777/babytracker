@@ -182,7 +182,24 @@ export interface BuildPromptInput {
    */
   recentUtterances?: UtteranceRow[];
   now?: Date;
+  /**
+   * Когда фразу СКАЗАЛИ (`utterances.received_at`). По умолчанию — «сейчас».
+   *
+   * Разбор асинхронный, и между фразой и запуском модели может пройти час:
+   * лежал claude, ждали окно лимита, перезапускался сервер, человек вернул
+   * старую фразу в разбор. Всё относительное во фразе («полчаса назад», «в
+   * три», «только что») отсчитывается от МОМЕНТА ФРАЗЫ, иначе разгребание
+   * очереди само становится источником неверных времён в дневнике.
+   */
+  receivedAt?: Date;
 }
+
+/**
+ * С какой задержки разбор считается запоздавшим и модели об этом говорится
+ * прямым текстом. Две минуты — с запасом больше обычного времени в очереди
+ * (секунды), но заметно меньше любого значимого интервала в дневнике.
+ */
+export const LATE_PARSE_MIN = 2;
 
 const FAST_KIND_RU: Record<string, string> = {
   sleep_start: 'засыпание (sleep_start)',
@@ -351,6 +368,13 @@ interface CaseInput {
   recentEvents: EventRow[];
   recentUtterances: UtteranceRow[];
   utteranceId: number | null;
+  /**
+   * Точка отсчёта для всех «сколько прошло» — МОМЕНТ ФРАЗЫ, а не момент
+   * разбора. Разбор мог случиться на час позже (стояла очередь), и «прошло
+   * 20 минут после засыпания» должно означать 20 минут на момент, когда
+   * родитель это сказал, — иначе развилка «повтор или пропущенное
+   * пробуждение» решается по времени, которого не было.
+   */
   now: Date;
 }
 
@@ -708,6 +732,10 @@ export function buildPrompt(input: BuildPromptInput): string {
   const utteranceId = input.utteranceId ?? null;
   const reparseCount = input.reparseCount ?? 0;
   const now = input.now ?? new Date();
+  // Момент фразы — точка отсчёта. Совпадает с «сейчас», когда очередь движется.
+  const saidAt = input.receivedAt ?? now;
+  const lateMin = Math.max(0, Math.round((now.getTime() - saidAt.getTime()) / 60_000));
+  const late = lateMin >= LATE_PARSE_MIN;
   const changeSets = input.changeSets ?? [];
   const recentEvents = input.recentEvents ?? [];
   const recentUtterances = input.recentUtterances ?? [];
@@ -721,7 +749,8 @@ export function buildPrompt(input: BuildPromptInput): string {
     recentEvents,
     recentUtterances,
     utteranceId,
-    now,
+    // Карточки рассуждают о ситуации НА МОМЕНТ ФРАЗЫ.
+    now: saidAt,
   });
 
   const cardsBlock =
@@ -829,8 +858,25 @@ export function buildPrompt(input: BuildPromptInput): string {
 ${cardsBlock}
 # КОНТЕКСТ
 
-Сейчас: ${localStamp(now, cfg.tz)} по местному времени (${cfg.tz}, ${tzOffsetLabel(now, cfg.tz)}).
-В UTC это ${now.toISOString()}.
+ФРАЗА СКАЗАНА: ${localStamp(saidAt, cfg.tz)} местное (${cfg.tz}, ${tzOffsetLabel(saidAt, cfg.tz)}), в UTC ${saidAt.toISOString()}.
+Это точка отсчёта: «полчаса назад», «в три», «<сейчас>» в образцах — всё от неё.
+${
+  late
+    ? `
+РАЗБОР ЗАПОЗДАЛ на ${formatDurationRu(lateMin)}: сейчас уже ${localStamp(now, cfg.tz)} (${now.toISOString()}).
+Фраза ждала в очереди: не работал разбор, было исчерпано окно лимита,
+перезапускался сервер или её вернули в разбор руками. Что это меняет:
+
+  - времена по этой фразе — от МОМЕНТА ФРАЗЫ, а не от текущего. «Только что
+    поел», сказанное ${formatDurationRu(lateMin)} назад, — это ${localStamp(saidAt, cfg.tz).slice(-5)}, а не ${localStamp(now, cfg.tz).slice(-5)};
+  - состояние и события ниже — на ТЕКУЩИЙ момент: после этой фразы могли прийти
+    и уже разобраться другие, что-то по ней, возможно, записано. Прежде чем
+    писать, посмотри query_events вокруг момента фразы;
+  - ended_at = null («идёт прямо сейчас») ставь, только если событие правдоподобно
+    идёт ДО СИХ ПОР, спустя ${formatDurationRu(lateMin)}. Иначе закрывай по правилам ниже.
+`
+    : ''
+}
 Ребёнок: ${cfg.childName}, дата рождения ${cfg.childBirthDate}, возраст ${state.child.ageDays} дн.
 
 Состояние прямо сейчас (снимок сделан уже ПОСЛЕ работы быстрого матчера,
@@ -884,8 +930,8 @@ ${describeChangeSets(changeSets, cfg.tz)}
 # ПРАВИЛА ДАННЫХ
 
 - Времена — ISO 8601 UTC с «Z». Родитель говорит в местном (${cfg.tz}),
-  переводи сам. «Полчаса назад», «в три», «утром» — от «сейчас» из КОНТЕКСТА;
-  вышло будущее, значит речь о прошедших сутках.
+  переводи сам. «Полчаса назад», «в три», «утром» — от МОМЕНТА ФРАЗЫ из
+  КОНТЕКСТА, а не от текущего времени; вышло будущее — речь о прошедших сутках.
 - ОБЪЁМ НЕОБЯЗАТЕЛЕН ВЕЗДЕ: не назвали число — value_num пустой. Отсутствующее
   значение это NULL, а не ноль: ноль означает «покормили нулём миллилитров».
 - Неизвестный subtype — не повод терять событие: пиши type, детали в note.

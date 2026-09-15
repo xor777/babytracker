@@ -3,7 +3,7 @@
 import { loadConfig, type Config } from '../src/config.ts';
 import { openDb, type Db } from '../src/db.ts';
 import { createApp } from '../src/app.ts';
-import type { AppContext } from '../src/context.ts';
+import type { AppContext, WorkerStatus } from '../src/context.ts';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import {
   SESSION_COOKIE,
@@ -71,6 +71,8 @@ export interface TestApp {
   cookie: string;
   /** Запрос БЕЗ сессии: этим проверяется, что дверь закрыта. */
   anon: Inject;
+  /** Подключить статус настоящего воркера к /healthz (по умолчанию там заглушка). */
+  setWorkerStatus: (fn: () => WorkerStatus) => void;
   close: () => Promise<void>;
 }
 
@@ -109,7 +111,7 @@ export async function makeTestApp(
     serveStatic: options.serveStatic ?? false,
     ...(options.now ? { now: options.now } : {}),
   });
-  const { app, ctx, sse, limiter } = created;
+  const { app, ctx, sse, limiter, setWorkerStatus } = created;
   await app.ready();
 
   const anon = app.inject.bind(app) as Inject;
@@ -138,6 +140,7 @@ export async function makeTestApp(
     session: issued.session,
     cookie,
     anon,
+    setWorkerStatus,
     close: async () => {
       sse.close();
       await app.close();

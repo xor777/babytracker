@@ -32,7 +32,7 @@ export function DayStrip({ timeline, compact }: Props) {
             key={`${s.from}-${i}`}
             className={s.open ? 'strip__sleep strip__sleep--open' : 'strip__sleep'}
             style={{ left: pct(s.from), width: pct(Math.max(0.004, s.to - s.from)) }}
-            title={`Сон ${formatMinutes(s.minutes)}`}
+            title={s.minutes > 0 ? `Сон ${formatMinutes(s.minutes)}` : 'Сон'}
           />
         ))}
         {nowPos != null ? (

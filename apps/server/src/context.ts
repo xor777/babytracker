@@ -10,6 +10,12 @@ export interface WorkerStatus {
   alive: boolean;
   lastRunAt: string | null;
   queueDepth: number;
+  /**
+   * Момент прихода самой старой фразы, ждущей разбора (ISO UTC), либо null.
+   * Нужен, чтобы отличить живую очередь от стоящей: глубина 3 сама по себе
+   * не говорит ничего, а «3 фразы, старшей четыре часа» — говорит всё.
+   */
+  oldestPendingAt: string | null;
   claudeAvailable: boolean;
   claudeProblem: string | null;
   /**

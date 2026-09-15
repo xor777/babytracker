@@ -22,8 +22,15 @@ function linkChip(link: LinkStatus, lastSyncAt: number | null, now: number) {
   }
   // Строка короткая намеренно: она делит место с остальными чипами.
   const ago = lastSyncAt ? Math.max(0, Math.round((now - lastSyncAt) / 1000)) : null;
+  // «данные 0 с назад» — тот же пустой ноль, что и «0 мин назад»: назвать нечего.
   const note =
-    ago == null ? null : ago < 60 ? `данные ${ago} с назад` : `данные ${Math.round(ago / 60)} мин назад`;
+    ago == null
+      ? null
+      : ago < 1
+        ? 'данные только что'
+        : ago < 60
+          ? `данные ${ago} с назад`
+          : `данные ${Math.round(ago / 60)} мин назад`;
   return { color: 'var(--amber)', text: 'нет связи · переподключаюсь', alert: true, live: true, note };
 }
 
@@ -38,8 +45,10 @@ export function StatusBar({
   ageDays,
 }: Props) {
   const chip = linkChip(link, lastSyncAt, now);
-  // Когда claude недоступен, воркер помечает фразы skipped и очередь всегда пуста —
-  // показываем вместо неё честную причину. Два чипа сразу в строку не влезут.
+  // Когда claude недоступен, фразы больше не гасятся, а КОПЯТСЯ в очереди
+  // (иначе сказанное за время простоя пропадало бы молча). Значит показывать
+  // надо и причину, и накопившееся: «разбор недоступен» без числа выглядит
+  // безобидно, а «недоступен · ждут 12» — это уже повод пойти и починить.
   const llmDown = health?.worker?.claudeAvailable === false;
 
   return (
@@ -54,9 +63,20 @@ export function StatusBar({
       </span>
 
       {llmDown ? (
-        <span className="chip" style={{ ['--chip-color' as string]: 'var(--text-faint)' }}>
+        <span
+          className={`chip${pending > 0 ? ' chip--alert' : ''}`}
+          style={{
+            ['--chip-color' as string]: pending > 0 ? 'var(--amber)' : 'var(--text-faint)',
+          }}
+        >
           <i className="chip__dot" />
           разбор фраз недоступен
+          {pending > 0 && (
+            <>
+              {' '}
+              · ждут <b>{pending}</b>
+            </>
+          )}
         </span>
       ) : (
         <span

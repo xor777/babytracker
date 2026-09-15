@@ -114,7 +114,9 @@ export function StatsScreen() {
                       {gaps ? formatMinutes(gaps.avgMin) : '—'}
                     </div>
                     <div className="substat__hint">
-                      {gaps ? `самый длинный ${formatMinutes(gaps.maxMin)}` : 'нужно два кормления'}
+                      {gaps
+                        ? `самый длинный ${formatMinutes(gaps.maxMin)}`
+                        : 'нужно два кормления в разное время'}
                     </div>
                   </div>
                   <div className="substat">
@@ -229,7 +231,11 @@ export function StatsScreen() {
                   </div>
                   <div className="substat">
                     <div className="substat__label">самый длинный</div>
-                    <div className="substat__value">{formatMinutes(today.sleep.longestMin)}</div>
+                    {/* Отрезки есть, а длины ни у одного нет (сон ещё идёт либо
+                        записан «начало = конец») — «0 мин» тут ничего не значит. */}
+                    <div className="substat__value">
+                      {today.sleep.longestMin > 0 ? formatMinutes(today.sleep.longestMin) : '—'}
+                    </div>
                   </div>
                 </div>
               </>

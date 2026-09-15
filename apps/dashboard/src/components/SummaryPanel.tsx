@@ -52,9 +52,14 @@ function hhmm(min: number): string {
 export function SummaryPanel({ today, day }: Props) {
   const { feeds, diapers } = day;
 
+  // «макс 0:00» — не факт о сне, а его отсутствие: отрезок есть, а длины у него
+  // нет (сон ещё идёт или записан «начало = конец»). Тогда молчим про максимум.
+  const sleepCount = `${today.sleepSessions} ${plural(today.sleepSessions, 'сон', 'сна', 'снов')}`;
   const sleepSub =
     today.sleepSessions > 0
-      ? `${today.sleepSessions} ${plural(today.sleepSessions, 'сон', 'сна', 'снов')} · макс ${hhmm(today.longestSleepMin)}`
+      ? today.longestSleepMin > 0
+        ? `${sleepCount} · макс ${hhmm(today.longestSleepMin)}`
+        : sleepCount
       : 'пока не спал';
 
   // «—» вместо «0»: мы не знаем, что кормлений не было — мы знаем, что их

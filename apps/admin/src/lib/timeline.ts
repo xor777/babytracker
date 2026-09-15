@@ -116,13 +116,19 @@ export function lastOfType(events: TrackerEvent[], type: string): TrackerEvent |
 /**
  * Промежутки между кормлениями за сутки — то, что у новорождённого спрашивают
  * чаще всего: «давно ли ел». Меньше двух кормлений — промежутков ещё нет.
+ *
+ * Нулевые промежутки выбрасываются: два кормления в одну минуту — это дубль
+ * разбора или уточнение («покормила» и следом «грудью»), а не промежуток.
+ * Иначе на экран попадало «между кормлениями в среднем 0 мин».
  */
 export function feedGaps(marks: TimeMark[]): { avgMin: number; maxMin: number } | null {
   if (marks.length < 2) return null;
   const gaps: number[] = [];
   for (let i = 1; i < marks.length; i++) {
-    gaps.push(Math.round((marks[i].at - marks[i - 1].at) / MINUTE));
+    const gap = Math.round((marks[i].at - marks[i - 1].at) / MINUTE);
+    if (gap > 0) gaps.push(gap);
   }
+  if (gaps.length === 0) return null;
   return {
     avgMin: Math.round(gaps.reduce((s, g) => s + g, 0) / gaps.length),
     maxMin: Math.max(...gaps),

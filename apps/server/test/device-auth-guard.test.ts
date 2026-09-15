@@ -264,6 +264,10 @@ test('без сессии закрыто всё: статика, ассеты, A
     ['PATCH', '/api/events/1'],
     ['DELETE', '/api/events/1'],
     ['POST', '/api/utterances/1/reparse'],
+    // Массовый переразбор приехал из main уже после того, как встала дверь.
+    // Закрыт он должен быть тем более: это действие, которое тратит вызовы
+    // модели, и запустить его пачкой чужому — отдельно неприятно.
+    ['POST', '/api/utterances/reparse'],
     ['POST', '/api/change-sets/x/revert'],
     ['POST', '/api/devices/approve'],
     ['POST', '/api/devices/x/revoke'],
@@ -286,6 +290,37 @@ test('без сессии закрыто всё: статика, ассеты, A
     assert.equal(res.body.includes(ADMIN_MARK), false, `${method} ${url}: утекла админка`);
     assert.equal(/"child"|"sleep"|"events"/.test(res.body), false, `${method} ${url}: утекли данные`);
   }
+});
+
+test('массовый переразбор: без сессии закрыт, с сессией работает', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  // Без сессии — молча ничего не делает.
+  const denied = await h.anon({
+    method: 'POST',
+    url: '/api/utterances/reparse',
+    payload: { statuses: ['failed'] },
+  });
+  assert.equal(denied.statusCode, 401);
+
+  // С сессией — обычный маршрут, дверь ему не мешает.
+  const allowed = await h.app.inject({
+    method: 'POST',
+    url: '/api/utterances/reparse',
+    payload: { statuses: ['failed'] },
+  });
+  // 202: фразы поставлены в очередь, разбор будет позже — это код маршрута,
+  // а не двери. Проверяем именно его, чтобы не выдать за успех чужой статус.
+  assert.equal(allowed.statusCode, 202, allowed.body);
+
+  // И пустой отбор по-прежнему отвергается — дверь не подменила эту проверку.
+  const empty = await h.app.inject({
+    method: 'POST',
+    url: '/api/utterances/reparse',
+    payload: {},
+  });
+  assert.equal(empty.statusCode, 400, 'массовая операция без отбора остаётся отказом');
 });
 
 test('SSE без сессии не открывается даже как поток', async (t) => {

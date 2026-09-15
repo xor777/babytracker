@@ -1,9 +1,19 @@
 /**
  * Фоновый воркер: очередь фраз -> `claude -p` -> MCP-тулы -> база (§5).
  *
- * Обязательное требование контракта: **сервер работает без claude**.
- * Если CLI не установлен или не авторизован — пишем в лог ОДИН раз при старте,
- * помечаем записи `skipped` и продолжаем жить. Fast-path писать события не перестаёт.
+ * Обязательное требование контракта: **сервер работает без claude**. Но «работает
+ * без него» означает «не падает и продолжает отвечать голосом», а НЕ «выбрасывает
+ * фразы, пока его нет».
+ *
+ * Пока CLI недоступен (не установлен, не авторизован, протух токен), очередь не
+ * трогаем вообще — ровно как при исчерпанном окне лимита подписки: фразы остаются
+ * `pending`, копятся в хронологическом порядке и разбираются, когда CLI вернётся.
+ * Раньше здесь стоял терминальный `skipped`, и каждая фраза, сказанная при
+ * лежащем CLI, исчезала из разбора навсегда — молча, потому что `skipped` с
+ * понятным матчеру `kind` админка не показывает вовсе. С политикой `all` (модель
+ * зовут на КАЖДУЮ фразу) это означало бы потерю всего дневника за время простоя.
+ *
+ * Fast-path писать события не перестаёт в любом случае: голосом уже ответили.
  */
 
 import { spawn } from 'node:child_process';
@@ -21,6 +31,7 @@ import {
   claimNextPending,
   finishUtterance,
   listUtterances,
+  oldestPendingAt,
   queueDepth,
   releaseUtterance,
   requeueUtterance,
@@ -106,7 +117,36 @@ const AUTH_PROBLEM_RE =
   /authenticat|unauthorized|not logged in|oauth|invalid api key|no api key|credit balance|"api_error_status":\s*40[13]|please run .*login/i;
 
 /** Как часто пробовать, не ожил ли claude (например, пользователь перелогинился). */
-const REPROBE_MS = 5 * 60_000;
+export const REPROBE_MS = 5 * 60_000;
+
+/**
+ * Как часто напоминать в лог, что CLI лежит, а очередь растёт. Совпадает с
+ * периодом проверки: одна строка на одну неудачную попытку оживить CLI.
+ */
+const OUTAGE_LOG_EVERY_MS = REPROBE_MS;
+
+/** Потолок паузы между проверками CLI: реже раза в час смысла нет. */
+export const PROBE_BACKOFF_MAX_MS = 60 * 60_000;
+
+/**
+ * Пауза до следующей проверки CLI.
+ *
+ * Проба — это `claude --version`: локальный процесс, модель она не зовёт и
+ * лимитов не тратит. Но она не проверяет авторизацию, и есть ровно один
+ * неприятный случай: токен протух, `--version` бодро отвечает «живой»,
+ * а каждый разбор падает с 401. Проверять такое каждые пять минут — значит
+ * впустую жечь попытки фраз, поэтому после КАЖДОГО ложного «ожил» пауза
+ * удваивается: 5 мин → 10 → 20 → 40 → час. Первый же успешный разбор
+ * возвращает её к исходным пяти минутам.
+ *
+ * Когда CLI честно отсутствует (проба падает), пауза не растёт: такая проверка
+ * стоит меньше миллисекунды, а быстро подхватить вернувшийся CLI — ценно.
+ */
+export function probeIntervalMs(baseMs: number, falseRecoveries: number): number {
+  if (falseRecoveries <= 0) return baseMs;
+  const grown = baseMs * 2 ** Math.min(falseRecoveries, 16);
+  return Math.min(grown, PROBE_BACKOFF_MAX_MS);
+}
 
 /**
  * Признаки исчерпанного окна лимита подписки (§9.4). Это НЕ ошибка: фраза
@@ -213,13 +253,29 @@ interface RunResult {
   payload?: unknown;
   error?: string;
   authProblem?: boolean;
+  /**
+   * Процесс не удалось даже запустить (нет файла, нет прав). Это не ошибка
+   * разбора: попытку за неё списывать нельзя, иначе исчезнувший в середине
+   * очереди бинарь сожжёт по три попытки на каждой фразе.
+   */
+  spawnFailed?: boolean;
   rateLimited?: boolean;
   /** Момент открытия окна лимита, если CLI его назвал. */
   rateLimitResetMs?: number | null;
 }
 
-export function createWorker(ctx: AppContext): WorkerHandle {
+export interface WorkerOptions {
+  /**
+   * Пауза между проверками «не ожил ли claude». Вынесена в опцию только ради
+   * тестов: ждать в тесте настоящие пять минут нельзя, а проверять надо именно
+   * автоматическое восстановление, а не ручной вызов пробы.
+   */
+  reprobeMs?: number;
+}
+
+export function createWorker(ctx: AppContext, options: WorkerOptions = {}): WorkerHandle {
   const { cfg, db, log } = ctx;
+  const reprobeMs = options.reprobeMs ?? REPROBE_MS;
 
   let timer: NodeJS.Timeout | null = null;
   let busy = false;
@@ -233,6 +289,13 @@ export function createWorker(ctx: AppContext): WorkerHandle {
   let rateLimitedUntil: number | null = null;
   let rateLimitReason: string | null = null;
   let rateLimitBackoffMs = 0;
+  /** Когда в последний раз сказали в лог «CLI лежит, очередь копится». */
+  let outageLoggedAt = 0;
+  /**
+   * Сколько раз проба сказала «CLI жив», а разбор тут же упал на недоступности.
+   * Ровно на это число разводится пауза между проверками (см. probeIntervalMs).
+   */
+  let falseRecoveries = 0;
   let runtimeDirCache: string | null = null;
   let current: { kill: () => void } | null = null;
   let readyPromise: Promise<void> = Promise.resolve();
@@ -259,10 +322,27 @@ export function createWorker(ctx: AppContext): WorkerHandle {
     claudeProblem = reason.length > 300 ? `${reason.slice(0, 299)}…` : reason;
     if (problemLogged) return;
     problemLogged = true;
+    outageLoggedAt = Date.now();
     log.warn(
-      { claudeBin: cfg.claudeBin, reason },
-      'worker: claude CLI недоступен — фразы будут помечаться skipped. ' +
-        'Сервер и fast-path работают как обычно.',
+      { claudeBin: cfg.claudeBin, reason, queueDepth: safeQueueDepth() },
+      'worker: claude CLI недоступен — очередь ЖДЁТ, фразы остаются pending и ' +
+        'разберутся по порядку, когда CLI вернётся. Сервер и fast-path работают как обычно.',
+    );
+  }
+
+  /**
+   * Пока CLI лежит, очередь растёт молча. Раз в REPROBE напоминаем, сколько
+   * уже накопилось и с какого момента: простой, который никто не заметил, —
+   * это та же потеря данных, только отложенная.
+   */
+  function logOutageIfDue(): void {
+    if (Date.now() - outageLoggedAt < OUTAGE_LOG_EVERY_MS) return;
+    outageLoggedAt = Date.now();
+    const depth = safeQueueDepth();
+    if (depth === 0) return; // нечего терять — молчим
+    log.warn(
+      { queueDepth: depth, oldestPendingAt: safeOldestPending(), reason: claudeProblem },
+      'worker: claude CLI всё ещё недоступен, очередь разбора растёт',
     );
   }
 
@@ -367,9 +447,19 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       claudeAvailable = true;
       claudeProblem = null;
       problemLogged = false;
+      outageLoggedAt = 0;
       log.info(
-        { version: String(result.payload ?? '').trim(), recovered },
-        recovered ? 'worker: claude CLI снова доступен' : 'worker: claude CLI найден',
+        {
+          version: String(result.payload ?? '').trim(),
+          recovered,
+          // Сколько накопилось за простой: это число человек ищет первым делом.
+          ...(recovered
+            ? { queueDepth: safeQueueDepth(), oldestPendingAt: safeOldestPending() }
+            : {}),
+        },
+        recovered
+          ? 'worker: claude CLI снова доступен — разбираем накопившуюся очередь по порядку'
+          : 'worker: claude CLI найден',
       );
       return;
     }
@@ -398,7 +488,11 @@ export function createWorker(ctx: AppContext): WorkerHandle {
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (err) {
-        resolve({ ok: false, error: `не удалось запустить ${bin}: ${errText(err)}` });
+        resolve({
+          ok: false,
+          spawnFailed: true,
+          error: `не удалось запустить ${bin}: ${errText(err)}`,
+        });
         return;
       }
 
@@ -439,7 +533,8 @@ export function createWorker(ctx: AppContext): WorkerHandle {
           err.code === 'ENOENT'
             ? `исполняемый файл "${bin}" не найден`
             : `ошибка запуска "${bin}": ${errText(err)}`;
-        finish({ ok: false, error: reason });
+        // Процесс не стартовал — фраза тут ни при чём, попытку не жжём.
+        finish({ ok: false, spawnFailed: true, error: reason });
       });
 
       child.on('close', (code) => {
@@ -484,15 +579,9 @@ export function createWorker(ctx: AppContext): WorkerHandle {
   }
 
   async function processOne(utterance: UtteranceRow): Promise<void> {
-    if (!claudeAvailable) {
-      const row = finishUtterance(db, utterance.id, {
-        status: 'skipped',
-        llmError: claudeProblem ?? 'claude CLI недоступен',
-      });
-      if (row) ctx.sse.broadcastUtterance(toUtteranceDto(row));
-      return;
-    }
-
+    // Проверки «а жив ли CLI» здесь нет намеренно: фразу не берут в работу,
+    // пока он лежит (см. tick). Если он ляжет ПОСЛЕ claim — ниже разберём
+    // это как простой, а не как ошибку фразы.
     const runStartedAt = new Date().toISOString();
 
     // §10.3: все события ОДНОЙ фразы — в один набор изменений. Быстрый матчер
@@ -506,6 +595,10 @@ export function createWorker(ctx: AppContext): WorkerHandle {
     const prompt = buildPrompt({
       cfg,
       rawText: utterance.raw_text,
+      // Момент, когда фразу СКАЗАЛИ. Не равен «сейчас», если очередь стояла
+      // (лежал CLI, ждали окно лимита, сервер перезапускался), — а все
+      // «полчаса назад» и «в три» во фразе отсчитываются именно от него.
+      receivedAt: new Date(utterance.received_at),
       fast: parseFast(utterance.fast_result),
       fastEvent: fastEventFor(utterance.id),
       state: getState(db, cfg),
@@ -537,8 +630,9 @@ export function createWorker(ctx: AppContext): WorkerHandle {
     const result = await runProcess(cfg.claudeBin, args, CLAUDE_TIMEOUT_MS, runtimeDir());
 
     if (result.ok) {
-      // успешный вызов = окно открыто, экспоненту сбрасываем
+      // успешный вызов = окно открыто, экспоненты сбрасываем
       rateLimitBackoffMs = 0;
+      falseRecoveries = 0;
       leaveRateLimit();
       const payload = parseClaudeJson(String(result.payload ?? ''));
       if (payload.isError) {
@@ -562,7 +656,32 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       if (row) ctx.sse.broadcastUtterance(toUtteranceDto(row));
       return;
     } else {
-      if (result.authProblem) reportProblem(result.error ?? 'claude не авторизован');
+      // CLI лёг посреди очереди: исчез бинарь, протух токен, кончился баланс.
+      // Помечаем его недоступным — и очередь ВСТАЁТ (см. tick), то есть
+      // остальные фразы ждут целыми и не тратят ни одной попытки.
+      //
+      // А вот попытку текущей фразы списываем, и это осознанно. Иначе
+      // получается вечный круг: проба `--version` проходит (она не проверяет
+      // авторизацию), воркер считает CLI живым, берёт ту же фразу, снова
+      // получает 401, снова возвращает её — и так каждые REPROBE_MS до
+      // скончания века. Счётчик попыток живёт в базе и переживает рестарт,
+      // поэтому даже такая патология конечна: через MAX_ATTEMPTS голова
+      // очереди становится `failed` — статус, ВИДИМЫЙ человеку в админке,
+      // а не тихий `skipped`. Вызовов модели этот путь не стоит: 401 и
+      // несостоявшийся запуск процесса до модели не доходят.
+      if (result.spawnFailed || result.authProblem) {
+        // Проба только что считала CLI живым, а он не работает: в следующий раз
+        // проверим позже (пауза удваивается), чтобы не жечь попытки фраз впустую.
+        falseRecoveries += 1;
+        reportProblem(result.error ?? 'claude недоступен');
+        log.warn(
+          {
+            falseRecoveries,
+            nextProbeInSec: Math.round(probeIntervalMs(reprobeMs, falseRecoveries) / 1000),
+          },
+          'worker: `claude --version` отвечает, но разбор не работает — проверяем реже',
+        );
+      }
       finishFailure(utterance, result.error ?? 'неизвестная ошибка');
     }
 
@@ -587,12 +706,21 @@ export function createWorker(ctx: AppContext): WorkerHandle {
     }
   }
 
+  /**
+   * Настоящая ошибка разбора: CLI жив и ответил, но разбор не удался.
+   * Три попытки — и терминальный `failed`. Бесконечно повторять то, что падает
+   * одинаково, бессмысленно; вернуть такую фразу в работу — решение человека
+   * (`POST /api/utterances/reparse`, в том числе пачкой).
+   *
+   * Условия «claude недоступен» здесь БОЛЬШЕ НЕТ: недоступность разбирается
+   * выше и фразу не хоронит.
+   */
   function finishFailure(utterance: UtteranceRow, error: string): void {
     // attempts уже увеличен при claim; 3 попытки — и в failed.
-    const exhausted = utterance.attempts >= MAX_ATTEMPTS || !claudeAvailable;
+    const exhausted = utterance.attempts >= MAX_ATTEMPTS;
     const row = exhausted
       ? finishUtterance(db, utterance.id, {
-          status: claudeAvailable ? 'failed' : 'skipped',
+          status: 'failed',
           llmError: error.slice(0, 2000),
         })
       : requeueUtterance(db, utterance.id, error);
@@ -632,8 +760,16 @@ export function createWorker(ctx: AppContext): WorkerHandle {
 
       // claude мог ожить: пользователь перелогинился, поставил CLI. Проверяем
       // раз в несколько минут, чтобы не требовать рестарта сервера.
-      if (!claudeAvailable && Date.now() - lastProbeAt > REPROBE_MS) {
+      if (!claudeAvailable && Date.now() - lastProbeAt >= probeIntervalMs(reprobeMs, falseRecoveries)) {
         await probeClaude();
+      }
+
+      // CLI лежит — очередь НЕ ТРОГАЕМ вообще, как и при лимите подписки.
+      // Взять фразу здесь означало бы её погасить: разбирать нечем, а
+      // терминальный статус вернуть потом уже некому.
+      if (!claudeAvailable) {
+        logOutageIfDue();
+        return;
       }
 
       const utterance = claimNextPending(db);
@@ -718,6 +854,9 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       alive: cfg.workerEnabled ? started && timer !== null : false,
       lastRunAt,
       queueDepth: safeQueueDepth(),
+      // Глубина очереди без возраста обманчива: три фразы могут быть трёхминутными,
+      // а могут лежать со вчера. Второе — авария, первое — норма.
+      oldestPendingAt: safeOldestPending(),
       claudeAvailable,
       claudeProblem,
       rateLimited: rateLimitedUntil !== null && Date.now() < rateLimitedUntil,
@@ -731,6 +870,14 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       return queueDepth(db);
     } catch {
       return 0;
+    }
+  }
+
+  function safeOldestPending(): string | null {
+    try {
+      return oldestPendingAt(db);
+    } catch {
+      return null;
     }
   }
 

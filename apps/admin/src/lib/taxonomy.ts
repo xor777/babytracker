@@ -9,12 +9,21 @@ export interface SubtypeDef {
   label: string;
 }
 
+/**
+ * Род названия типа. Нужен ровно для одного: согласовать причастие в журнале.
+ * «Сон завершён», но «активность завершена» и «кормление завершено» —
+ * неверная форма читается как поломка не хуже, чем «0 мин».
+ */
+export type Gender = 'm' | 'f' | 'n';
+
 export interface TypeDef {
   id: EventType;
   label: string;
   /** Короткая подпись для чипов-фильтров. */
   short: string;
   icon: string;
+  /** Род `label` — для согласования причастий (см. Gender). */
+  gender: Gender;
   /** Цветовой токен из styles.css: var(--t-<tone>) */
   tone: 'sleep' | 'feed' | 'diaper' | 'measure' | 'meds' | 'symptom' | 'activity' | 'note';
   subtypes: SubtypeDef[];
@@ -35,6 +44,7 @@ export const TYPES: TypeDef[] = [
     label: 'Сон',
     short: 'Сон',
     icon: '☾',
+    gender: 'm',
     tone: 'sleep',
     subtypes: [
       { id: 'night', label: 'ночной' },
@@ -49,6 +59,7 @@ export const TYPES: TypeDef[] = [
     label: 'Кормление',
     short: 'Еда',
     icon: '◗',
+    gender: 'n',
     tone: 'feed',
     subtypes: [
       { id: 'breast', label: 'грудь' },
@@ -64,6 +75,7 @@ export const TYPES: TypeDef[] = [
     label: 'Сцеживание',
     short: 'Сцеж.',
     icon: '⤓',
+    gender: 'n',
     tone: 'feed',
     subtypes: [],
     units: ['ml'],
@@ -75,6 +87,7 @@ export const TYPES: TypeDef[] = [
     label: 'Подгузник',
     short: 'Подгуз.',
     icon: '◇',
+    gender: 'm',
     tone: 'diaper',
     subtypes: [
       { id: 'wet', label: 'мокрый' },
@@ -90,6 +103,7 @@ export const TYPES: TypeDef[] = [
     label: 'Измерение',
     short: 'Замер',
     icon: '▲',
+    gender: 'n',
     tone: 'measure',
     subtypes: [
       { id: 'weight', label: 'вес' },
@@ -106,6 +120,7 @@ export const TYPES: TypeDef[] = [
     label: 'Лекарство',
     short: 'Лек-во',
     icon: '✚',
+    gender: 'n',
     tone: 'meds',
     subtypes: [],
     units: ['ml', 'mg'],
@@ -117,6 +132,7 @@ export const TYPES: TypeDef[] = [
     label: 'Симптом',
     short: 'Симптом',
     icon: '◐',
+    gender: 'm',
     tone: 'symptom',
     subtypes: [
       { id: 'spit_up', label: 'срыгивание' },
@@ -135,6 +151,7 @@ export const TYPES: TypeDef[] = [
     label: 'Активность',
     short: 'Актив.',
     icon: '◉',
+    gender: 'f',
     tone: 'activity',
     subtypes: [
       { id: 'bath', label: 'купание' },
@@ -150,6 +167,7 @@ export const TYPES: TypeDef[] = [
     label: 'Заметка',
     short: 'Заметка',
     icon: '✎',
+    gender: 'f',
     tone: 'note',
     subtypes: [],
     units: [],
@@ -169,6 +187,8 @@ export function typeDef(type: string | null | undefined): TypeDef {
     label: type || 'Событие',
     short: type || 'Событие',
     icon: '·',
+    // «Событие» среднего рода, и незнакомый тип безопаснее согласовывать так же.
+    gender: 'n',
     tone: 'note',
     subtypes: [],
     units: ['ml', 'min', 'g', 'kg', 'cm', 'c', 'mg'],
