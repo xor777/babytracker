@@ -249,6 +249,23 @@ class MainActivity : Activity() {
         web.isHorizontalScrollBarEnabled = false
         web.overScrollMode = View.OVER_SCROLL_NEVER
 
+        // Белая рамка по периметру телевизора — это focus ring Chromium из его
+        // UA-таблицы: на D-pad устройстве сфокусированный элемент попадает под
+        // :focus-visible, а на полноэкранной сцене обводка идёт по краю экрана.
+        // В стилях дашборда такого правила нет и быть не может — рисует движок.
+        // Дашборд неинтерактивен (CONTRACT §6), фокусировать в нём нечего, поэтому
+        // клавиатурный фокус WebView не отдаём вовсе. Кнопки пульта от этого не
+        // страдают: BACK/MENU/OK разбирает Activity, ей фокус View не нужен.
+        web.isFocusable = false
+        web.isFocusableInTouchMode = false
+        // Заодно снимаем подсветку фокуса самого Android (API 26+) — здесь она не
+        // проявилась, но на другой прошивке нарисует ровно такую же рамку.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            web.defaultFocusHighlightEnabled = false
+            root.defaultFocusHighlightEnabled = false
+            overlay.defaultFocusHighlightEnabled = false
+        }
+
         with(web.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -595,7 +612,7 @@ class MainActivity : Activity() {
         contentShown = true
         overlayHint.visibility = View.GONE
         web.visibility = View.VISIBLE
-        web.requestFocus()
+        // requestFocus() здесь не вызываем намеренно: он и приводил к focus ring.
     }
 
     private fun showConnecting() {
