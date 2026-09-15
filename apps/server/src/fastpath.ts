@@ -14,6 +14,29 @@ import type { AliceNlu, FastResult, YandexDateTimeValue } from './types.ts';
 import type { CivilParts } from './time.ts';
 import { civilToUtcMs, zonedParts } from './time.ts';
 
+/**
+ * Верхняя граница длины разбираемой команды.
+ *
+ * Матчер синхронный и работает прямо в обработчике вебхука, поэтому его время —
+ * это время ответа Алисе и блокировка всего процесса. На 8 КБ разбор занимал
+ * ~110 мс, на 32 КБ — почти две секунды: бюджет в 200 мс сорван, а сервер в это
+ * время не отвечает никому. Реальная фраза в разы короче: сама Алиса ограничена
+ * 1024 символами в ответе.
+ *
+ * Выбрасываем СЕРЕДИНУ, оставляя начало и конец: в русской речи значимый глагол
+ * часто оказывается последним («...и в итоге он всё-таки заснул»), и усечение
+ * с хвоста молча меняло бы разбор. И в любом случае поднимаем mayContainMore —
+ * в выброшенном куске может быть событие, решать должна модель, а не обрезка.
+ */
+export const MAX_COMMAND_CHARS = 1024;
+
+/** Оставляет начало и конец длинной фразы, выбрасывая середину. */
+export function clampCommand(raw: string): { text: string; truncated: boolean } {
+  if (raw.length <= MAX_COMMAND_CHARS) return { text: raw, truncated: false };
+  const half = Math.floor(MAX_COMMAND_CHARS / 2);
+  return { text: `${raw.slice(0, half)} ${raw.slice(-half)}`, truncated: true };
+}
+
 /** Уверенность прямого словарного попадания. */
 const C_DIRECT = 0.95;
 /** Уверенность попадания по более вольному шаблону (запрос состояния). */
@@ -492,6 +515,57 @@ export function computeMayContainMore(input: MayContainMoreInput): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/* Вопрос против утверждения                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Вопросительные конструкции.
+ *
+ * «Спит ли он» — это вопрос, а матчер уверенно понимал его как «заснул» и писал
+ * событие: мама спросила, а в дневнике появилась запись о том, чего не было.
+ * Хуже того, «проснулся ли он» ЗАКРЫВАЛО идущий сон и считало длительность.
+ *
+ * Частица «ли» — однозначный машинный признак, но не единственный: вопрос дают
+ * и вопросительные слова в начале фразы, и знак вопроса, если он дошёл до нас.
+ */
+const QUESTION_PARTICLES = new Set(['ли', 'разве', 'неужели']);
+
+const QUESTION_WORDS = new Set([
+  'когда',
+  'почему',
+  'зачем',
+  'отчего',
+  'где',
+  'кто',
+  'куда',
+  'какой',
+  'какая',
+  'долго',
+]);
+
+const QUESTION_PHRASES: readonly string[] = ['во сколько', 'в котором часу', 'правда что'];
+
+/**
+ * Похожа ли фраза на вопрос. Проверяется по сырому тексту тоже: знак вопроса
+ * нормализация съедает, а он самый надёжный признак из всех.
+ */
+export function looksLikeQuestion(raw: string, normalized: string): boolean {
+  if (typeof raw === 'string' && raw.includes('?')) return true;
+  if (normalized.length === 0) return false;
+
+  const padded_ = padded(normalized);
+  if (containsPhrase(padded_, QUESTION_PHRASES)) return true;
+
+  const tokens = tokenize(normalized);
+  // частица «ли» может стоять где угодно: «спит ли он», «он ли это»
+  if (tokens.some((t) => QUESTION_PARTICLES.has(t))) return true;
+  // вопросительное слово — только в начале: «когда заснул» вопрос,
+  // а «положили когда проснулся» разбирать матчеру всё равно нечего
+  const first = tokens[0];
+  return first !== undefined && QUESTION_WORDS.has(first);
+}
+
+/* ------------------------------------------------------------------ */
 /* Отрицания                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -678,9 +752,14 @@ export function matchFast(
   const now = options.now ?? new Date();
   const tz = options.tz ?? 'Europe/Moscow';
 
-  const normalized = normalize(command);
+  const raw = typeof command === 'string' ? command : '';
+  // Длинный ввод режем ДО разбора: иначе он съедает бюджет ответа Алисе
+  // и блокирует процесс целиком.
+  const { text: source, truncated } = clampCommand(raw);
+
+  const normalized = normalize(source);
   if (normalized.length === 0) {
-    return { kind: 'unknown', mayContainMore: false, timeUnresolved: false };
+    return { kind: 'unknown', mayContainMore: truncated, timeUnresolved: false };
   }
 
   const text = padded(normalized);
@@ -688,7 +767,8 @@ export function matchFast(
 
   /** §10.3: считается относительно того, что распознали. */
   const more = (recognizedDomain: string | null): boolean =>
-    computeMayContainMore({ raw: command, normalized, recognizedDomain });
+    // в отрезанном хвосте может быть что угодно — решать модели
+    truncated || computeMayContainMore({ raw: source, normalized, recognizedDomain });
 
   // 1. Выход — раньше всего: это управление диалогом, а не событие.
   if (isExit(text, tokens)) {
@@ -698,6 +778,12 @@ export function matchFast(
   const at = extractDateTime(nlu, now, tz);
   // Время названо, но в абсолютный момент не превратилось — см. §10.3.
   const timeUnresolved = isTimeUnresolved(normalized, at);
+
+  // Вопрос — не утверждение: события по нему писать нельзя. Отдаём модели,
+  // она и ответит, и разберётся, о чём вообще спрашивали.
+  if (looksLikeQuestion(source, normalized)) {
+    return { kind: 'unknown', mayContainMore: more(null), timeUnresolved: false };
+  }
 
   // 2. Многословные маркеры пробуждения (в т.ч. «не спит») — до проверки отрицаний.
   if (containsPhrase(text, SLEEP_END_PHRASES)) {

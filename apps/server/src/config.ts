@@ -18,6 +18,13 @@ export interface Config {
   aliceWebhookSecret: string;
   aliceSkillId: string | null;
   aliceAllowedUserIds: string[];
+  /**
+   * Сверять ли идентичность вызывающего. Настоящая защита вебхука — 32-символьный
+   * секрет в пути; идентичность это второй рубеж на случай его утечки. Если он
+   * начнёт мешать больше, чем защищать, его можно выключить одной переменной,
+   * не выкатывая код: обращения продолжат записываться и будут видны в админке.
+   */
+  aliceIdentityCheck: boolean;
   childName: string;
   childBirthDate: string;
   claudeBin: string;
@@ -162,6 +169,9 @@ export function loadConfig(
     aliceWebhookSecret: secret,
     aliceSkillId: str(env, 'ALICE_SKILL_ID', '') || null,
     aliceAllowedUserIds: list(env, 'ALICE_ALLOWED_USER_IDS'),
+    aliceIdentityCheck: !['false', '0', 'no'].includes(
+      str(env, 'ALICE_IDENTITY_CHECK', 'true').toLowerCase(),
+    ),
     childName: str(env, 'CHILD_NAME', 'Андрей'),
     childBirthDate: birthDate,
     claudeBin: str(env, 'CLAUDE_BIN', 'claude'),

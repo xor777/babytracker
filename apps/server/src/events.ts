@@ -12,6 +12,9 @@ import type { JournalContext } from './journal.ts';
 import { journaledChange } from './journal.ts';
 import type { Config } from './config.ts';
 import { normsForAge, type AgeNorms } from './taxonomy.ts';
+// Маркер допущения — общий контракт для записей матчера и модели: по нему
+// одинаково видно «в этой записи есть то, чего родитель не говорил».
+import { ASSUMPTION_MARK } from './prompt.ts';
 import type { DailySleepDto, EventRow, EventSource, StateDto } from './types.ts';
 import {
   localDateISO,
@@ -229,6 +232,28 @@ function updateEventRaw(db: Db, id: number, patch: EventPatch): EventRow | null 
 
   if (sets.length === 0) return existing;
 
+  // Тот же инвариант, что и при вставке. Без него правка из админки могла
+  // перевернуть событие во времени, и sleepSegments отбрасывал такой отрезок:
+  // полуторачасовой сон МОЛЧА пропадал из /api/state и /api/sleep/daily.
+  // Это хуже кривой цифры — данные выглядят целыми, а сна нет.
+  const nextStartedAt =
+    'started_at' in patch && patch.started_at
+      ? (toIsoUtc(patch.started_at) ?? existing.started_at)
+      : existing.started_at;
+  const nextEndedAt =
+    'ended_at' in patch
+      ? patch.ended_at
+        ? (toIsoUtc(patch.ended_at) ?? existing.ended_at)
+        : null
+      : existing.ended_at;
+
+  if (nextEndedAt !== null && Date.parse(nextEndedAt) < Date.parse(nextStartedAt)) {
+    throw new Error(
+      `ended_at (${nextEndedAt}) раньше started_at (${nextStartedAt}): ` +
+        'событие нельзя перевернуть во времени — такой отрезок выпал бы из статистики сна',
+    );
+  }
+
   sets.push('updated_at = ?');
   params.push(p(nowIso()));
   params.push(p(id));
@@ -342,7 +367,9 @@ export function endSleep(db: Db, cfg: Config, options: SleepActionOptions = {}):
         subtype: null,
         started_at: at,
         ended_at: at,
-        note: 'Проснулся, засыпание не было зафиксировано',
+        // Пробел в журнале, а не факт: когда он заснул — неизвестно, и выдумывать
+        // это время нельзя ни матчеру, ни модели. Маркер делает пробел видимым.
+        note: `${ASSUMPTION_MARK} Проснулся, засыпание не было зафиксировано — когда заснул, неизвестно`,
         source: options.source ?? 'alice-fast',
         utterance_id: options.utteranceId ?? null,
         confidence: options.confidence ?? null,
@@ -722,9 +749,13 @@ export function dailyStats(
     const diapers = rows.filter((e) => e.type === 'diaper');
     const sleep = sleepStatsForRange(db, from, to, nowMs);
 
-    const wet = diapers.filter((e) => e.subtype === 'wet').length;
-    const dirty = diapers.filter((e) => e.subtype === 'dirty').length;
+    // «both» — это один подгузник, который был И мокрым, И грязным. По нормам
+    // §10.1 он засчитывается в обе категории: иначе дашборд сравнивает с нормой
+    // «с 5-го дня 6+ мокрых» заниженное число и даёт ложное спокойствие по
+    // главному признаку достаточного питья.
     const both = diapers.filter((e) => e.subtype === 'both').length;
+    const wet = diapers.filter((e) => e.subtype === 'wet').length + both;
+    const dirty = diapers.filter((e) => e.subtype === 'dirty').length + both;
 
     result.push({
       date,
@@ -741,10 +772,11 @@ export function dailyStats(
             : Math.round(volumes.reduce((sum, e) => sum + (e.value_num ?? 0), 0)),
       },
       diapers: {
+        // wet и dirty уже включают both — сравнивать с нормой надо именно их
         wet,
         dirty,
         both,
-        // «both» засчитывается и в мокрые, и в грязные — так считают нормы
+        // сколько подгузников сменили физически
         total: diapers.length,
       },
       sleep: { totalMin: sleep.totalMin, sessions: sleep.sessions, longestMin: sleep.longestMin },

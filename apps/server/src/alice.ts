@@ -18,6 +18,28 @@ import { getUtterance, insertUtterance, toUtteranceDto } from './utterances.ts';
 import { getEventById } from './db.ts';
 import { newChangeSetId, type JournalContext } from './journal.ts';
 import { decideQueue } from './queue-policy.ts';
+import { ROW_ID_HINT, parseRowId } from './http-params.ts';
+import {
+  ENROLL_DEFAULT_MINUTES,
+  SETTING_SKILL_ID,
+  closeEnrollWindow,
+  countTrusted,
+  describeIdentity,
+  enrollWindowUntil,
+  extractIdentity,
+  findIdentity,
+  getSetting,
+  identityValues,
+  isTrustEstablished,
+  markTrustEstablished,
+  listIdentities,
+  openEnrollWindow,
+  rememberIdentity,
+  revokeIdentityRow,
+  setSetting,
+  trustIdentityRow,
+  type AliceIdentity,
+} from './alice-identity.ts';
 import {
   formatDurationRu,
   formatDurationRuAcc,
@@ -29,8 +51,18 @@ import {
 const MAX_TEXT = 1024;
 const PROTOCOL_VERSION = '1.0';
 
-/** Нейтральный ответ на любую неудачу проверки: атакующий не должен различать причины. */
+/** Нейтральный ответ на неверный секрет: атакующий не должен различать причины. */
 const NEUTRAL_TEXT = 'Извините, сейчас не могу ответить.';
+
+/**
+ * Ответ на незнакомую идентичность. Намеренно ОТЛИЧАЕТСЯ от нейтрального:
+ * по голосу должно быть понятно, что это не сбой сервера, а неподключённое
+ * устройство, и что делать. Молчаливая блокировка владельца — та самая ошибка,
+ * из-за которой заказчика трижды заперло.
+ */
+const UNKNOWN_DEVICE_TEXT =
+  'Это устройство пока не подключено к трекеру. ' +
+  'Откройте админку, раздел устройств, и подтвердите его — или включите режим подключения.';
 
 /* ------------------------------------------------------------------ */
 /* Безопасность                                                        */
@@ -70,6 +102,10 @@ export function aliceReply(text: string, endSession = false): AliceResponseBody 
 
 export function neutralReply(): AliceResponseBody {
   return aliceReply(NEUTRAL_TEXT, true);
+}
+
+export function unknownDeviceReply(): AliceResponseBody {
+  return aliceReply(UNKNOWN_DEVICE_TEXT, true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,49 +161,172 @@ export function stateSummaryText(ctx: AppContext, now: Date = new Date()): strin
 /* Обработка                                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Верхняя граница на сырой текст. Тело запроса ограничено мегабайтом, но фраза
+ * такого размера не должна ни разбираться, ни попадать в БД и в ленту дашборда:
+ * реальная реплика в разы короче предела самой Алисы в 1024 символа.
+ */
+const MAX_RAW_COMMAND_CHARS = 2048;
+
 function extractCommand(body: AliceRequestBody): string {
   const req = body.request;
   const command = typeof req?.command === 'string' ? req.command : '';
-  if (command.trim().length > 0) return command;
-  const original = typeof req?.original_utterance === 'string' ? req.original_utterance : '';
-  return original;
+  const chosen =
+    command.trim().length > 0
+      ? command
+      : typeof req?.original_utterance === 'string'
+        ? req.original_utterance
+        : '';
+  return chosen.length > MAX_RAW_COMMAND_CHARS
+    ? chosen.slice(0, MAX_RAW_COMMAND_CHARS)
+    : chosen;
 }
 
-function extractUserId(body: AliceRequestBody): string | null {
-  const session = body.session;
-  return session?.user_id ?? session?.user?.user_id ?? session?.application?.application_id ?? null;
-}
-
-export type RejectReason = 'secret' | 'skill_id' | 'user_id';
+export type RejectReason = 'secret' | 'skill_id' | 'identity';
+export type GrantReason = 'env' | 'trusted' | 'promoted' | 'enroll' | 'tofu' | 'disabled';
 
 export interface AccessCheck {
   ok: boolean;
   reason?: RejectReason;
+  /** Как именно допустили — нужно логу, чтобы было видно, почему пустили. */
+  grantedBy?: GrantReason;
+  identity: AliceIdentity;
+  /** id строки в alice_identities, если обращение отклонено и ждёт подтверждения. */
+  pendingId?: number;
+  /** Значение, которым подписывается utterance. */
   userId: string | null;
 }
 
 /**
- * Проверки §3.1 по порядку. Любая неудача — 200 OK с нейтральным текстом.
- * В лог пишем ТОЛЬКО причину и user_id; секрет не логируем.
+ * Проверки §3.1 плюс модель доверия.
+ *
+ * Порядок и его смысл:
+ *  1. секрет — настоящая защита, 128 бит в пути запроса;
+ *  2. skill_id из env — если оператор задал явно, это жёсткий рубеж;
+ *  3. идентичность: сначала аккаунт (один на все колонки в доме), потом устройство.
+ *
+ * Ключевое отличие от прежней версии: незнакомая идентичность НЕ приводит
+ * к молчаливой блокировке. Обращение запоминается со статусом pending, попадает
+ * в админку и в лог с готовой командой, а ответ звучит отличимо от сбоя сервера.
  */
-export function checkAccess(ctx: AppContext, secretFromPath: string, body: AliceRequestBody): AccessCheck {
-  const userId = extractUserId(body);
+export function checkAccess(
+  ctx: AppContext,
+  secretFromPath: string,
+  body: AliceRequestBody,
+): AccessCheck {
+  const { cfg, db } = ctx;
+  const identity = extractIdentity(body);
+  const base = { identity, userId: identity.key };
 
-  if (!secretsEqual(secretFromPath, ctx.cfg.aliceWebhookSecret)) {
-    return { ok: false, reason: 'secret', userId };
+  // 1. Секрет. Здесь ответ обязан быть нейтральным: атакующий не должен
+  //    различать причины отказа и подбирать URL.
+  if (!secretsEqual(secretFromPath, cfg.aliceWebhookSecret)) {
+    return { ...base, ok: false, reason: 'secret' };
   }
 
-  if (ctx.cfg.aliceSkillId !== null && body.session?.skill_id !== ctx.cfg.aliceSkillId) {
-    return { ok: false, reason: 'skill_id', userId };
+  // 2. skill_id, заданный переменной окружения, — строгая проверка.
+  if (cfg.aliceSkillId !== null && identity.skillId !== cfg.aliceSkillId) {
+    return { ...base, ok: false, reason: 'skill_id' };
   }
 
-  if (ctx.cfg.aliceAllowedUserIds.length > 0) {
-    if (userId === null || !ctx.cfg.aliceAllowedUserIds.includes(userId)) {
-      return { ok: false, reason: 'user_id', userId };
+  // 3. Проверка идентичности выключена — пускаем, но обращение фиксируем.
+  if (!cfg.aliceIdentityCheck) {
+    touch(db, identity, 'trusted', 'api', 'проверка идентичности выключена');
+    return { ...base, ok: true, grantedBy: 'disabled' };
+  }
+
+  const grant = (grantedBy: GrantReason): AccessCheck => {
+    touch(db, identity, 'trusted', grantedBy === 'env' ? 'api' : 'tofu');
+    markTrustEstablished(db);
+    // Владелец авторитетен: раз он пришёл с этого навыка, значит навык этот.
+    if (identity.skillId) setSetting(db, SETTING_SKILL_ID, identity.skillId);
+    return { ...base, ok: true, grantedBy };
+  };
+
+  // 4. Совместимость: заданный ALICE_ALLOWED_USER_IDS уважаем как раньше.
+  //    Сверяем со ВСЕМИ тремя полями — на проде там лежат значения устаревшего
+  //    user_id, и какое именно это поле, мы не знаем.
+  if (cfg.aliceAllowedUserIds.length > 0) {
+    const hit = identityValues(identity).some((v) => cfg.aliceAllowedUserIds.includes(v));
+    if (hit) return grant('env');
+  }
+
+  // 5. Доверенный аккаунт — этого достаточно для любой колонки в доме.
+  if (identity.accountId && findIdentity(db, 'account', identity.accountId)?.status === 'trusted') {
+    return grant('trusted');
+  }
+
+  // 6. Доверенное устройство. Если с него пришёл ещё и аккаунт, которого мы
+  //    не знали, — запоминаем и его: иначе после входа в аккаунт на уже
+  //    доверенной колонке человек оказался бы заперт.
+  const deviceTrusted = [identity.applicationId, identity.legacyUserId].some(
+    (v) => v !== null && findIdentity(db, 'device', v)?.status === 'trusted',
+  );
+  if (deviceTrusted) {
+    if (identity.accountId) {
+      rememberIdentity(db, {
+        identity,
+        kind: 'account',
+        value: identity.accountId,
+        status: 'trusted',
+        source: 'promoted',
+        note: 'аккаунт увиден с уже доверенного устройства',
+      });
+      return grant('promoted');
     }
+    return grant('trusted');
   }
 
-  return { ok: true, userId };
+  // 7. Открытое окно добавления устройства (кнопка в админке).
+  if (enrollWindowUntil(db) !== null && identity.key !== null) {
+    closeEnrollWindow(db); // окно одноразовое: добавили устройство — закрыли
+    touch(db, identity, 'trusted', 'enroll', 'добавлено через окно подключения');
+    markTrustEstablished(db);
+    if (identity.skillId) setSetting(db, SETTING_SKILL_ID, identity.skillId);
+    return { ...base, ok: true, grantedBy: 'enroll' };
+  }
+
+  // 8. Доверие первому — РОВНО ОДИН РАЗ за жизнь установки. Проверять только
+  //    countTrusted() нельзя: сняв доверие у единственного устройства, мы бы
+  //    снова открыли дверь, и отзыв не работал бы.
+  if (
+    identity.key !== null &&
+    cfg.aliceAllowedUserIds.length === 0 &&
+    countTrusted(db) === 0 &&
+    !isTrustEstablished(db)
+  ) {
+    touch(db, identity, 'trusted', 'tofu', 'первый увиденный владелец');
+    markTrustEstablished(db);
+    if (identity.skillId) setSetting(db, SETTING_SKILL_ID, identity.skillId);
+    return { ...base, ok: true, grantedBy: 'tofu' };
+  }
+
+  // 9. Незнакомая идентичность. Не запираем молча: запоминаем и показываем.
+  const row = identity.key === null ? null : touch(db, identity, 'pending', 'api');
+  return { ...base, ok: false, reason: 'identity', ...(row ? { pendingId: row.id } : {}) };
+}
+
+/** Фиксирует факт обращения. Ошибку БД глотаем: она не повод отказать в записи сна. */
+function touch(
+  db: AppContext['db'],
+  identity: AliceIdentity,
+  status: 'trusted' | 'pending',
+  source: 'tofu' | 'api' | 'enroll' | 'promoted',
+  note?: string,
+): { id: number } | null {
+  if (identity.key === null) return null;
+  try {
+    return rememberIdentity(db, {
+      identity,
+      kind: identity.kind,
+      value: identity.key,
+      status,
+      source,
+      note: note ?? null,
+    });
+  } catch {
+    return null;
+  }
 }
 
 interface HandleResult {
@@ -363,8 +522,62 @@ function scheduleUtteranceBroadcast(ctx: AppContext, utteranceId: number): void 
 /* Маршрут                                                             */
 /* ------------------------------------------------------------------ */
 
-/** user_id, о которых уже написали в лог в режиме первичной настройки. */
-const seenSetupUsers = new Set<string>();
+/** Идентичности, о которых уже писали в лог — чтобы не спамить на каждый запрос. */
+const loggedIdentities = new Set<string>();
+
+/**
+ * Одна понятная строка на незнакомое обращение — со всеми тремя полями
+ * идентичности и готовой командой подключения. Повторы того же устройства
+ * в лог не идут.
+ */
+function logUnknownIdentity(ctx: AppContext, access: AccessCheck, ip: string): void {
+  const key = access.identity.key ?? 'без-идентификатора';
+  if (loggedIdentities.has(key)) return;
+  loggedIdentities.add(key);
+
+  ctx.log.warn(
+    {
+      ip,
+      // все три поля: по ним видно, авторизовано устройство или нет
+      accountId: access.identity.accountId,
+      applicationId: access.identity.applicationId,
+      legacyUserId: access.identity.legacyUserId,
+      skillId: access.identity.skillId,
+      pendingId: access.pendingId,
+      подключить: access.pendingId
+        ? `POST /api/alice/pending/${access.pendingId}/trust`
+        : 'POST /api/alice/enroll, затем повторить фразу',
+    },
+    `alice: незнакомое обращение (${describeIdentity(access.identity)}). ` +
+      'Владелец НЕ заблокирован навсегда: подтвердите устройство в админке ' +
+      '(раздел устройств) или откройте режим подключения.',
+  );
+}
+
+/** Сообщаем, когда доверие выдано не по обычному совпадению — это важные события. */
+function logGrant(ctx: AppContext, access: AccessCheck): void {
+  const key = `${access.grantedBy}:${access.identity.key ?? '-'}`;
+  if (loggedIdentities.has(key)) return;
+  loggedIdentities.add(key);
+
+  const messages: Record<string, string> = {
+    tofu: 'первое обращение — запомнили как владельца (доверие первому)',
+    enroll: 'устройство подключено через окно подключения',
+    promoted: 'аккаунт увиден с доверенного устройства и тоже стал доверенным',
+    env: 'пропущено по ALICE_ALLOWED_USER_IDS',
+    disabled: 'проверка идентичности выключена (ALICE_IDENTITY_CHECK=false)',
+  };
+
+  ctx.log.info(
+    {
+      accountId: access.identity.accountId,
+      applicationId: access.identity.applicationId,
+      skillId: access.identity.skillId,
+      grantedBy: access.grantedBy,
+    },
+    `alice: ${messages[access.grantedBy ?? ''] ?? 'доступ разрешён'} — ${describeIdentity(access.identity)}`,
+  );
+}
 
 export function registerAliceRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post(
@@ -381,22 +594,20 @@ export function registerAliceRoutes(app: FastifyInstance, ctx: AppContext): void
         const access = checkAccess(ctx, request.params.secret ?? '', body);
 
         if (!access.ok) {
+          if (access.reason === 'identity') {
+            logUnknownIdentity(ctx, access, request.ip);
+            // Отличимый ответ: человек должен понять, что делать.
+            return unknownDeviceReply();
+          }
           ctx.log.warn(
-            { reason: access.reason, userId: access.userId, ip: request.ip },
+            { reason: access.reason, ip: request.ip },
             'alice: запрос отклонён',
           );
           return neutralReply();
         }
 
-        // Режим первичной настройки: список user_id пуст — подсказываем, что вписать.
-        if (ctx.cfg.aliceAllowedUserIds.length === 0 && access.userId) {
-          if (!seenSetupUsers.has(access.userId)) {
-            seenSetupUsers.add(access.userId);
-            ctx.log.info(
-              { userId: access.userId },
-              'alice: ALICE_ALLOWED_USER_IDS пуст, принимаем всех. Впишите этот user_id в env.',
-            );
-          }
+        if (access.grantedBy && access.grantedBy !== 'trusted') {
+          logGrant(ctx, access);
         }
 
         const result = handleAliceRequest(ctx, body, access.userId);
@@ -418,5 +629,104 @@ export function registerAliceRoutes(app: FastifyInstance, ctx: AppContext): void
   app.post('/alice', async (_request, reply): Promise<AliceResponseBody> => {
     reply.type('application/json; charset=utf-8');
     return neutralReply();
+  });
+
+  registerIdentityRoutes(app, ctx);
+}
+
+/* ------------------------------------------------------------------ */
+/* Управление устройствами из админки (за Basic Auth на уровне Caddy)   */
+/* ------------------------------------------------------------------ */
+
+function toIdentityDto(row: ReturnType<typeof listIdentities>[number]): Record<string, unknown> {
+  return {
+    id: row.id,
+    kind: row.kind,
+    identity: row.identity,
+    status: row.status,
+    accountId: row.account_id,
+    applicationId: row.application_id,
+    legacyUserId: row.legacy_user_id,
+    skillId: row.skill_id,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+    seenCount: row.seen_count,
+    source: row.source,
+    note: row.note,
+  };
+}
+
+export function registerIdentityRoutes(app: FastifyInstance, ctx: AppContext): void {
+  const { db } = ctx;
+
+  /** Все известные устройства и аккаунты — лента для админки. */
+  app.get('/api/alice/identities', async () => ({
+    identities: listIdentities(db).map(toIdentityDto),
+    enrollOpenUntil: enrollWindowUntil(db),
+    identityCheck: ctx.cfg.aliceIdentityCheck,
+    knownSkillId: getSetting(db, SETTING_SKILL_ID),
+  }));
+
+  /** Неопознанные обращения: их видно, а не «где-то в логах». */
+  app.get('/api/alice/pending', async () => ({
+    pending: listIdentities(db, 'pending').map(toIdentityDto),
+    enrollOpenUntil: enrollWindowUntil(db),
+  }));
+
+  /** Подтвердить устройство одним нажатием с телефона. */
+  app.post(
+    '/api/alice/pending/:id/trust',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = parseRowId(request.params.id);
+      if (id === null) {
+        return reply.code(400).send({ error: 'bad_request', message: ROW_ID_HINT });
+      }
+      const row = trustIdentityRow(db, id, 'api');
+      if (!row) return reply.code(404).send({ error: 'not_found', id });
+      ctx.log.info({ id, identity: row.identity, kind: row.kind }, 'alice: устройство подтверждено');
+      return { identity: toIdentityDto(row) };
+    },
+  );
+
+  /** Снять доверие (например, продали колонку). */
+  app.delete(
+    '/api/alice/identities/:id',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = parseRowId(request.params.id);
+      if (id === null) {
+        return reply.code(400).send({ error: 'bad_request', message: ROW_ID_HINT });
+      }
+      const row = revokeIdentityRow(db, id);
+      if (!row) return reply.code(404).send({ error: 'not_found', id });
+      ctx.log.warn({ id, identity: row.identity }, 'alice: доверие устройству снято');
+      return { identity: toIdentityDto(row) };
+    },
+  );
+
+  /**
+   * Режим подключения: открыть окно и сказать что-нибудь новой колонке.
+   * Нужен, когда устройства ещё нет в списке неопознанных — первая же фраза
+   * с него станет доверенной, и окно сразу закроется.
+   */
+  app.post('/api/alice/enroll', async (request: FastifyRequest, reply) => {
+    const body = (request.body ?? {}) as { minutes?: unknown };
+    const minutes =
+      typeof body.minutes === 'number' && Number.isFinite(body.minutes)
+        ? body.minutes
+        : ENROLL_DEFAULT_MINUTES;
+
+    const until = openEnrollWindow(db, minutes);
+    ctx.log.info({ until }, 'alice: открыто окно подключения устройства');
+    reply.code(202);
+    return {
+      enrollOpenUntil: until,
+      hint: 'Скажите что-нибудь новой колонке — первая фраза с неё станет доверенной.',
+    };
+  });
+
+  /** Закрыть окно досрочно. */
+  app.delete('/api/alice/enroll', async () => {
+    closeEnrollWindow(db);
+    return { enrollOpenUntil: null };
   });
 }

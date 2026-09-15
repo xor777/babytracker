@@ -28,12 +28,19 @@ import {
   toUtteranceDto,
 } from './utterances.ts';
 import {
+  getChangeSet,
   listChangeSets,
   listRevisions,
   newChangeSetId,
   revertChangeSet,
   type JournalContext,
 } from './journal.ts';
+import {
+  OPAQUE_ID_HINT,
+  ROW_ID_HINT,
+  parseOpaqueId,
+  parseRowId,
+} from './http-params.ts';
 
 const isoish = z
   .string()
@@ -217,8 +224,9 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.patch(
     '/api/events/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
-      const id = Number.parseInt(request.params.id, 10);
-      if (!Number.isInteger(id) || id <= 0) return badRequest(reply, 'id должен быть числом');
+      // Строгий разбор: «1abc» и «1.5» обязаны быть отказом, а не правкой события 1.
+      const id = parseRowId(request.params.id);
+      if (id === null) return badRequest(reply, ROW_ID_HINT);
 
       const parsed = patchEventSchema.safeParse(request.body);
       if (!parsed.success) return badRequest(reply, parsed.error.issues);
@@ -250,8 +258,8 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.delete(
     '/api/events/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
-      const id = Number.parseInt(request.params.id, 10);
-      if (!Number.isInteger(id) || id <= 0) return badRequest(reply, 'id должен быть числом');
+      const id = parseRowId(request.params.id);
+      if (id === null) return badRequest(reply, ROW_ID_HINT);
 
       const journal: JournalContext = {
         changeSetId: newChangeSetId(),
@@ -290,10 +298,23 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get(
     '/api/change-sets/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
-      const id = request.params.id;
-      const [changeSet] = listChangeSets(db, 200).filter((cs) => cs.id === id);
-      if (!changeSet) return reply.code(404).send({ error: 'not_found', id });
-      return { changeSet, revisions: listRevisions(db, id) };
+      const id = parseOpaqueId(request.params.id);
+      if (id === null) return badRequest(reply, OPAQUE_ID_HINT);
+
+      // Раньше здесь сканировались последние 200 наборов, и старый набор
+      // возвращал 404, хотя лежал в базе. Ищем сразу по ключу.
+      const row = getChangeSet(db, id);
+      if (!row) return reply.code(404).send({ error: 'not_found', id });
+
+      const revisions = listRevisions(db, id);
+      return {
+        changeSet: {
+          ...row,
+          revisions: revisions.length,
+          events: [...new Set(revisions.map((r) => r.event_id))].sort((a, b) => a - b),
+        },
+        revisions,
+      };
     },
   );
 
@@ -301,7 +322,10 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post(
     '/api/change-sets/:id/revert',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
-      const result = revertChangeSet(db, request.params.id, 'api');
+      const id = parseOpaqueId(request.params.id);
+      if (id === null) return badRequest(reply, OPAQUE_ID_HINT);
+
+      const result = revertChangeSet(db, id, 'api');
       if (!result.ok) return reply.code(404).send({ error: 'revert_failed', message: result.error });
 
       defer(ctx, () => {

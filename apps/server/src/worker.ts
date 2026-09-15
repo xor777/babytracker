@@ -20,6 +20,7 @@ import {
   MAX_ATTEMPTS,
   claimNextPending,
   finishUtterance,
+  listUtterances,
   queueDepth,
   releaseUtterance,
   requeueUtterance,
@@ -39,8 +40,62 @@ import {
 import { queryEvents } from './events.ts';
 
 export const TICK_MS = 1_000;
-export const CLAUDE_TIMEOUT_MS = 60_000;
+/**
+ * Таймаут одного запуска модели.
+ *
+ * В контракте (§5) стояло 60 с — этого мало. На живых прогонах неоднозначных
+ * фраз (открытый сон + противоречие + разбор журнала через sql_query) Opus
+ * доходил до 134 с, то есть самые сложные случаи — ровно те, ради которых
+ * модель и зовут, — молча убивались по таймауту и уходили в retry.
+ *
+ * Разбор асинхронный, голосом уже ответили, поэтому задержка ничего не стоит;
+ * цена убитого запуска — потерянный разбор. Конкурентность всё равно 1,
+ * так что худшее последствие долгого запуска — очередь ждёт.
+ */
+export const CLAUDE_TIMEOUT_MS = 180_000;
 const PROBE_TIMEOUT_MS = 10_000;
+
+/** Сколько последних фраз показывать модели: хватает, чтобы увидеть повтор. */
+const PROMPT_UTTERANCES = 8;
+
+/**
+ * Уровень усилия модели (`--effort`). Закрепляем ЯВНО, а не наследуем
+ * умолчание CLI: умолчание меняется между версиями молча, а этот конвейер
+ * пишет данные о ребёнке — поведение не должно съезжать от обновления.
+ *
+ * `high` — минимум для задач, чувствительных к качеству решения; здесь модель
+ * выбирает прочтение неоднозначной фразы и правит чужие данные.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const DEFAULT_EFFORT = 'high';
+
+/**
+ * Читается прямо из окружения, а не из Config, чтобы не трогать чужой модуль
+ * ради одной строки. Неизвестное значение не роняет воркер: берём умолчание.
+ */
+export function resolveEffort(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = (env.CLAUDE_EFFORT ?? '').trim().toLowerCase();
+  if (raw.length === 0) return DEFAULT_EFFORT;
+  return (EFFORT_LEVELS as readonly string[]).includes(raw) ? raw : DEFAULT_EFFORT;
+}
+
+/**
+ * Всё, что модели разрешено звать. Список обязан совпадать с набором тулов
+ * MCP-сервера (§9.3): тул, о котором промпт рассказывает, но который не попал
+ * сюда, модель просто не сможет вызвать — и молча сделает что-то другое.
+ */
+export const ALLOWED_TOOLS: readonly string[] = [
+  'mcp__babytracker__get_state',
+  'mcp__babytracker__query_events',
+  'mcp__babytracker__sleep_daily',
+  'mcp__babytracker__log_event',
+  'mcp__babytracker__update_event',
+  'mcp__babytracker__delete_event',
+  'mcp__babytracker__sql_query',
+  'mcp__babytracker__sql_execute',
+  'mcp__babytracker__list_change_sets',
+  'mcp__babytracker__revert_change_set',
+];
 
 /**
  * Признаки того, что claude установлен, но работать не может: протухший токен,
@@ -457,6 +512,8 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       utteranceId: utterance.id,
       changeSets: listChangeSets(db, 5),
       recentEvents: queryEvents(db, { limit: 20 }),
+      // Без истории фраз не отличить «случилось дважды» от «сказали дважды».
+      recentUtterances: listUtterances(db, PROMPT_UTTERANCES),
     });
 
     const args = [
@@ -466,16 +523,12 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       'json',
       '--model',
       cfg.claudeModel,
+      '--effort',
+      resolveEffort(),
       '--mcp-config',
       writeMcpConfig(changeSetId, utterance.id),
       '--allowedTools',
-      [
-        'mcp__babytracker__log_event',
-        'mcp__babytracker__update_event',
-        'mcp__babytracker__query_events',
-        'mcp__babytracker__get_state',
-        'mcp__babytracker__delete_event',
-      ].join(','),
+      ALLOWED_TOOLS.join(','),
       '--permission-mode',
       'acceptEdits',
     ];

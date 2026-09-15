@@ -106,6 +106,44 @@ END;
 `;
 
 /**
+ * Опознание владельца навыка (§3.1).
+ *
+ * Причина появления: `session.user_id` — устаревшее поле, оно идентифицирует
+ * ЭКЗЕМПЛЯР ПРИЛОЖЕНИЯ, а не аккаунт. По документации Яндекса: «даже если
+ * пользователь вошёл в один и тот же аккаунт в приложение Яндекс для Android
+ * и iOS, Яндекс Диалоги присвоят отдельный user_id каждому из этих приложений».
+ * Из-за этого белый список по нему блокировал владельца при каждой смене
+ * устройства. Доверенные идентичности переезжают в БД, чтобы переживать
+ * перезапуск и деплой и чтобы их можно было пополнять без правки .env.
+ */
+const SCHEMA_V3 = `
+CREATE TABLE IF NOT EXISTS alice_identities (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind           TEXT NOT NULL,          -- 'account' | 'device'
+  identity       TEXT NOT NULL,
+  status         TEXT NOT NULL,          -- 'trusted' | 'pending'
+  account_id     TEXT,
+  application_id TEXT,
+  legacy_user_id TEXT,
+  skill_id       TEXT,
+  first_seen_at  TEXT NOT NULL,
+  last_seen_at   TEXT NOT NULL,
+  seen_count     INTEGER NOT NULL DEFAULT 1,
+  source         TEXT NOT NULL,          -- 'tofu' | 'api' | 'enroll' | 'promoted'
+  note           TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alice_identity ON alice_identities(kind, identity);
+CREATE INDEX IF NOT EXISTS idx_alice_status   ON alice_identities(status, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+/**
  * Список миграций. Индекс + 1 == user_version после применения.
  * Добавлять только в конец, никогда не переписывать уже вышедшие.
  */
@@ -115,6 +153,9 @@ const MIGRATIONS: ReadonlyArray<(db: Db) => void> = [
   },
   (db) => {
     db.exec(SCHEMA_V2);
+  },
+  (db) => {
+    db.exec(SCHEMA_V3);
   },
 ];
 

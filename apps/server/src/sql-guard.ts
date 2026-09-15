@@ -220,22 +220,155 @@ const FORBIDDEN: Record<string, Forbidden> = {
   RELEASE: { hint: 'транзакцией управляет сервер' },
 };
 
-/** Колонки, которые модель менять не должна. */
-const PROTECTED_UPDATE_COLUMNS = new Set(['id', 'rowid', 'created_at', 'utterance_id']);
+/**
+ * Колонки таблицы events, которые модель вправе менять.
+ *
+ * ЭТО СПИСОК РАЗРЕШЁННОГО, А НЕ ЗАПРЕЩЁННОГО, и так сделано после реального
+ * инцидента. Раньше здесь был перечень запрещённых колонок, и он не знал про
+ * `oid`: в SQLite `rowid`, `oid` и `_rowid_` — три имени ОДНОГО И ТОГО ЖЕ поля,
+ * поэтому «UPDATE events SET oid = 500» проходил валидатор и менял
+ * идентификатор события. Журнал принимал это за появление новой строки,
+ * писал before_json = NULL, и правка становилась НЕОБРАТИМОЙ — ровно то,
+ * чего по §9 существовать не должно.
+ *
+ * Со списком разрешённого любое имя, которого мы не предусмотрели — включая
+ * будущие псевдонимы и колонки, добавленные миграцией, — отвергается по
+ * умолчанию. Безопасность перестаёт зависеть от полноты перечня угроз.
+ */
+const UPDATABLE_COLUMNS = new Set([
+  'child_id',
+  'type',
+  'subtype',
+  'started_at',
+  'ended_at',
+  'value_num',
+  'value_unit',
+  'note',
+  'source',
+  'confidence',
+  'updated_at',
+  'deleted_at',
+]);
+
+/** При вставке своей строки можно ещё created_at и привязку к фразе. */
+const INSERTABLE_COLUMNS = new Set([
+  ...UPDATABLE_COLUMNS,
+  'created_at',
+  'utterance_id',
+]);
+
+/** Все имена идентификатора строки в SQLite — это одно и то же поле. */
+const ROWID_ALIASES = new Set(['id', 'rowid', 'oid', '_rowid_']);
+
+/** Понятное объяснение для колонок, про которые модель точно спросит «почему». */
+function explainForbiddenColumn(column: string, forInsert: boolean): string {
+  if (ROWID_ALIASES.has(column)) {
+    return (
+      `колонку «${column}» задавать нельзя: в SQLite id, rowid, oid и _rowid_ — ` +
+      'это одно и то же поле, идентификатор строки. Он неизменяем, иначе правку ' +
+      'невозможно откатить. Новая строка получает id автоматически'
+    );
+  }
+  if (column === 'created_at') {
+    return 'колонку «created_at» менять нельзя: id и created_at неизменяемы, это история записи';
+  }
+  if (column === 'utterance_id') {
+    return (
+      'колонку «utterance_id» менять нельзя: она связывает событие с исходной фразой, ' +
+      'перепривязывать чужую запись нельзя'
+    );
+  }
+  const allowed = [...(forInsert ? INSERTABLE_COLUMNS : UPDATABLE_COLUMNS)].sort().join(', ');
+  return `колонки «${column}» в таблице events нет. Доступны: ${allowed}`;
+}
 
 /**
- * Для INSERT список короче: у новой строки нечего перезаписывать.
- *
- * created_at в §9.3 перечислен как защищённый, но в схеме §1 это NOT NULL без
- * DEFAULT — полный запрет сделал бы INSERT в принципе невыполнимым. Поэтому
- * created_at защищён только от UPDATE (переписывание истории), а при вставке
- * своей же строки его задавать обязательно.
+ * Сверяет список колонок со списком разрешённого.
+ * Возвращает текст ошибки либо null, если всё в порядке.
  */
-const PROTECTED_INSERT_COLUMNS = new Set(['id', 'rowid']);
-
+function checkColumns(columns: readonly string[], forInsert: boolean): string | null {
+  const allowed = forInsert ? INSERTABLE_COLUMNS : UPDATABLE_COLUMNS;
+  for (const column of columns) {
+    if (!allowed.has(column)) return explainForbiddenColumn(column, forInsert);
+  }
+  return null;
+}
 
 const TABLE_INTRO = new Set(['INTO', 'FROM', 'JOIN', 'UPDATE']);
 const SET_CLAUSE_END = new Set(['WHERE', 'FROM', 'RETURNING']);
+
+/** Глубина вложенности скобок для каждого токена. */
+function depthsOf(tokens: SqlToken[]): number[] {
+  const depths: number[] = [];
+  let depth = 0;
+  for (const t of tokens) {
+    if (t.type === 'punct' && t.raw === '(') {
+      depths.push(depth);
+      depth++;
+      continue;
+    }
+    if (t.type === 'punct' && t.raw === ')') {
+      depth--;
+      depths.push(depth);
+      continue;
+    }
+    depths.push(depth);
+  }
+  return depths;
+}
+
+/**
+ * Колонки, которым присваиваются значения в SET-клаузе, начиная с `setIdx`.
+ * Используется и для UPDATE, и для ветки upsert `ON CONFLICT ... DO UPDATE SET`:
+ * проверять надо каждую такую клаузу, а не только список колонок INSERT.
+ */
+function collectSetColumns(tokens: SqlToken[], depths: number[], setIdx: number): string[] {
+  let endIdx = tokens.length;
+  for (let k = setIdx + 1; k < tokens.length; k++) {
+    const t = tokens[k] as SqlToken;
+    if (depths[k] === 0 && t.type === 'word' && SET_CLAUSE_END.has(t.upper)) {
+      endIdx = k;
+      break;
+    }
+    if (depths[k] === 0 && t.type === 'punct' && t.raw === ';') {
+      endIdx = k;
+      break;
+    }
+  }
+
+  const columns: string[] = [];
+  let expectColumn = true;
+  for (let k = setIdx + 1; k < endIdx; k++) {
+    const t = tokens[k] as SqlToken;
+    // форма SET (a, b) = (...)
+    if (depths[k] === 1 && expectColumn && (t.type === 'word' || t.type === 'ident')) {
+      columns.push(nameOf(t));
+      continue;
+    }
+    if (depths[k] !== 0) continue;
+    if (t.type === 'punct' && t.raw === ',') {
+      expectColumn = true;
+      continue;
+    }
+    if (expectColumn && (t.type === 'word' || t.type === 'ident')) {
+      columns.push(nameOf(t));
+      expectColumn = false;
+    }
+  }
+  return columns;
+}
+
+/** Все SET-клаузы запроса: основная и upsert-ветка. */
+function allSetColumns(tokens: SqlToken[], depths: number[]): string[] {
+  const columns: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (depths[i] === 0 && t?.type === 'word' && t.upper === 'SET') {
+      columns.push(...collectSetColumns(tokens, depths, i));
+    }
+  }
+  return columns;
+}
 
 export type SqlCheck<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -380,7 +513,7 @@ function checkInsert(_sql: string, tokens: SqlToken[]): SqlCheck<SqlExecutePlan>
   if (!open || open.type !== 'punct' || open.raw !== '(') {
     return fail(
       'перечисли колонки явно: INSERT INTO events (type, started_at, source, created_at, updated_at) VALUES (...). ' +
-        'Без списка колонок значение попадёт в id',
+        'Без списка колонок значение попадёт в идентификатор строки',
     );
   }
 
@@ -400,86 +533,33 @@ function checkInsert(_sql: string, tokens: SqlToken[]): SqlCheck<SqlExecutePlan>
     if (depth === 1 && (t.type === 'word' || t.type === 'ident')) columns.push(nameOf(t));
   }
 
-  const bad = columns.find((c) => PROTECTED_INSERT_COLUMNS.has(c));
-  if (bad) {
-    return fail(
-      `колонку «${bad}» задавать нельзя: идентификатор выдаёт база. ` +
-        'Убери её из списка колонок — новая строка получит id автоматически',
-    );
-  }
+  const badColumn = checkColumns(columns, true);
+  if (badColumn) return fail(badColumn);
+
+  // Ветка upsert: «ON CONFLICT (...) DO UPDATE SET ...» — это настоящий UPDATE,
+  // и защищённые колонки в ней должны проверяться так же строго.
+  const depths = depthsOf(tokens);
+  const upsertColumns = allSetColumns(tokens, depths);
+  const badUpsert = checkColumns(upsertColumns, false);
+  if (badUpsert) return fail(badUpsert);
 
   return { ok: true, value: { kind: 'insert', where: null } };
 }
 
 function checkUpdate(sql: string, tokens: SqlToken[]): SqlCheck<SqlExecutePlan> {
-  // глубина скобок для каждого токена: интересуют только конструкции верхнего уровня
-  const depths: number[] = [];
-  let depth = 0;
-  for (const t of tokens) {
-    if (t.type === 'punct' && t.raw === '(') {
-      depths.push(depth);
-      depth++;
-      continue;
-    }
-    if (t.type === 'punct' && t.raw === ')') {
-      depth--;
-      depths.push(depth);
-      continue;
-    }
-    depths.push(depth);
-  }
+  const depths = depthsOf(tokens);
 
   const setIdx = tokens.findIndex(
     (t, i) => depths[i] === 0 && t.type === 'word' && t.upper === 'SET',
   );
   if (setIdx === -1) return fail('ожидается UPDATE events SET колонка = значение ...');
 
-  // конец SET-клаузы
-  let endIdx = tokens.length;
-  for (let k = setIdx + 1; k < tokens.length; k++) {
-    const t = tokens[k] as SqlToken;
-    if (depths[k] === 0 && t.type === 'word' && SET_CLAUSE_END.has(t.upper)) {
-      endIdx = k;
-      break;
-    }
-    if (depths[k] === 0 && t.type === 'punct' && t.raw === ';') {
-      endIdx = k;
-      break;
-    }
-  }
-
-  // колонки: первый идентификатор после SET и после каждой запятой верхнего уровня
-  const columns: string[] = [];
-  let expectColumn = true;
-  for (let k = setIdx + 1; k < endIdx; k++) {
-    const t = tokens[k] as SqlToken;
-    if (depths[k] === 1 && expectColumn && (t.type === 'word' || t.type === 'ident')) {
-      // форма SET (a, b) = (...)
-      columns.push(nameOf(t));
-      continue;
-    }
-    if (depths[k] !== 0) continue;
-    if (t.type === 'punct' && t.raw === ',') {
-      expectColumn = true;
-      continue;
-    }
-    if (expectColumn && (t.type === 'word' || t.type === 'ident')) {
-      columns.push(nameOf(t));
-      expectColumn = false;
-      continue;
-    }
-  }
-
+  // Проверяем ВСЕ SET-клаузы запроса, а не только первую.
+  const columns = allSetColumns(tokens, depths);
   if (columns.length === 0) return fail('в SET не найдено ни одной колонки');
 
-  const bad = columns.find((c) => PROTECTED_UPDATE_COLUMNS.has(c));
-  if (bad) {
-    const why =
-      bad === 'utterance_id'
-        ? 'utterance_id связывает событие с исходной фразой, перепривязывать чужую запись нельзя'
-        : 'id и created_at неизменяемы';
-    return fail(`колонку «${bad}» менять нельзя: ${why}`);
-  }
+  const badColumn = checkColumns(columns, false);
+  if (badColumn) return fail(badColumn);
 
   // WHERE верхнего уровня -> текст условия для снимка «до»
   const whereIdx = tokens.findIndex(

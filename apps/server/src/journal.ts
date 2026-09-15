@@ -269,7 +269,22 @@ export function journaledChange<T>(
     for (const id of before.keys()) {
       const after = eventById(db, id);
       const beforeRow = before.get(id) ?? null;
-      if (!after) continue; // физически исчезнуть строка не может, но не падаем
+
+      // Строка, снимок которой мы сняли, обязана существовать после изменения:
+      // физическое удаление запрещено триггером, а идентификатор неизменяем.
+      // Если её нет — что-то подменило id (так вело себя «SET oid = N», пока
+      // валидатор не знал про этот псевдоним). Молча пропустить такое нельзя:
+      // ревизия не запишется, before_json будет потерян, и правка станет
+      // НЕОБРАТИМОЙ. Рушим транзакцию целиком — пусть лучше не применится
+      // ничего, чем применится без возможности отката.
+      if (!after) {
+        throw new Error(
+          `событие id=${id} исчезло во время изменения: похоже, запрос подменил ` +
+            'идентификатор строки. Изменение отменено целиком, потому что откатить ' +
+            'его было бы невозможно. Идентификатор события менять нельзя',
+        );
+      }
+
       if (beforeRow && sameExceptUpdatedAt(beforeRow, after)) continue;
       recordRevision(db, {
         changeSetId: ctx.changeSetId,
@@ -336,10 +351,14 @@ export function sqlExecute(
         if (plan.kind === 'insert') return [];
         // снимок «до» снимаем ТЕМ ЖЕ условием, что и само изменение
         const where = plan.where === null ? '1=1' : plan.where;
+        // Перевод строки перед LIMIT обязателен: модель пишет условия
+        // с однострочными комментариями («WHERE id = 1 -- поправка мамы»),
+        // и без него комментарий съедал бы и LIMIT, и плейсхолдер — наружу
+        // уходила бы невнятная «column index out of range» вместо подсказки.
+        // Лимит подставляем числом из кода, а не параметром: он не из ввода.
         const rows = all<{ id: number }>(
           db,
-          `SELECT id FROM events WHERE ${where} LIMIT ?`,
-          [MAX_AFFECTED_ROWS + 1],
+          `SELECT id FROM events WHERE ${where}\nLIMIT ${MAX_AFFECTED_ROWS + 1}`,
         );
         if (rows.length > MAX_AFFECTED_ROWS) {
           throw new Error(

@@ -40,8 +40,20 @@ export function withUnit(n: number, forms: PluralForms): string {
  * Длительность словами: «1 час 35 минут», «45 минут», «2 часа», «меньше минуты».
  * Вход — минуты (может быть дробным, округляем).
  */
+/**
+ * Приводит вход к неотрицательному целому числу минут.
+ * Math.max(0, NaN) возвращает NaN, поэтому без явной проверки не-конечное
+ * значение проходило все ветки и превращалось в пустую строку — Алиса
+ * произносила «Спал » с дырой вместо длительности. Бесконечность давала
+ * «Infinity часов». Для речи безопаснее отступить к нулю.
+ */
+function safeMinutes(totalMinutes: number): number {
+  if (!Number.isFinite(totalMinutes)) return 0;
+  return Math.max(0, Math.round(totalMinutes));
+}
+
 export function formatDurationRu(totalMinutes: number): string {
-  const total = Math.max(0, Math.round(totalMinutes));
+  const total = safeMinutes(totalMinutes);
   if (total === 0) return 'меньше минуты';
 
   const hours = Math.floor(total / 60);
@@ -58,7 +70,7 @@ export function formatDurationRu(totalMinutes: number): string {
  * с именительным, поэтому меняются только минуты.
  */
 export function formatDurationRuAcc(totalMinutes: number): string {
-  const total = Math.max(0, Math.round(totalMinutes));
+  const total = safeMinutes(totalMinutes);
   if (total === 0) return 'меньше минуты';
 
   const hours = Math.floor(total / 60);
@@ -71,7 +83,7 @@ export function formatDurationRuAcc(totalMinutes: number): string {
 
 /** Короткий цифровой вид длительности: «1:35», «0:45». */
 export function formatDurationShort(totalMinutes: number): string {
-  const total = Math.max(0, Math.round(totalMinutes));
+  const total = safeMinutes(totalMinutes);
   return `${Math.floor(total / 60)}:${pad2(total % 60)}`;
 }
 
