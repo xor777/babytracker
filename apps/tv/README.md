@@ -30,11 +30,16 @@ DASHBOARD_URL=http://192.168.1.10:8787/
 ./gradlew assembleDebug -PDASHBOARD_URL=http://192.168.1.42:8787/
 ```
 
-Либо через переменную окружения (приоритет ниже, чем у `-P`):
+Либо через переменную окружения — именно с префиксом `ORG_GRADLE_PROJECT_`, это
+штатный механизм Gradle:
 
 ```bash
-DASHBOARD_URL=http://192.168.1.42:8787/ ./gradlew assembleDebug
+ORG_GRADLE_PROJECT_DASHBOARD_URL=http://192.168.1.42:8787/ ./gradlew assembleDebug
 ```
+
+> Голая `DASHBOARD_URL=… ./gradlew …` **не работает**: значение из `gradle.properties`
+> всё равно окажется сильнее. Приоритет (проверен фактом):
+> `-PDASHBOARD_URL` > `ORG_GRADLE_PROJECT_DASHBOARD_URL` > `gradle.properties` > дефолт в коде.
 
 Проверить, с каким адресом соберётся APK:
 
@@ -45,7 +50,22 @@ DASHBOARD_URL=http://192.168.1.42:8787/ ./gradlew assembleDebug
 
 > **Важно.** `localhost` и `127.0.0.1` указывают на сам телевизор — работать не будут.
 > Нужен адрес машины с сервером в той же сети (`ipconfig getifaddr en0` на macOS)
-> либо публичный https-адрес туннеля.
+> либо публичный https-адрес домена.
+
+### Белый список хостов
+
+Приложение — киоск: оно ходит только на хост из `DASHBOARD_URL` и на адреса локальной
+сети (`10.*`, `192.168.*`, `172.16–31.*`, `127.*`, `localhost`, `*.local`). Всё остальное
+блокируется и при навигации внутри WebView, и при подмене адреса через adb.
+
+Если дашборд отдаётся с нескольких доменов (например, LAN-адрес и внешний HTTPS-домен),
+перечислите их через запятую:
+
+```properties
+# apps/tv/gradle.properties
+DASHBOARD_URL=https://baby.example.com/
+DASHBOARD_URL_HOSTS=baby.example.com,baby-lan.example.com
+```
 
 ### Смена адреса без пересборки
 
@@ -56,6 +76,11 @@ DASHBOARD_URL=http://192.168.1.42:8787/ ./gradlew assembleDebug
 adb shell am start -n com.nuanu.babytracker.tv/.MainActivity -e url http://192.168.1.42:8787/
 adb shell am start -n com.nuanu.babytracker.tv/.MainActivity -e url reset   # вернуть значение из сборки
 ```
+
+Extra `url` принимается **только от adb**: activity экспортирована (без этого лаунчер TV
+её не запустит), поэтому приложение сверяет `referrer` с `android-app://com.android.shell`
+и игнорирует команду от любого стороннего приложения на телевизоре. Адрес вне белого
+списка не принимается даже от adb. Отказ виден в `adb logcat -s BabyTrackerTV`.
 
 ---
 
@@ -105,6 +130,17 @@ leanback-launchable-activity: name='com.nuanu.babytracker.tv.MainActivity' ... b
 ```
 
 Нет строки `leanback-launchable-activity` — иконки на телевизоре не будет.
+
+### Линт
+
+```bash
+./gradlew lintDebug
+```
+
+`abortOnError = true`, а правила `AcceptsUserCertificates`, `TrustAllX509TrustManager`
+и `WebViewClientOnReceivedSslError` подняты с warning до error: вернуть ослабление TLS
+незаметно не получится, сборка упадёт. `InsecureBaseConfiguration` осознанно оставлен
+предупреждением — cleartext нужен, пока сервер отдаёт http (см. §4).
 
 ---
 
@@ -165,9 +201,19 @@ adb logcat -s BabyTrackerTV
 дашборд висит сутками, заставка не включается.
 
 **WebView.** JavaScript и DOM storage включены, зум выключен, системный масштаб шрифта
-игнорируется (`textZoom = 100`), доступ к локальным файлам запрещён. Открытый HTTP
-разрешён явно: `android:usesCleartextTraffic="true"` + `res/xml/network_security_config.xml`
-(без этого на Android 9+ локальный `http://…:8787` просто не открылся бы).
+игнорируется (`textZoom = 100`), доступ к локальным файлам запрещён.
+
+**Сеть и TLS.** Открытый HTTP разрешён явно: `android:usesCleartextTraffic="true"` +
+`res/xml/network_security_config.xml` (без этого на Android 9+ локальный `http://…:8787`
+не открылся бы). При этом доверяются **только системные CA** — пользовательские
+сертификаты не принимаются, иначе подсунутый на телевизор CA штатно ломал бы HTTPS.
+Смешанный контент запрещён (`MIXED_CONTENT_NEVER_ALLOW`): на HTTPS-странице http-подресурс
+— это возможность подменить JS. Навигация ограничена белым списком хостов (§1):
+`shouldOverrideUrlLoading` не выпускает киоск наружу ни по ссылке, ни по редиректу.
+
+Когда дашборд окончательно переедет на HTTPS, стоит выключить cleartext в
+`network_security_config.xml` и поднять `InsecureBaseConfiguration` до error в
+`app/build.gradle.kts`.
 
 **Устойчивость к сети.** Телевизор включается раньше, чем поднимается Wi-Fi, поэтому
 первая загрузка почти всегда падает. Вместо белого экрана и стандартной ошибки движка
@@ -176,11 +222,23 @@ adb logcat -s BabyTrackerTV
 бесконечно). Плюс подписка на `ConnectivityManager`: как только сеть появилась, попытка
 делается сразу, не досиживая паузу. Загрузка, висящая дольше 20 с, считается неудачей.
 
+> **Явная зависимость от дашборда.** Переподключение делается только если страница
+> **не загрузилась**. Если она уже открыта, а Wi-Fi пропал и вернулся, приложение не
+> делает ничего — выкарабкивается сам дашборд, переподключая SSE (CONTRACT §6). Уберёте
+> из дашборда watchdog переподключения — телевизор останется с мёртвой страницей
+> до перезагрузки пультом.
+
+**Гибель renderer'а.** System WebView обновляется через Play и убивает renderer'ы
+работающих приложений; плюс ночной OOM на слабом ТВ-железе. Без обработки процесс
+приложения умирает целиком, и телевизор в детской молча показывает лаунчер.
+`onRenderProcessGone` возвращает `true`, старый WebView уничтожается, на его место
+встаёт новый и дашборд грузится заново.
+
 **Пульт.**
 
 | Кнопка | Действие |
 |---|---|
-| `BACK` | назад по истории WebView; на «корне» — первое нажатие показывает подсказку, второе в течение 2.5 с закрывает приложение. Одним нажатием приложение не закрыть |
+| `BACK` | назад по истории WebView; на «корне» — первое нажатие показывает подсказку, второе в течение 2.5 с закрывает приложение. Одним нажатием приложение не закрыть. Работает и на экране ошибки |
 | `BACK` (долгое) | перезагрузить страницу |
 | `MENU` | перезагрузить страницу |
 | `OK` / центр | на экране ошибки — повторить попытку немедленно |
@@ -221,5 +279,8 @@ apps/tv/
 | `ERR_CLEARTEXT_NOT_PERMITTED` | пропал `usesCleartextTraffic` / `network_security_config` |
 | Экран «НЕТ СВЯЗИ», адрес `localhost` | `DASHBOARD_URL` указывает на сам телевизор — нужен LAN-адрес сервера |
 | `ERR_CONNECTION_REFUSED` | сервер не поднят, другой порт, либо телевизор в другой сети/VLAN |
+| `подмена адреса отклонена, referrer=…` в логе | `-e url` пришёл не от adb; с телевизора адрес не меняется по замыслу |
+| `адрес вне белого списка отклонён` | хост не из `DASHBOARD_URL_HOSTS` и не из локальной сети (§1) |
+| Белая/пустая страница, в логе `renderer умер` | System WebView обновился; приложение пересоздаёт WebView само, вмешательства не нужно |
 | Сборка падает на `Unsupported class file major version` | Gradle запущен не на Java 17 — выставить `JAVA_HOME` (§2) |
 | `SDK location not found` | нет `local.properties` с `sdk.dir` (§2) |

@@ -172,6 +172,12 @@ class MainActivity : Activity() {
     private fun applyUrlFromIntent(intent: Intent?): Boolean {
         val extra = intent?.getStringExtra(EXTRA_URL)?.trim() ?: return false
 
+        // getReferrer() отдаёт EXTRA_REFERRER/EXTRA_REFERRER_NAME из самого интента,
+        // а их подделает кто угодно. Вычищаем их — тогда остаётся только тот источник,
+        // который проставляет система и приложение подменить не может.
+        intent.removeExtra(Intent.EXTRA_REFERRER)
+        intent.removeExtra(Intent.EXTRA_REFERRER_NAME)
+
         val from = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
             referrer?.toString()
         } else {
@@ -246,7 +252,13 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (url == null || url.startsWith(BLANK)) return
+                if (url == null) return
+                if (url.startsWith(BLANK)) {
+                    // Наш служебный about:blank уже отрисован — самое время выкинуть
+                    // из истории и его, и упавшие навигации перед ним.
+                    view?.clearHistory()
+                    return
+                }
                 if (failed) return
                 handler.removeCallbacks(loadTimeout)
                 attempt = 0
@@ -542,7 +554,11 @@ class MainActivity : Activity() {
      * Повторить попытку немедленно — это OK/центр.
      */
     private fun handleBack() {
-        if (web.canGoBack()) {
+        // Ходить по истории имеет смысл только когда пользователь видит саму страницу.
+        // На экране подключения/ошибки история состоит из неудачных навигаций и
+        // служебного about:blank — уводить по ней некуда, и BACK обязан работать
+        // на выход: именно там телевизор оказывается каждое утро.
+        if (overlay.visibility != View.VISIBLE && web.canGoBack()) {
             web.goBack()
             return
         }
