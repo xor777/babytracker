@@ -5,10 +5,17 @@
 # Sudo нужен только для двух системных вещей — Caddy (ему нужны порты 80/443)
 # и правил ufw. Если sudo нет, скрипт про них скажет и пойдёт дальше.
 #
-# Переменная BABYTRACKER_DOMAIN включает выпуск TLS-сертификата для этого домена.
+# BABYTRACKER_DOMAIN включает выпуск TLS-сертификатов. Можно перечислить
+# несколько доменов через запятую — Caddy получит сертификат на каждый.
 set -euo pipefail
 
-DOMAIN="${BABYTRACKER_DOMAIN:-}"
+# По умолчанию оба домена:
+#   bt.adbgw.ru  — прямо на IP сервера. Сюда ходит Алиса: Яндекс достаёт
+#                  сервер без проблем, а лишний посредник вебхуку не нужен.
+#   bt.nuanu.ai  — через Cloudflare с проксированием. Сюда ходят люди и
+#                  телевизор: прямой путь до IP режется провайдером на
+#                  ~15 КБ, и дашборд не грузился вовсе.
+DOMAIN="${BABYTRACKER_DOMAIN:-bt.adbgw.ru, bt.nuanu.ai}"
 
 NODE_MAJOR=24
 PREFIX="$HOME/.local"
@@ -111,7 +118,7 @@ else
   fi
   log "caddy $(caddy version 2>&1 | head -1)"
 
-  log "Настраиваю Caddy на домен $DOMAIN"
+  log "Настраиваю Caddy на домены: $DOMAIN"
 
   # Basic Auth. Пароль задаётся через BABYTRACKER_AUTH_PASSWORD; хеш живёт в
   # отдельном файле и переживает повторные запуски — иначе каждый провижининг
@@ -138,7 +145,18 @@ else
 # BabyTracker. Сертификат Let's Encrypt Caddy получает и продлевает сам.
 # Логи — в journald: journalctl -u caddy
 $DOMAIN {
-	encode gzip
+	# Сжимаем только статику и JSON. text/event-stream намеренно не в списке:
+	# сжатый SSE-поток буферизуется компрессором и перестаёт быть потоком.
+	encode gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/plain*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type image/svg+xml*
+		}
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -155,16 +173,25 @@ $DOMAIN {
 		reverse_proxy localhost:8787
 	}
 
-	# Всё остальное — история ребёнка и возможность её менять. Под паролем.
-	handle {
+	# SSE — отдельной веткой. flush_interval -1 отключает буферизацию, и это
+	# необходимо потоку событий, но губительно для обычных ответов: на крупном
+	# JS-бандле соединение обрывается на середине, и дашборд встречает белый
+	# экран. Поэтому послабление действует ровно на один маршрут.
+	@sse path /api/stream
+	handle @sse {
 		$AUTH_BLOCK
 		reverse_proxy localhost:8787 {
-			# SSE: дашборд держит поток часами, буферизация его убьёт
 			flush_interval -1
 			transport http {
 				read_timeout 24h
 			}
 		}
+	}
+
+	# Всё остальное — история ребёнка и возможность её менять. Под паролем.
+	handle {
+		$AUTH_BLOCK
+		reverse_proxy localhost:8787
 	}
 }
 CADDY
