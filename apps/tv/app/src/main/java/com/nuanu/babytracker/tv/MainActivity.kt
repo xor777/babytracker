@@ -74,8 +74,14 @@ class MainActivity : Activity() {
     /** В истории WebView остался наш служебный about:blank — вычистить после успеха. */
     private var historyDirty = false
 
-    /** Учётные данные уже отданы в рамках текущей загрузки. */
-    private var authOffered = false
+    /** Сколько раз подряд отдавали учётные данные без единой удачной загрузки. */
+    private var authAttempts = 0
+
+    /** Когда отдавали в последний раз — чтобы отличить серию отказов от новых запросов. */
+    private var lastAuthAt = 0L
+
+    /** Страница дашборда сейчас показана пользователю. */
+    private var contentShown = false
 
     /** Сервер не принял логин/пароль — отдельное состояние, не «нет связи». */
     private var authRejected = false
@@ -280,6 +286,8 @@ class MainActivity : Activity() {
                 if (failed) return
                 handler.removeCallbacks(loadTimeout)
                 attempt = 0
+                // Страница отдана — значит пару приняли; серия попыток закрыта.
+                authAttempts = 0
                 // Служебные about:blank не должны оставаться в истории: иначе BACK
                 // уводит пользователя на пустую страницу вместо выхода.
                 if (historyDirty) {
@@ -408,9 +416,13 @@ class MainActivity : Activity() {
      * Дашборд закрыт HTTP Basic на Caddy, а у телевизора есть пульт и нет клавиатуры —
      * пароль вводить некому. Отдаём его сами.
      *
-     * Условия жёсткие: только на хост из DASHBOARD_URL, только по HTTPS и только один
-     * раз за загрузку. Второй запрос на ту же загрузку означает, что сервер пару
-     * отверг, — уходим в отдельное состояние, а не в цикл 401 → proceed → 401.
+     * Условия жёсткие: только на хост из DASHBOARD_URL и только по HTTPS.
+     *
+     * Ограничение на число попыток — по СЕРИИ, а не по загрузке страницы. Дашборд
+     * после отрисовки сам ходит в /api/state и держит /api/stream, и эти запросы тоже
+     * за basic auth: каждый из них — законный новый запрос учётных данных, а не признак
+     * того, что пару отвергли. Признак отказа — несколько запросов подряд в пределах
+     * короткого окна: так выглядит цикл 401 → proceed → 401, и вот его мы обрываем.
      */
     private fun handleAuthRequest(authHandler: HttpAuthHandler, host: String?) {
         val user = BuildConfig.DASHBOARD_USER
@@ -433,14 +445,27 @@ class MainActivity : Activity() {
             authHandler.cancel()
             return
         }
-        if (authOffered) {
-            Log.w(TAG, "сервер не принял логин и пароль")
-            authHandler.cancel()
-            failAuth()
+
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastAuthAt > AUTH_SERIES_WINDOW_MS) authAttempts = 0
+        lastAuthAt = now
+
+        if (authAttempts < MAX_AUTH_ATTEMPTS) {
+            authAttempts += 1
+            authHandler.proceed(user, password)
             return
         }
-        authOffered = true
-        authHandler.proceed(user, password)
+
+        // Несколько запросов подряд за секунды — пару не приняли.
+        authHandler.cancel()
+        if (contentShown) {
+            // Страница уже на экране: это сорвался её собственный запрос к API.
+            // Гасить рабочий дашборд нельзя — он сам покажет «связь потеряна».
+            Log.w(TAG, "запрос дашборда не прошёл аутентификацию, экран не трогаю")
+        } else {
+            Log.w(TAG, "сервер не принял логин и пароль")
+            failAuth()
+        }
     }
 
     /** Пароль уходит только своему хосту и только по HTTPS. */
@@ -492,7 +517,7 @@ class MainActivity : Activity() {
         handler.removeCallbacks(loadTimeout)
 
         failed = false
-        authOffered = false
+        authAttempts = 0
         authRejected = false
         authWithheld = false
         targetUrl = currentUrl()
@@ -567,6 +592,7 @@ class MainActivity : Activity() {
 
     private fun showContent() {
         overlay.visibility = View.GONE
+        contentShown = true
         overlayHint.visibility = View.GONE
         web.visibility = View.VISIBLE
         web.requestFocus()
@@ -574,6 +600,7 @@ class MainActivity : Activity() {
 
     private fun showConnecting() {
         web.visibility = View.INVISIBLE
+        contentShown = false
         overlay.visibility = View.VISIBLE
         overlayTitle.setText(R.string.connecting_title)
         overlayTitle.setTextColor(getColorCompat(R.color.bt_cyan))
@@ -585,6 +612,7 @@ class MainActivity : Activity() {
 
     private fun showError(reason: String) {
         web.visibility = View.INVISIBLE
+        contentShown = false
         overlay.visibility = View.VISIBLE
         overlayTitle.setText(R.string.error_title)
         overlayTitle.setTextColor(getColorCompat(R.color.bt_magenta))
@@ -595,6 +623,7 @@ class MainActivity : Activity() {
 
     private fun showAuthError() {
         web.visibility = View.INVISIBLE
+        contentShown = false
         overlay.visibility = View.VISIBLE
         overlayTitle.setText(R.string.auth_error_title)
         overlayTitle.setTextColor(getColorCompat(R.color.bt_magenta))
@@ -781,6 +810,17 @@ class MainActivity : Activity() {
 
         /** Пауза между проверками, когда сервер отверг пару логин/пароль. */
         const val AUTH_RETRY_MS = 5 * 60_000L
+
+        /**
+         * Запросы аутентификации, пришедшие подряд в пределах этого окна, считаются
+         * одной серией: так выглядит цикл 401 → proceed → 401. Запрос позже —
+         * это уже новый запрос страницы (например, переподключение SSE), и он
+         * получает свои попытки.
+         */
+        const val AUTH_SERIES_WINDOW_MS = 10_000L
+
+        /** Сколько раз за серию отдаём пару, прежде чем признать её неверной. */
+        const val MAX_AUTH_ATTEMPTS = 2
 
         /** Сколько ждём ответа, прежде чем считать загрузку провалившейся. */
         const val LOAD_TIMEOUT_MS = 20_000L
