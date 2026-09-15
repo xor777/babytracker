@@ -52,6 +52,23 @@ export function formatDurationRu(totalMinutes: number): string {
   return parts.join(' ');
 }
 
+/**
+ * Та же длительность в винительном падеже — для конструкций «спал ...», «спит ...».
+ * По-русски «спал 1 минуту», а не «спал 1 минута»; часы в винительном совпадают
+ * с именительным, поэтому меняются только минуты.
+ */
+export function formatDurationRuAcc(totalMinutes: number): string {
+  const total = Math.max(0, Math.round(totalMinutes));
+  if (total === 0) return 'меньше минуты';
+
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(withUnit(hours, HOURS));
+  if (minutes > 0) parts.push(withUnit(minutes, MINUTES_ACC));
+  return parts.join(' ');
+}
+
 /** Короткий цифровой вид длительности: «1:35», «0:45». */
 export function formatDurationShort(totalMinutes: number): string {
   const total = Math.max(0, Math.round(totalMinutes));

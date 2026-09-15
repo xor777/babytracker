@@ -130,7 +130,11 @@ export function loadConfig(
     port,
     host: str(env, 'HOST', '0.0.0.0'),
     tz,
-    dbPath: path.isAbsolute(dbPathRaw) ? dbPathRaw : path.resolve(cwd, dbPathRaw),
+    // ':memory:' — особый путь SQLite, резолвить его нельзя
+    dbPath:
+      dbPathRaw === ':memory:' || path.isAbsolute(dbPathRaw)
+        ? dbPathRaw
+        : path.resolve(cwd, dbPathRaw),
     aliceWebhookSecret: secret,
     aliceSkillId: str(env, 'ALICE_SKILL_ID', '') || null,
     aliceAllowedUserIds: list(env, 'ALICE_ALLOWED_USER_IDS'),

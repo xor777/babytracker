@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Выкатывает BabyTracker на codex-vm. Идемпотентен.
+# Выкатывает BabyTracker на сервер из BABYTRACKER_HOST. Идемпотентен.
 # Запускать с Mac из корня репозитория: ./infra/deploy.sh
 set -euo pipefail
 

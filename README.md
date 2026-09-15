@@ -49,7 +49,7 @@
 - **[docs/CONTRACT.md](docs/CONTRACT.md)** — схема БД, HTTP API, SSE, fast-path, MCP-тулы.
   Единый источник правды; менять согласованно.
 - **[docs/ALICE_SETUP.md](docs/ALICE_SETUP.md)** — как создать навык и подцепить вебхук.
-- **[docs/DEPLOY.md](docs/DEPLOY.md)** — развёртывание на codex-vm, бэкапы, стоимость.
+- **[docs/DEPLOY.md](docs/DEPLOY.md)** — развёртывание, публичный HTTPS, бэкапы, стоимость.
 
 ## Локальный запуск
 

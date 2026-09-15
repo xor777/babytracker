@@ -1,4 +1,4 @@
-import type { DailySleep, TrackerEvent, TrackerState, Utterance } from './types';
+import type { DailySleep, Health, TrackerEvent, TrackerState, Utterance } from './types';
 
 /**
  * База API. В dev — пустая строка (работает vite-прокси на 8787).
@@ -60,4 +60,9 @@ export async function fetchSleepEvents(signal?: AbortSignal): Promise<TrackerEve
     signal,
   );
   return pickArray<TrackerEvent>(payload, 'events', 'items', 'rows');
+}
+
+/** §3.8 — состояние сервера и воркера. Не критично: при ошибке просто ничего не показываем. */
+export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
+  return getJson<Health>('/healthz', signal);
 }

@@ -27,6 +27,14 @@ export interface TrackerEvent {
   deleted_at?: string | null;
 }
 
+/** §4 — результат fast-path. Сервер отдаёт его объектом, не строкой. */
+export interface FastResult {
+  kind?: string;
+  confidence?: number;
+  at?: string;
+  [key: string]: unknown;
+}
+
 /** §1 — строка таблицы utterances (SSE присылает урезанный набор полей) */
 export interface Utterance {
   id: number;
@@ -34,10 +42,24 @@ export interface Utterance {
   status: UtteranceStatus | string;
   received_at?: string | null;
   processed_at?: string | null;
-  fast_result?: string | null;
-  llm_result?: string | null;
+  /** В БД это TEXT, но наружу сервер отдаёт разобранный объект. Строку тоже переживаем. */
+  fast_result?: FastResult | string | null;
+  llm_result?: FastResult | string | null;
   llm_error?: string | null;
   attempts?: number;
+}
+
+/** §3.8 — /healthz. Поля worker'а сверх контракта приходят от реального сервера. */
+export interface Health {
+  ok?: boolean;
+  db?: boolean;
+  worker?: {
+    alive?: boolean;
+    lastRunAt?: string | null;
+    queueDepth?: number;
+    claudeAvailable?: boolean;
+    claudeProblem?: string | null;
+  };
 }
 
 /** §3.2 — GET /api/state */

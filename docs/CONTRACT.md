@@ -80,7 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_utt_status ON utterances(status, received_at);
 
 ## 3. HTTP API
 
-Базовый порт: **8787** (порт 3000 на codex-vm занят).
+Базовый порт: **8787** (3000 слишком часто занят чем-то другим).
 
 ### 3.1 `POST /alice/:secret` — webhook Яндекс Диалогов
 
