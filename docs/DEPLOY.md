@@ -77,6 +77,29 @@ ingress:
 И в `infra/systemd/babytracker-tunnel.service` заменить `ExecStart` на
 `%h/.local/bin/cloudflared tunnel --no-autoupdate run babytracker`, затем передеплоить.
 
+## Доступ и пароль
+
+Всё, кроме двух путей, закрыто HTTP Basic Auth на уровне Caddy: история ребёнка и возможность
+её менять не должны быть доступны любому, кто знает домен.
+
+Открыты без пароля ровно:
+
+- `/alice/<секрет>` — Алиса не умеет basic auth, её защищает секрет в URL;
+- `/healthz` — нужен выкатке и мониторингу.
+
+Пароль задаётся при провижининге и хранится хешем в `~/.config/babytracker-auth.hash`;
+повторный запуск скрипта без переменной пароль не меняет.
+
+```bash
+BABYTRACKER_DOMAIN=bt.adbgw.ru \
+BABYTRACKER_AUTH_USER=dmitry \
+BABYTRACKER_AUTH_PASSWORD='новый-пароль' \
+  ssh $BABYTRACKER_HOST 'bash -s' < infra/provision.sh
+```
+
+Телевизор отдаёт эти же логин и пароль сам — они зашиты в сборку APK
+(`DASHBOARD_USER` / `DASHBOARD_PASSWORD`), вводить с пульта ничего не нужно.
+
 ## Первый запуск
 
 ```bash

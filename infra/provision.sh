@@ -80,6 +80,18 @@ fi
 
 mkdir -p "$HOME/.config/systemd/user" "$HOME/babytracker/data"
 
+# ---------- lingering ----------
+# Без него systemd гасит пользовательские сервисы вместе с последней сессией:
+# вышел по ssh — сервер выключился. Обязательный шаг, не косметика.
+if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
+  if sudo -n true 2>/dev/null; then
+    log "Включаю lingering, чтобы сервисы жили без ssh-сессии"
+    sudo loginctl enable-linger "$USER"
+  else
+    log "ВНИМАНИЕ: нет sudo — выполни вручную: sudo loginctl enable-linger $USER"
+  fi
+fi
+
 # ---------- Caddy: HTTPS c автоматическим Let's Encrypt ----------
 # Нужен root: порты 80/443 привилегированные, а сертификаты должны обновляться
 # сами, без участия человека.
@@ -100,18 +112,33 @@ else
   log "caddy $(caddy version 2>&1 | head -1)"
 
   log "Настраиваю Caddy на домен $DOMAIN"
+
+  # Basic Auth. Пароль задаётся через BABYTRACKER_AUTH_PASSWORD; хеш живёт в
+  # отдельном файле и переживает повторные запуски — иначе каждый провижининг
+  # менял бы пароль и ломал уже настроенный телевизор.
+  AUTH_USER="${BABYTRACKER_AUTH_USER:-dmitry}"
+  HASH_FILE="$HOME/.config/babytracker-auth.hash"
+  if [ -n "${BABYTRACKER_AUTH_PASSWORD:-}" ]; then
+    caddy hash-password --plaintext "$BABYTRACKER_AUTH_PASSWORD" > "$HASH_FILE"
+    chmod 600 "$HASH_FILE"
+    log "хеш пароля обновлён"
+  fi
+  if [ -s "$HASH_FILE" ]; then
+    # Caddyfile не принимает блок в одну строку — собираем с реальными
+    # переводами строк, иначе конфиг молча остаётся старым.
+    AUTH_BLOCK=$(printf 'basic_auth {\n\t\t\t%s %s\n\t\t}' "$AUTH_USER" "$(cat "$HASH_FILE")")
+    log "аутентификация включена, пользователь $AUTH_USER"
+  else
+    AUTH_BLOCK=""
+    log "ВНИМАНИЕ: пароль не задан — сайт настраивается БЕЗ аутентификации."
+    log "         Задай BABYTRACKER_AUTH_PASSWORD и запусти скрипт повторно."
+  fi
+
   sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDY
 # BabyTracker. Сертификат Let's Encrypt Caddy получает и продлевает сам.
+# Логи — в journald: journalctl -u caddy
 $DOMAIN {
 	encode gzip
-
-	# SSE: дашборд держит поток часами, буферизация и таймауты его убьют
-	reverse_proxy localhost:8787 {
-		flush_interval -1
-		transport http {
-			read_timeout 24h
-		}
-	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -121,18 +148,34 @@ $DOMAIN {
 		-Server
 	}
 
-	log {
-		output file /var/log/caddy/babytracker.log {
-			roll_size 10MiB
-			roll_keep 5
+	# Без аутентификации ровно два пути: вебхук Алисы (она не умеет basic auth,
+	# её защищает секрет в URL) и healthz для выкатки и мониторинга.
+	@open path /alice/* /healthz
+	handle @open {
+		reverse_proxy localhost:8787
+	}
+
+	# Всё остальное — история ребёнка и возможность её менять. Под паролем.
+	handle {
+		$AUTH_BLOCK
+		reverse_proxy localhost:8787 {
+			# SSE: дашборд держит поток часами, буферизация его убьёт
+			flush_interval -1
+			transport http {
+				read_timeout 24h
+			}
 		}
 	}
 }
 CADDY
-  sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy 2>/dev/null || true
-  sudo caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -2
+  if ! sudo caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -2; then
+    log "ОШИБКА: конфиг Caddy невалиден, не применяю"; exit 1
+  fi
   sudo systemctl enable --now caddy
+  # reload не перезапускает процесс; если конфиг не принят — падаем на restart,
+  # чтобы не остаться молча на старом конфиге
   sudo systemctl reload caddy || sudo systemctl restart caddy
+  sleep 2
 
   # ---------- ufw ----------
   # Фаервол настроен в режиме deny incoming: без этих правил Let's Encrypt
