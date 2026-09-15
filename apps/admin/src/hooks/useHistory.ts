@@ -10,7 +10,8 @@ import {
 } from '../api';
 import { ApiError } from '../types';
 import type { ChangeSet, EventPatch, LoadState, TrackerEvent, Utterance } from '../types';
-import { attachUtterances, buildSections } from '../lib/group';
+import { attachUtterances } from '../lib/group';
+import { buildJournal } from '../lib/journal';
 import { DAY, localDateKey, parseTs, startOfLocalDay } from '../lib/format';
 import { classifyPhrase } from '../lib/utterance';
 
@@ -305,16 +306,26 @@ export function useHistory() {
     });
   }, [utterances, withText, from, filters.types.length, setsByUtterance]);
 
+  const utterancesById = useMemo(() => {
+    const map = new Map<number, Utterance>();
+    for (const u of utterances) map.set(u.id, u);
+    return map;
+  }, [utterances]);
+
   const sections = useMemo(
-    () => buildSections(visible, orphans, setsByUtterance, eventsById),
-    [visible, orphans, setsByUtterance, eventsById],
+    () =>
+      buildJournal({
+        events: visible,
+        orphans,
+        setsByUtterance,
+        eventsById,
+        utterancesById,
+      }),
+    [visible, orphans, setsByUtterance, eventsById, utterancesById],
   );
 
   const deletedCount = useMemo(() => withText.filter((e) => e.deleted_at).length, [withText]);
-  const phraseCount = useMemo(
-    () => sections.reduce((sum, s) => sum + s.phrases, 0),
-    [sections],
-  );
+  const phraseCount = useMemo(() => sections.reduce((sum, s) => sum + s.phrases, 0), [sections]);
 
   return {
     filters,

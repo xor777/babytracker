@@ -25,6 +25,33 @@ function url(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/* ------------------------------------------------------------------
+ * Свежесть данных.
+ *
+ * Service worker помечает ответы из кэша заголовком x-cached-at. Экранам
+ * важно знать об этом: показать вчерашние цифры как сегодняшние — хуже,
+ * чем честно написать «данные от 19:45».
+ * ------------------------------------------------------------------ */
+
+let cachedAt: string | null = null;
+const freshnessListeners = new Set<(value: string | null) => void>();
+
+export function currentFreshness(): string | null {
+  return cachedAt;
+}
+
+export function onFreshness(fn: (value: string | null) => void): () => void {
+  freshnessListeners.add(fn);
+  return () => freshnessListeners.delete(fn);
+}
+
+function noteFreshness(res: Response): void {
+  const stamp = res.headers.get('x-cached-at');
+  if (stamp === cachedAt) return;
+  cachedAt = stamp;
+  for (const fn of freshnessListeners) fn(cachedAt);
+}
+
 /** Человеческий текст вместо «HTTP 401». Basic Auth стоит на Caddy (§10.4). */
 function describe(status: number, path: string): string {
   if (status === 401) return 'Нужен вход: обновите страницу и введите логин и пароль.';
@@ -53,6 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(0, 'Нет связи с сервером.');
   }
   if (!res.ok) throw new ApiError(res.status, describe(res.status, path));
+  noteFreshness(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }

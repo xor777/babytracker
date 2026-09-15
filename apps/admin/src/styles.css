@@ -50,6 +50,82 @@
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Производные токены: всё, что раньше было зашито числом прямо в правиле.
+     Светлая тема переопределяет только их — правила остаются общими. */
+  --bg-blur: rgba(7, 11, 14, 0.92);
+  --bg-elevated: #16232c;
+  --text-quote: #cfe0ea;
+  --on-accent: #04141a;
+  --cyan-hi: #6befff;
+  --tint: rgba(122, 190, 212, 0.07);
+  --tint-soft: rgba(122, 190, 212, 0.04);
+  --accent-line: rgba(63, 233, 255, 0.35);
+  --accent-ring: rgba(63, 233, 255, 0.16);
+  --accent-wash: rgba(63, 233, 255, 0.08);
+  --warn-text: #ffd79a;
+  --warn-bg: rgba(255, 180, 60, 0.12);
+  --warn-line: rgba(255, 180, 60, 0.32);
+  --danger-line: rgba(255, 107, 122, 0.35);
+  --sleep-wash: rgba(162, 115, 255, 0.15);
+  --scrim: rgba(2, 5, 7, 0.72);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* ============================================================
+   Светлая тема.
+
+   Это не инверсия тёмной: на белом нужны другие акценты (циан #3fe9ff
+   на белом нечитаем), другие границы и настоящие тени вместо свечений.
+   Сами правила ниже общие — тема меняет только токены.
+   ============================================================ */
+
+.theme-light {
+  --bg: #eef1f4;
+  --bg-card: #ffffff;
+  --bg-sunken: #e6ebef;
+  --bg-input: #ffffff;
+  --bg-hover: #e3e9ee;
+
+  --line: rgba(14, 42, 58, 0.14);
+  --line-strong: rgba(14, 42, 58, 0.26);
+
+  --text: #10222c;
+  --text-2: #4a6270;
+  --text-3: #748b98;
+
+  --cyan: #0b7f96;
+  --violet: #6b40c0;
+  --amber: #96580a;
+  --green: #0e7a52;
+  --red: #c0392b;
+
+  --t-sleep: #6b40c0;
+  --t-feed: #0b7f96;
+  --t-diaper: #0e7a52;
+  --t-measure: #96580a;
+  --t-meds: #3c4bbd;
+  --t-symptom: #b23a4c;
+  --t-activity: #5a7614;
+  --t-note: #5c7280;
+
+  --bg-blur: rgba(238, 241, 244, 0.92);
+  --bg-elevated: #ffffff;
+  --text-quote: #22333e;
+  --on-accent: #ffffff;
+  --cyan-hi: #0a6f83;
+  --tint: rgba(11, 127, 150, 0.07);
+  --tint-soft: rgba(11, 127, 150, 0.045);
+  --accent-line: rgba(11, 127, 150, 0.4);
+  --accent-ring: rgba(11, 127, 150, 0.22);
+  --accent-wash: rgba(11, 127, 150, 0.09);
+  --warn-text: #8a4f06;
+  --warn-bg: rgba(200, 120, 10, 0.12);
+  --warn-line: rgba(150, 88, 10, 0.32);
+  --danger-line: rgba(192, 57, 43, 0.35);
+  --sleep-wash: rgba(107, 64, 192, 0.13);
+  --scrim: rgba(20, 32, 40, 0.42);
+  --shadow: 0 10px 28px rgba(16, 34, 44, 0.18);
 }
 
 *,
@@ -121,6 +197,16 @@ button {
   white-space: nowrap;
 }
 
+/* На светлой теме плоские карточки сливаются с фоном — нужна лёгкая тень. */
+.theme-light .group,
+.theme-light .card,
+.theme-light .hero,
+.theme-light .lastcard,
+.theme-light .jlist,
+.theme-light .empty {
+  box-shadow: 0 1px 2px rgba(16, 34, 44, 0.06), 0 1px 1px rgba(16, 34, 44, 0.04);
+}
+
 /* ============================================================
    Каркас
    ============================================================ */
@@ -136,7 +222,7 @@ button {
   top: 0;
   z-index: 40;
   padding: calc(var(--safe-top) + 10px) 14px 0;
-  background: rgba(7, 11, 14, 0.92);
+  background: var(--bg-blur);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
 }
@@ -242,9 +328,9 @@ button {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   font-size: 13.5px;
-  background: rgba(255, 180, 60, 0.08);
-  border: 1px solid rgba(255, 180, 60, 0.3);
-  color: #ffd79a;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  color: var(--warn-text);
 }
 
 .banner__btn {
@@ -255,13 +341,13 @@ button {
   border-radius: 7px;
   font-size: 13px;
   font-weight: 550;
-  color: #ffd79a;
-  border: 1px solid rgba(255, 180, 60, 0.4);
+  color: var(--warn-text);
+  border: 1px solid var(--warn-line);
 }
 
 .banner--quiet {
   color: var(--text-2);
-  background: rgba(122, 190, 212, 0.07);
+  background: var(--tint);
   border-color: var(--line);
 }
 
@@ -371,7 +457,7 @@ button {
   gap: 8px;
   margin: 14px -12px 8px;
   padding: 7px 12px;
-  background: rgba(7, 11, 14, 0.94);
+  background: var(--bg-blur);
   backdrop-filter: blur(10px);
 }
 
@@ -423,7 +509,7 @@ button {
   display: block;
   font-size: 14.5px;
   line-height: 1.35;
-  color: #cfe0ea;
+  color: var(--text-quote);
 }
 
 .said__text::before {
@@ -451,7 +537,7 @@ button {
 }
 
 .said--failed {
-  background: linear-gradient(180deg, rgba(255, 180, 60, 0.08), rgba(255, 180, 60, 0));
+  background: linear-gradient(180deg, var(--warn-bg), rgba(255, 180, 60, 0));
 }
 
 .said--failed .said__text::before,
@@ -503,7 +589,7 @@ button {
 }
 
 .event-wrap + .event-wrap {
-  border-top: 1px solid rgba(122, 190, 212, 0.07);
+  border-top: 1px solid var(--tint);
 }
 
 .event:active {
@@ -608,17 +694,17 @@ button {
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--text-3);
-  background: rgba(122, 190, 212, 0.08);
+  background: var(--tint);
 }
 
 .badge--warn {
-  color: #ffce8a;
-  background: rgba(255, 180, 60, 0.13);
+  color: var(--warn-text);
+  background: var(--warn-bg);
 }
 
 .badge--open {
   color: var(--violet);
-  background: rgba(162, 115, 255, 0.14);
+  background: var(--sleep-wash);
 }
 
 .event--deleted .event__type,
@@ -648,7 +734,7 @@ button {
   font-size: 13px;
   font-weight: 600;
   color: var(--cyan);
-  border: 1px solid rgba(63, 233, 255, 0.35);
+  border: 1px solid var(--accent-line);
 }
 
 /* Затемняем содержимое удалённой строки, но не кнопку возврата. */
@@ -669,7 +755,7 @@ button {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(2, 5, 7, 0.72);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   animation: fade-in 160ms ease both;
 }
@@ -763,9 +849,9 @@ button {
   flex: none;
   padding: 10px 14px;
   font-size: 13.5px;
-  color: #ffd79a;
-  background: rgba(255, 180, 60, 0.12);
-  border-top: 1px solid rgba(255, 180, 60, 0.3);
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-top: 1px solid var(--warn-line);
 }
 
 .sheet__foot {
@@ -827,7 +913,7 @@ textarea.input {
 .input:focus {
   border-color: var(--line-strong);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(63, 233, 255, 0.16);
+  box-shadow: 0 0 0 2px var(--accent-ring);
 }
 
 .input--time {
@@ -854,7 +940,7 @@ textarea.input {
   border: 1px solid var(--line);
   border-left: 2px solid var(--violet);
   font-size: 14px;
-  color: #cfe0ea;
+  color: var(--text-quote);
 }
 
 .meta-list {
@@ -906,18 +992,18 @@ textarea.input {
 
 .btn--primary {
   flex: 1;
-  color: #04141a;
+  color: var(--on-accent);
   background: var(--cyan);
   border-color: transparent;
 }
 
 .btn--primary:active {
-  background: #6befff;
+  background: var(--cyan-hi);
 }
 
 .btn--danger {
   color: var(--red);
-  border-color: rgba(255, 107, 122, 0.35);
+  border-color: var(--danger-line);
   background: transparent;
 }
 
@@ -940,9 +1026,9 @@ textarea.input {
   border-radius: 11px;
   font-size: 14px;
   color: var(--text);
-  background: #16232c;
+  background: var(--bg-elevated);
   border: 1px solid var(--line-strong);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow);
   animation: sheet-up 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -955,7 +1041,7 @@ textarea.input {
   font-size: 14px;
   font-weight: 600;
   color: var(--cyan);
-  border: 1px solid rgba(63, 233, 255, 0.35);
+  border: 1px solid var(--accent-line);
 }
 
 /* ============================================================
@@ -1033,7 +1119,7 @@ textarea.input {
 }
 
 .meter__status[data-tone='off'] {
-  color: #ffce8a;
+  color: var(--warn-text);
 }
 
 .meter__note {
@@ -1509,7 +1595,7 @@ textarea.input {
 }
 
 .bars__col--today {
-  background: rgba(122, 190, 212, 0.07);
+  background: var(--tint);
 }
 
 .bars__fill {
@@ -1601,8 +1687,8 @@ textarea.input {
   border-radius: 50%;
   font-size: 18px;
   color: var(--cyan);
-  background: rgba(63, 233, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(63, 233, 255, 0.25);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 
 .empty__title {
@@ -1676,7 +1762,7 @@ textarea.input {
 }
 
 .said--gap {
-  background: linear-gradient(180deg, rgba(255, 180, 60, 0.08), rgba(255, 180, 60, 0));
+  background: linear-gradient(180deg, var(--warn-bg), rgba(255, 180, 60, 0));
 }
 
 .said--gap .said__text::before,
@@ -1781,7 +1867,7 @@ textarea.input {
   gap: 8px;
   padding: 9px 12px 10px;
   border-top: 1px solid var(--line);
-  background: rgba(122, 190, 212, 0.04);
+  background: var(--tint-soft);
 }
 
 .undo__hint {
@@ -1800,7 +1886,7 @@ textarea.input {
   font-size: 13px;
   font-weight: 600;
   color: var(--cyan);
-  border: 1px solid rgba(63, 233, 255, 0.35);
+  border: 1px solid var(--accent-line);
 }
 
 .undo__btn[disabled] {
@@ -1816,4 +1902,303 @@ textarea.input {
   font-size: 13px;
   color: var(--text-2);
   border: 1px solid var(--line);
+}
+
+/* ============================================================
+   Журнал: плоская лента, строка = событие
+   ============================================================ */
+
+.jlist {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.jrow {
+  position: relative;
+}
+
+.jrow + .jrow {
+  border-top: 1px solid var(--tint);
+}
+
+.jrow__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 10px 9px 12px;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.jrow__head:active {
+  background: var(--bg-hover);
+}
+
+.jrow__time {
+  flex: none;
+  width: 42px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.jrow__icon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--tone, var(--text-3));
+}
+
+.jrow__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jrow__text--said {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+/* Пометка «стоит развернуть»: спокойная, но глаз за неё цепляется.
+   Это данные о ребёнке — тревожный цвет здесь неуместен. */
+.jrow--check::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--amber);
+  opacity: 0.75;
+}
+
+.jrow__flag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--amber);
+  background: var(--warn-bg);
+}
+
+.jrow__chev {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.jrow--open {
+  background: var(--tint-soft);
+}
+
+.jrow--deleted .jrow__text {
+  text-decoration: line-through;
+  color: var(--text-3);
+}
+
+.jrow--busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* --- разворот --- */
+
+.jdet {
+  padding: 2px 12px 13px 63px;
+}
+
+.jdet__said {
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text-quote);
+}
+
+.jdet__said--none {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.jdet__warn {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--amber);
+}
+
+.jdet__note {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.jdet__line {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+.jdet__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin-top: 9px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.jdet__meta dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text-2);
+  font-family: var(--mono);
+}
+
+.jdet__touched {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 8px;
+  padding: 8px 11px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.jdet__touched-open {
+  margin-left: auto;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--cyan);
+}
+
+.jdet__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.jbtn {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+}
+
+.jbtn--accent {
+  color: var(--cyan);
+  border-color: var(--accent-line);
+}
+
+.jbtn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+@media (max-width: 374px) {
+  .jrow__head {
+    gap: 7px;
+    padding-left: 10px;
+  }
+
+  .jrow__time {
+    width: 38px;
+    font-size: 12px;
+  }
+
+  .jrow__text {
+    font-size: 13.5px;
+  }
+
+  .jdet {
+    padding-left: 57px;
+  }
+}
+
+/* ============================================================
+   Офлайн-полоска
+   ============================================================ */
+
+.offline {
+  position: sticky;
+  top: calc(var(--safe-top) + var(--chrome, 106px));
+  z-index: 25;
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  text-align: center;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-line);
+}
+
+/* ============================================================
+   Узкие телефоны (360 и уже): крупные числа не должны переноситься
+   ============================================================ */
+
+@media (max-width: 374px) {
+  .hero__hm {
+    font-size: 40px;
+  }
+
+  .metric__value {
+    font-size: 28px;
+  }
+
+  .tile__value {
+    font-size: 20px;
+    white-space: nowrap;
+  }
+
+  .tile__label,
+  .lastcard__label {
+    font-size: 11px;
+  }
+
+  .lastcard__value {
+    font-size: 13px;
+  }
+
+  .lastcard__sub {
+    font-size: 11px;
+  }
+
+  .substat__value {
+    font-size: 19px;
+    white-space: nowrap;
+  }
+
+  .segmented__item {
+    font-size: 13px;
+  }
 }

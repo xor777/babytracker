@@ -6,9 +6,39 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#070b0e" />
-    <title>BabyTracker · журнал</title>
+    <meta name="description" content="Дневник ребёнка: состояние, сводка и журнал записей." />
+
+    <title>BabyTracker · дневник</title>
+
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+
+    <!-- iOS: запуск с домашнего экрана без адресной строки -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="BabyTracker" />
+
+    <script>
+      /* Тема до первого кадра: иначе при светлой настройке экран моргнёт тёмным. */
+      (function () {
+        try {
+          var mode = localStorage.getItem('bt-theme') || 'system';
+          var light =
+            mode === 'light' ||
+            (mode === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
+          if (light) {
+            document.documentElement.classList.add('theme-light');
+            document
+              .querySelector('meta[name="theme-color"]')
+              .setAttribute('content', '#eef1f4');
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

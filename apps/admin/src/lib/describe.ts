@@ -9,6 +9,22 @@ import { HOUR, durationMin, formatMinutes, formatNumber, formatWeight, parseTs }
  */
 const STILL_GOING = 12 * HOUR;
 
+/**
+ * Модель помечает собственные допущения префиксом [?] в заметке
+ * («[?] время не называлось, взята граница»). Для ленты это сигнал:
+ * строку стоит развернуть и проверить.
+ */
+export const ASSUMPTION_MARK = '[?]';
+
+export function isAssumption(note: string | null | undefined): boolean {
+  return (note ?? '').trimStart().startsWith(ASSUMPTION_MARK);
+}
+
+export function stripAssumption(note: string | null | undefined): string {
+  const raw = (note ?? '').trim();
+  return raw.startsWith(ASSUMPTION_MARK) ? raw.slice(ASSUMPTION_MARK.length).trim() : raw;
+}
+
 export interface EventLines {
   /** «Кормление» */
   title: string;
@@ -34,6 +50,40 @@ function valueText(e: TrackerEvent): string | null {
   return `${formatNumber(e.value_num, Number.isInteger(e.value_num) ? 0 : 1)} ${unitLabel(e.value_unit)}`.trim();
 }
 
+/**
+ * Одна строка дневника: «Кормление, грудь, 15 мин».
+ *
+ * Свёрнутая лента читается глазами сверху вниз, поэтому здесь важна краткость,
+ * а не полнота: подробности человек получает, развернув строку.
+ */
+export function summaryLine(e: TrackerEvent): string {
+  const lines = describeEvent(e);
+
+  // Измерения читаются естественнее без слова «Измерение»: «Вес 4,62 кг».
+  if (e.type === 'measure') {
+    const what =
+      { weight: 'Вес', height: 'Рост', head: 'Окружность головы', temp: 'Температура' }[
+        e.subtype ?? ''
+      ] ?? 'Измерение';
+    return [what, ...lines.parts].join(' ');
+  }
+
+  if (e.type === 'note') {
+    const text = stripAssumption(e.note);
+    return text ? `Заметка: ${text}` : 'Заметка';
+  }
+
+  if (e.type === 'meds') {
+    return [e.subtype || 'Лекарство', ...lines.parts].join(', ');
+  }
+
+  const bits = [lines.title];
+  if (lines.sub) bits.push(lines.sub);
+  for (const p of lines.parts) bits.push(p);
+  if (lines.open) bits.push('идёт');
+  return bits.join(', ');
+}
+
 export function describeEvent(e: TrackerEvent): EventLines {
   const def = typeDef(e.type);
   const parts: string[] = [];
@@ -46,6 +96,9 @@ export function describeEvent(e: TrackerEvent): EventLines {
     !e.ended_at &&
     startedMs != null &&
     Date.now() - startedMs < STILL_GOING;
+
+  // Префикс [?] — служебная пометка модели, человеку её показывать не надо.
+  if (isAssumption(note)) note = stripAssumption(note) || null;
 
   const value = valueText(e);
   if (value) parts.push(value);

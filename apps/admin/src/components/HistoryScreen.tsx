@@ -3,7 +3,7 @@ import type { TrackerEvent } from '../types';
 import { useHistory } from '../hooks/useHistory';
 import { dayTitle, formatDay, plural } from '../lib/format';
 import { Filters, RANGES } from './Filters';
-import { GroupCard } from './GroupCard';
+import { JournalEventRow, JournalPhraseRow } from './JournalRow';
 import { EventSheet } from './EventSheet';
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
 export function HistoryScreen({ onBusy }: Props) {
   const h = useHistory();
   const [openId, setOpenId] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [undoId, setUndoId] = useState<number | null>(null);
   const [undone, setUndone] = useState(false);
 
@@ -22,8 +23,8 @@ export function HistoryScreen({ onBusy }: Props) {
     openId == null
       ? null
       : (h.sections
-          .flatMap((s) => s.groups)
-          .flatMap((g) => g.events)
+          .flatMap((s) => s.rows)
+          .flatMap((r) => (r.kind === 'event' ? [r.event] : r.touched))
           .find((e) => e.id === openId) ?? null);
 
   const remove = useCallback(
@@ -171,17 +172,34 @@ export function HistoryScreen({ onBusy }: Props) {
                 : null}
             </span>
           </header>
-          {section.groups.map((group) => (
-            <GroupCard
-              key={group.key}
-              group={group}
-              busyId={h.busyId}
-              busySet={h.busySet}
-              onOpen={(e) => setOpenId(e.id)}
-              onRestore={restore}
-              onUndo={undo}
-            />
-          ))}
+
+          <div className="jlist">
+            {section.rows.map((row) =>
+              row.kind === 'event' ? (
+                <JournalEventRow
+                  key={row.key}
+                  row={row}
+                  open={expanded === row.key}
+                  busy={h.busyId === row.event.id}
+                  busySet={h.busySet}
+                  onToggle={() => setExpanded((cur) => (cur === row.key ? null : row.key))}
+                  onEdit={(e) => setOpenId(e.id)}
+                  onRestore={restore}
+                  onUndo={undo}
+                />
+              ) : (
+                <JournalPhraseRow
+                  key={row.key}
+                  row={row}
+                  open={expanded === row.key}
+                  busySet={h.busySet}
+                  onToggle={() => setExpanded((cur) => (cur === row.key ? null : row.key))}
+                  onEdit={(e) => setOpenId(e.id)}
+                  onUndo={undo}
+                />
+              ),
+            )}
+          </div>
         </section>
       ))}
 

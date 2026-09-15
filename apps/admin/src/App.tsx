@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTheme } from './hooks/useTheme';
+import { useConnection } from './hooks/useConnection';
+import { SettingsSheet } from './components/SettingsSheet';
+import { formatWhen } from './lib/format';
 import { fetchState } from './api';
 import { ApiError } from './types';
 import { useHashRoute } from './hooks/useHashRoute';
@@ -28,6 +32,9 @@ export function App() {
   const [child, setChild] = useState<Child | null>(null);
   const [authBlocked, setAuthBlocked] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const theme = useTheme();
+  const link = useConnection();
 
   useEffect(() => {
     const ac = new AbortController();
@@ -54,7 +61,17 @@ export function App() {
   if (authBlocked) {
     return (
       <div className="app">
-        <main className="main">
+        {/* Офлайн: показываем последнее известное состояние, но честно датируем его. */}
+      {link.stale || !link.online ? (
+        <div className="offline" role="status">
+          {link.online ? 'Сервер не ответил' : 'Нет сети'}
+          {link.cachedAt
+            ? ` · данные от ${formatWhen(link.cachedAt)}`
+            : ' · показано последнее, что загрузилось'}
+        </div>
+      ) : null}
+
+      <main className="main">
           <p className="placeholder">
             <span className="placeholder__big">Нужен вход</span>
             Сервер просит логин и пароль. Обновите страницу — браузер спросит их снова.
@@ -105,6 +122,23 @@ export function App() {
               />
             </svg>
           </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setSettings(true)}
+            aria-label="Настройки"
+            title="Настройки"
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.1" stroke="currentColor" strokeWidth="1.8" />
+              <path
+                d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
         </div>
 
         <div className="segmented" role="tablist">
@@ -123,11 +157,31 @@ export function App() {
         </div>
       </header>
 
+      {/* Офлайн: показываем последнее известное состояние, но честно датируем его. */}
+      {link.stale || !link.online ? (
+        <div className="offline" role="status">
+          {link.online ? 'Сервер не ответил' : 'Нет сети'}
+          {link.cachedAt
+            ? ` · данные от ${formatWhen(link.cachedAt)}`
+            : ' · показано последнее, что загрузилось'}
+        </div>
+      ) : null}
+
       <main className="main">
         {route === 'overview' ? <OverviewScreen /> : null}
         {route === 'stats' ? <StatsScreen /> : null}
         {route === 'history' ? <HistoryScreen onBusy={onBusy} /> : null}
       </main>
+
+      {settings ? (
+        <SettingsSheet
+          mode={theme.mode}
+          onChoose={theme.choose}
+          cachedAt={link.cachedAt}
+          online={link.online}
+          onClose={() => setSettings(false)}
+        />
+      ) : null}
     </div>
   );
 }
