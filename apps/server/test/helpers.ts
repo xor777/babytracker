@@ -3,7 +3,7 @@
 import { loadConfig, type Config } from '../src/config.ts';
 import { openDb, type Db } from '../src/db.ts';
 import { createApp } from '../src/app.ts';
-import type { AppContext } from '../src/context.ts';
+import type { AppContext, WorkerStatus } from '../src/context.ts';
 import type { FastifyInstance } from 'fastify';
 
 export const TEST_SECRET = '0123456789abcdef0123456789abcdef';
@@ -32,19 +32,22 @@ export interface TestApp {
   ctx: AppContext;
   cfg: Config;
   db: Db;
+  /** Подключить статус настоящего воркера к /healthz (по умолчанию там заглушка). */
+  setWorkerStatus: (fn: () => WorkerStatus) => void;
   close: () => Promise<void>;
 }
 
 export async function makeTestApp(env: Record<string, string> = {}): Promise<TestApp> {
   const cfg = testConfig(env);
   const db = testDb();
-  const { app, ctx, sse } = createApp({ cfg, db, logger: false, serveStatic: false });
+  const { app, ctx, sse, setWorkerStatus } = createApp({ cfg, db, logger: false, serveStatic: false });
   await app.ready();
   return {
     app,
     ctx,
     cfg,
     db,
+    setWorkerStatus,
     close: async () => {
       sse.close();
       await app.close();

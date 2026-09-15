@@ -100,6 +100,7 @@ const IDLE_WORKER: WorkerStatus = {
   alive: false,
   lastRunAt: null,
   queueDepth: 0,
+  oldestPendingAt: null,
   claudeAvailable: false,
   claudeProblem: null,
   rateLimited: false,

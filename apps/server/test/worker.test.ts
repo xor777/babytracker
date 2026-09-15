@@ -29,7 +29,7 @@ function fakeClaude(name: string, body: string): string {
 
 const VERSION_OK = `case "$1" in --version) echo "9.9.9 (fake)"; exit 0;; esac`;
 
-test('claude не установлен: фраза помечается skipped, событие fast-path остаётся', async (t) => {
+test('claude не установлен: фраза ЖДЁТ в очереди, событие fast-path остаётся', async (t) => {
   const h = await makeTestApp({ CLAUDE_BIN: '/nonexistent/claude', WORKER_ENABLED: 'true' });
   t.after(() => h.close());
 
@@ -43,13 +43,20 @@ test('claude не установлен: фраза помечается skipped,
 
   insertUtterance(h.db, { rawText: 'андрей заснул', fastResult: { kind: 'sleep_start' } });
   await worker.tick();
+  await worker.tick();
+  await worker.tick();
 
   const row = listUtterances(h.db)[0];
-  assert.equal(row?.status, 'skipped', 'запись должна быть skipped, а не висеть в pending');
-  assert.equal(row?.attempts, 1, 'попытки не жжём: CLI всё равно нет');
+  // Раньше здесь стоял терминальный skipped, и фраза исчезала из разбора
+  // навсегда — молча, потому что skipped с понятным матчеру kind админка
+  // не показывает вовсе. Теперь недоступность CLI фразу не хоронит.
+  assert.equal(row?.status, 'pending', 'фраза должна ждать возвращения CLI, а не гаснуть');
+  assert.equal(row?.attempts, 0, 'попытки не жжём: разбирать нечем, фраза ни при чём');
+  assert.equal(worker.status().queueDepth, 1, 'очередь видна снаружи');
+  assert.ok(worker.status().oldestPendingAt, 'видно, с какого момента она стоит');
 });
 
-test('claude установлен, но не авторизован: сразу skipped, без трёх попыток', async (t) => {
+test('claude установлен, но не авторизован: фраза возвращается в очередь, CLI помечен мёртвым', async (t) => {
   const bin = fakeClaude(
     'claude',
     `${VERSION_OK}
@@ -71,10 +78,20 @@ exit 1`,
   await worker.tick();
 
   const row = listUtterances(h.db)[0];
-  assert.equal(row?.status, 'skipped', 'проблема авторизации не лечится повтором');
-  assert.equal(row?.attempts, 1);
+  // Протухший токен фразу больше не хоронит: она остаётся в очереди.
+  // Попытка при этом списана — иначе «--version проходит, разбор падает 401»
+  // крутилось бы вечно (см. комментарий в worker.ts).
+  assert.equal(row?.status, 'pending', 'проблема авторизации фразу не хоронит');
+  assert.equal(row?.attempts, 1, 'попытка списана — это страховка от вечного круга');
+  assert.match(row?.llm_error ?? '', /authenticate/i, 'причина видна в ленте');
   assert.equal(worker.status().claudeAvailable, false);
   assert.match(worker.status().claudeProblem ?? '', /authenticate/i);
+
+  // Пока CLI считается мёртвым, очередь не разбирается вовсе: ни попыток, ни запусков.
+  await worker.tick();
+  await worker.tick();
+  assert.equal(listUtterances(h.db)[0]?.attempts, 1, 'простой не расходует попытки');
+  assert.equal(listUtterances(h.db)[0]?.status, 'pending');
 });
 
 test('успешный разбор: статус done и llm_result сохранён', async (t) => {
@@ -164,7 +181,7 @@ test('WORKER_ENABLED=false: очередь не разбирается, серв
   assert.equal(worker.status().alive, false);
 });
 
-test('фразы, помеченные skipped, не мешают fast-path писать события', async (t) => {
+test('фразы, ждущие мёртвого claude, не мешают fast-path писать события', async (t) => {
   const h = await makeTestApp({ CLAUDE_BIN: '/nonexistent/claude', WORKER_ENABLED: 'true' });
   t.after(() => h.close());
 
@@ -186,7 +203,11 @@ test('фразы, помеченные skipped, не мешают fast-path пи
   assert.equal(queryEvents(h.db, { type: 'sleep' }).length, 1, 'сон записан несмотря на мёртвый LLM');
 
   await worker.tick();
-  assert.equal(listUtterances(h.db)[0]?.status, 'skipped');
+  assert.equal(
+    listUtterances(h.db)[0]?.status,
+    'pending',
+    'фраза ждёт разбора — сервер обязан работать без claude, но не терять фразы',
+  );
   assert.equal(queryEvents(h.db, { type: 'sleep' }).length, 1, 'событие никуда не делось');
 });
 

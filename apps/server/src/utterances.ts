@@ -190,6 +190,110 @@ export function queueDepth(db: Db): number {
   return count(db, `SELECT COUNT(*) AS n FROM utterances WHERE status = 'pending'`);
 }
 
+/**
+ * Когда пришла самая старая фраза, ждущая разбора. null — очередь пуста.
+ *
+ * Отвечает на вопрос, на который глубина очереди не отвечает: очередь движется
+ * или стоит? Две фразы, ждущие минуту, — это работа; две, ждущие с ночи, — это
+ * простой, о котором никто не узнал.
+ */
+export function oldestPendingAt(db: Db): string | null {
+  const row = get<{ received_at: string }>(
+    db,
+    `SELECT received_at FROM utterances
+      WHERE status = 'pending' ORDER BY received_at ASC, id ASC LIMIT 1`,
+  );
+  return row?.received_at ?? null;
+}
+
+/** Статусы, из которых фразу имеет смысл возвращать в разбор пачкой. */
+export const REQUEUABLE_STATUSES: readonly UtteranceStatus[] = ['failed', 'skipped'];
+
+export interface RequeueManyInput {
+  /** Конкретные id. Взаимоисключимо со `statuses` по смыслу, но можно оба. */
+  ids?: number[];
+  /** Вернуть все фразы в этих статусах (`failed` / `skipped`). */
+  statuses?: string[];
+  /** Не трогать фразы старше этого момента (ISO) — «разобрать за сегодня». */
+  since?: string | null;
+  /** Предохранитель от «вернуть в очередь весь дневник за полгода». */
+  limit?: number;
+}
+
+export const REQUEUE_MANY_LIMIT_DEFAULT = 50;
+export const REQUEUE_MANY_LIMIT_MAX = 500;
+
+/**
+ * Массовый возврат фраз в разбор (§9.4).
+ *
+ * Зачем сверх `reparse` по одному id: терминальный статус — это всегда либо
+ * ошибка разбора, либо решение прошлой политики, и оба случая приходят пачками
+ * (CLI падал час; политику переключили на `all`, а вчерашние фразы остались
+ * погашенными старой). Возвращать такое по одной кнопке на фразу — работа,
+ * которую человек просто не сделает, а значит дневник останется дырявым.
+ *
+ * Механика ровно та же, что у `reparseUtterance`: попытки обнуляются,
+ * `reparse_count` растёт (по нему модель понимает, что события по фразе уже
+ * могли быть созданы, и не плодит дубли). Порядок разбора — хронологический,
+ * его обеспечивает `claimNextPending`.
+ */
+export function requeueMany(db: Db, input: RequeueManyInput): UtteranceRow[] {
+  const limit = Math.min(
+    Math.max(1, Math.trunc(input.limit ?? REQUEUE_MANY_LIMIT_DEFAULT)),
+    REQUEUE_MANY_LIMIT_MAX,
+  );
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  const ids = (input.ids ?? []).filter((id) => Number.isInteger(id) && id > 0);
+  // Неизвестный статус молча игнорируем, а не расширяем им отбор.
+  const statuses = (input.statuses ?? []).filter((s) =>
+    (REQUEUABLE_STATUSES as readonly string[]).includes(s),
+  );
+
+  if (ids.length > 0 && statuses.length > 0) {
+    where.push(
+      `(id IN (${ids.map(() => '?').join(',')}) OR status IN (${statuses.map(() => '?').join(',')}))`,
+    );
+    params.push(...ids, ...statuses);
+  } else if (ids.length > 0) {
+    where.push(`id IN (${ids.map(() => '?').join(',')})`);
+    params.push(...ids);
+  } else if (statuses.length > 0) {
+    where.push(`status IN (${statuses.map(() => '?').join(',')})`);
+    params.push(...statuses);
+  } else {
+    // Пустой отбор — это «верни всё»; молча делать такое нельзя.
+    return [];
+  }
+
+  // Фразу, которая уже ждёт или разбирается прямо сейчас, трогать незачем:
+  // сброс её attempts посреди работы воркера — гонка на ровном месте.
+  where.push(`status NOT IN ('pending', 'processing')`);
+
+  if (input.since) {
+    where.push(`received_at >= ?`);
+    params.push(input.since);
+  }
+
+  const candidates = all<UtteranceRow>(
+    db,
+    `SELECT ${UTTERANCE_COLUMNS} FROM utterances
+      WHERE ${where.join(' AND ')}
+      ORDER BY received_at ASC, id ASC
+      LIMIT ?`,
+    [...params.map((v) => p(v)), p(limit)],
+  );
+
+  const result: UtteranceRow[] = [];
+  for (const row of candidates) {
+    const updated = reparseUtterance(db, row.id);
+    if (updated) result.push(updated);
+  }
+  return result;
+}
+
 function parseJson(value: string | null): unknown {
   if (value === null) return null;
   try {

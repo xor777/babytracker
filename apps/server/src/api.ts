@@ -22,10 +22,14 @@ import {
 } from './events.ts';
 import { EVENT_TYPES, VALUE_UNITS } from './taxonomy.ts';
 import {
+  REQUEUABLE_STATUSES,
+  REQUEUE_MANY_LIMIT_DEFAULT,
+  REQUEUE_MANY_LIMIT_MAX,
   UTTERANCES_LIMIT_DEFAULT,
   UTTERANCES_LIMIT_MAX,
   listUtterances,
   reparseUtterance,
+  requeueMany,
   toUtteranceDto,
 } from './utterances.ts';
 import {
@@ -70,6 +74,20 @@ const dailyQuerySchema = z.object({
 
 const utterancesQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(UTTERANCES_LIMIT_MAX).optional(),
+});
+
+/**
+ * Массовый переразбор. `statuses` ограничен терминальными намеренно: вернуть
+ * в очередь `done` пачкой — это переписать уже разобранный дневник, такое
+ * делается осознанно по id.
+ */
+const reparseManySchema = z.object({
+  ids: z.array(z.number().int().positive()).max(REQUEUE_MANY_LIMIT_MAX).optional(),
+  statuses: z
+    .array(z.enum(REQUEUABLE_STATUSES as unknown as [string, ...string[]]))
+    .optional(),
+  since: isoish.optional(),
+  limit: z.number().int().positive().max(REQUEUE_MANY_LIMIT_MAX).optional(),
 });
 
 /** §3.7: тело — Event без id/created_at/updated_at; source принудительно 'manual'. */
@@ -139,6 +157,13 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
         alive: worker.alive,
         lastRunAt: worker.lastRunAt,
         queueDepth: worker.queueDepth,
+        // Возраст очереди: пока CLI лежит, фразы копятся (а не гасятся), и
+        // отличить живую очередь от стоящей можно только по времени старшей.
+        oldestPendingAt: worker.oldestPendingAt,
+        queueLagSec:
+          worker.oldestPendingAt === null
+            ? 0
+            : Math.max(0, Math.round((Date.now() - Date.parse(worker.oldestPendingAt)) / 1000)),
         // сверх контракта, но без этого невозможно понять, почему всё skipped
         enabled: worker.enabled,
         claudeAvailable: worker.claudeAvailable,
@@ -255,6 +280,51 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       return { utterance: dto };
     },
   );
+
+  /* -------------------------------------------------------------- */
+  /**
+   * Массовый возврат фраз в разбор.
+   *
+   * Кнопка «разобрать заново» по одному id чинит одну замеченную ошибку, но
+   * терминальные статусы копятся пачками: CLI падал час; политику переключили
+   * на `all`, а вчерашние фразы остались погашенными прежней. Возвращать это
+   * по фразе за раз — работа, которую человек не сделает, и дневник останется
+   * дырявым. Поэтому тот же механизм, но по отбору.
+   *
+   * Отбор всегда явный: либо перечисленные id, либо статусы `failed`/`skipped`.
+   * Пустое тело не значит «верни всё» — оно отвергается: массовая операция без
+   * названного отбора слишком легко делается случайно.
+   */
+  app.post('/api/utterances/reparse', async (request: FastifyRequest, reply) => {
+    const parsed = reparseManySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return badRequest(reply, parsed.error.issues);
+
+    const { ids, statuses, since, limit } = parsed.data;
+    if ((ids?.length ?? 0) === 0 && (statuses?.length ?? 0) === 0) {
+      return badRequest(reply, 'нужен отбор: ids или statuses (failed / skipped)');
+    }
+
+    const rows = requeueMany(db, {
+      ids,
+      statuses,
+      since: since ?? null,
+      limit: limit ?? REQUEUE_MANY_LIMIT_DEFAULT,
+    });
+    const utterances = rows.map(toUtteranceDto);
+
+    defer(ctx, () => {
+      for (const dto of utterances) sse.broadcastUtterance(dto);
+      ctx.notifyWorker();
+    });
+
+    ctx.log.info(
+      { count: utterances.length, ids: utterances.map((u) => u.id), statuses, since },
+      'фразы отправлены на повторный разбор пачкой',
+    );
+
+    reply.code(202);
+    return { requeued: utterances.length, utterances };
+  });
 
   /* -------------------------------------------------------------- */
   /** §10.4: правка руками. Через журнал — ручные правки так же обратимы. */
