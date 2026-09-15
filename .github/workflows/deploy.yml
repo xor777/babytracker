@@ -36,12 +36,15 @@ jobs:
         run: |
           pnpm --filter ./apps/server typecheck
           pnpm --filter ./apps/dashboard typecheck
+          pnpm --filter ./apps/admin typecheck
 
       - name: Тесты сервера
         run: pnpm --filter ./apps/server test
 
-      - name: Сборка дашборда
-        run: pnpm --filter ./apps/dashboard build
+      - name: Сборка дашбордов
+        run: |
+          pnpm --filter ./apps/dashboard build
+          pnpm --filter ./apps/admin build
 
   deploy:
     name: Выкатка на прод

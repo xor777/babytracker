@@ -1,0 +1,751 @@
+#!/usr/bin/env node
+/**
+ * Мок сервера BabyTracker для разработки админки /dash.
+ * Чистый node, без зависимостей. Реализует docs/CONTRACT.md §3, §9.6 и §10.4:
+ *
+ *   GET    /api/events?from&to&type&limit&include_deleted
+ *   POST   /api/events
+ *   PATCH  /api/events/:id          — ручная правка
+ *   DELETE /api/events/:id          — мягкое удаление (физического не существует, §9.1)
+ *   POST   /api/events/:id/restore  — вернуть удалённое
+ *   GET    /api/utterances?limit
+ *   GET    /api/stats/daily?days
+ *   GET    /api/state, /healthz
+ *
+ * Данные — семь дней жизни с составными фразами и намеренными ошибками разбора,
+ * которые хочется поправить руками: ровно то, ради чего админка и делается.
+ *
+ *   node mock-server.mjs              → http://localhost:8787
+ *   MOCK_401=1 node mock-server.mjs   → всё под /api отвечает 401 (проверить обработку)
+ *
+ * Если рядом лежит ./dist — отдаёт его по /dash, как это будет делать настоящий сервер.
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const PORT = Number(process.env.PORT ?? 8787);
+const CHILD_NAME = process.env.CHILD_NAME ?? 'Андрей';
+const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-03-01';
+const FORCE_401 = process.env.MOCK_401 === '1';
+const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
+
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+
+// ------------------------------------------------------------------ хранилище
+
+/** @type {any[]} */
+const events = [];
+/** @type {any[]} */
+const utterances = [];
+let eventSeq = 0;
+let uttSeq = 0;
+
+function iso(ms) {
+  return new Date(ms).toISOString();
+}
+
+/** Момент в локальной зоне: daysAgo суток назад, в h:m. */
+function at(daysAgo, h, m = 0) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(h, m, 0, 0);
+  return d.getTime();
+}
+
+function say(rawText, receivedMs, status = 'done') {
+  const u = {
+    id: ++uttSeq,
+    raw_text: rawText,
+    alice_user_id: 'mock-user',
+    session_id: 'mock-session',
+    received_at: iso(receivedMs),
+    status,
+    fast_result: null,
+    llm_result: null,
+    llm_error: status === 'failed' ? 'timeout: claude не ответил за 60 с' : null,
+    attempts: status === 'failed' ? 3 : 1,
+    processed_at: status === 'done' ? iso(receivedMs + 4200) : null,
+  };
+  utterances.push(u);
+  return u;
+}
+
+function add(e) {
+  const created = e.started_at;
+  const row = {
+    id: ++eventSeq,
+    child_id: 'andrey',
+    type: e.type,
+    subtype: e.subtype ?? null,
+    started_at: iso(e.started_at),
+    ended_at: e.ended_at != null ? iso(e.ended_at) : null,
+    value_num: e.value_num ?? null,
+    value_unit: e.value_unit ?? null,
+    note: e.note ?? null,
+    source: e.source ?? 'alice-llm',
+    utterance_id: e.utterance?.id ?? null,
+    confidence: e.confidence ?? null,
+    created_at: iso(created),
+    updated_at: iso(created),
+    deleted_at: e.deleted_at != null ? iso(e.deleted_at) : null,
+  };
+  events.push(row);
+  return row;
+}
+
+/** Событий из будущего не бывает — сегодняшний день обрезаем по «сейчас». */
+function past(ms) {
+  return ms <= Date.now();
+}
+
+// ------------------------------------------------------------------ сид
+
+const FEED_PHRASES = [
+  'покормила грудью',
+  'поел из бутылочки',
+  'дали смесь',
+  'приложила к груди',
+  'покушал',
+];
+const DIAPER_PHRASES = ['поменяли подгузник', 'подгузник мокрый', 'покакал', 'сменили памперс'];
+
+function seedDay(daysAgo) {
+  // --- ночной сон: начался вчера вечером, кончился утром
+  const nightStart = at(daysAgo + 1, 22, 10 + (daysAgo % 3) * 7);
+  const nightEnd = at(daysAgo, 6, 35 + (daysAgo % 4) * 5);
+  if (past(nightStart)) {
+    const u = say('всё, уснул на ночь', nightStart);
+    add({
+      type: 'sleep',
+      subtype: 'night',
+      started_at: nightStart,
+      ended_at: past(nightEnd) ? nightEnd : null,
+      source: 'alice-fast',
+      confidence: 0.95,
+      utterance: u,
+    });
+    if (past(nightEnd)) say('проснулся', nightEnd);
+  }
+
+  // --- утро: витамин D
+  const meds = at(daysAgo, 9, 5);
+  if (past(meds)) {
+    const u = say('дала витамин д', meds);
+    add({
+      type: 'meds',
+      subtype: 'витамин D',
+      started_at: meds,
+      value_num: 1,
+      value_unit: 'ml',
+      source: 'alice-llm',
+      confidence: 0.9,
+      utterance: u,
+    });
+  }
+
+  // --- кормления: 7 штук по расписанию
+  const feedHours = [7, 10, 12, 15, 17, 19, 21];
+  feedHours.forEach((h, i) => {
+    const ms = at(daysAgo, h, (i * 13) % 45);
+    if (!past(ms)) return;
+    const bottle = i % 3 === 1;
+    const u = say(FEED_PHRASES[i % FEED_PHRASES.length], ms);
+    add({
+      type: 'feed',
+      subtype: bottle ? 'bottle' : 'breast',
+      started_at: ms,
+      ended_at: bottle ? null : ms + (12 + (i % 4) * 3) * MINUTE,
+      value_num: bottle ? 110 + (i % 3) * 20 : 12 + (i % 4) * 3,
+      value_unit: bottle ? 'ml' : 'min',
+      note: bottle ? null : ['left', 'right', 'both'][i % 3],
+      source: 'alice-llm',
+      confidence: 0.88,
+      utterance: u,
+    });
+  });
+
+  // --- подгузники: 6 штук
+  [7, 10, 13, 16, 19, 21].forEach((h, i) => {
+    const ms = at(daysAgo, h, 20 + (i * 7) % 30);
+    if (!past(ms)) return;
+    const dirty = i === 1 || i === 4;
+    const u = say(DIAPER_PHRASES[i % DIAPER_PHRASES.length], ms);
+    add({
+      type: 'diaper',
+      subtype: dirty ? 'dirty' : 'wet',
+      started_at: ms,
+      source: 'alice-llm',
+      confidence: 0.92,
+      utterance: u,
+    });
+  });
+
+  // --- дневные сны
+  [
+    [9, 40, 65],
+    [12, 50, 95],
+    [16, 15, 45],
+  ].forEach(([h, m, dur], i) => {
+    const start = at(daysAgo, h, m);
+    if (!past(start)) return;
+    const end = start + dur * MINUTE;
+    const u = say(i === 0 ? 'уложила спать' : 'опять заснул', start);
+    add({
+      type: 'sleep',
+      subtype: 'nap',
+      started_at: start,
+      ended_at: past(end) ? end : null,
+      source: 'alice-fast',
+      confidence: 0.94,
+      utterance: u,
+    });
+  });
+
+  // --- купание через день
+  if (daysAgo % 2 === 0) {
+    const bath = at(daysAgo, 20, 30);
+    if (past(bath)) {
+      const u = say('покупали', bath);
+      add({
+        type: 'activity',
+        subtype: 'bath',
+        started_at: bath,
+        ended_at: bath + 15 * MINUTE,
+        value_num: 15,
+        value_unit: 'min',
+        source: 'alice-llm',
+        confidence: 0.85,
+        utterance: u,
+      });
+    }
+  }
+
+  // --- взвешивания
+  if (daysAgo === 6 || daysAgo === 3 || daysAgo === 0) {
+    const ms = at(daysAgo, 11, 10);
+    if (past(ms)) {
+      const grams = 7480 + (6 - daysAgo) * 35;
+      const u = say(`взвесили, ${(grams / 1000).toFixed(2).replace('.', ',')} килограмма`, ms);
+      add({
+        type: 'measure',
+        subtype: 'weight',
+        started_at: ms,
+        value_num: grams,
+        value_unit: 'g',
+        source: 'alice-llm',
+        confidence: 0.9,
+        utterance: u,
+      });
+    }
+  }
+  if (daysAgo === 6 || daysAgo === 0) {
+    const ms = at(daysAgo, 11, 14);
+    if (past(ms)) {
+      const cm = 67.5 + (6 - daysAgo) * 0.12;
+      const u = say(`рост ${cm.toFixed(1).replace('.', ',')}`, ms);
+      add({
+        type: 'measure',
+        subtype: 'height',
+        started_at: ms,
+        value_num: Number(cm.toFixed(1)),
+        value_unit: 'cm',
+        source: 'alice-llm',
+        confidence: 0.9,
+        utterance: u,
+      });
+      add({
+        type: 'measure',
+        subtype: 'head',
+        started_at: ms + MINUTE,
+        value_num: 43.2 + (6 - daysAgo) * 0.05,
+        value_unit: 'cm',
+        source: 'alice-llm',
+        confidence: 0.88,
+        utterance: u,
+      });
+    }
+  }
+}
+
+/**
+ * Составные фразы и ошибки разбора — главный материал для админки.
+ * Каждая из них выглядит правдоподобно, но что-то в ней хочется поправить руками.
+ */
+function seedInteresting() {
+  // 1. Классика §10.3: fast-path услышал только сон, модель дописала кормление —
+  //    и выдумала объём, которого мама не называла. 500 мл видно сразу.
+  const t1 = at(0, 14, 12);
+  if (past(t1)) {
+    const u = say('Андрей покушал и уснул', t1);
+    add({
+      type: 'feed',
+      subtype: 'bottle',
+      started_at: t1,
+      value_num: 500,
+      value_unit: 'ml',
+      source: 'alice-llm',
+      confidence: 0.41,
+      utterance: u,
+    });
+    add({
+      type: 'sleep',
+      subtype: 'nap',
+      started_at: t1 + 1000,
+      ended_at: t1 + 70 * MINUTE,
+      source: 'alice-fast',
+      confidence: 0.95,
+      utterance: u,
+    });
+  }
+
+  // 2. Три события из одной фразы. «Покакал» уехал в note: подтип не опознан (§10.2).
+  const t2 = at(1, 17, 40);
+  const u2 = say('поменяли подгузник, покакал, и он опять заснул', t2);
+  add({
+    type: 'diaper',
+    subtype: 'wet',
+    started_at: t2,
+    source: 'alice-llm',
+    confidence: 0.86,
+    utterance: u2,
+  });
+  add({
+    type: 'note',
+    started_at: t2 + 1000,
+    note: 'покакал',
+    source: 'alice-llm',
+    confidence: 0.35,
+    utterance: u2,
+  });
+  add({
+    type: 'sleep',
+    subtype: 'nap',
+    started_at: t2 + 2000,
+    ended_at: t2 + 55 * MINUTE,
+    source: 'alice-fast',
+    confidence: 0.93,
+    utterance: u2,
+  });
+
+  // 3. Грудь мерят минутами, а записали миллилитрами — единица не та.
+  const t3 = at(1, 6, 50);
+  const u3 = say('проснулся, поели грудью минут пятнадцать', t3);
+  add({
+    type: 'feed',
+    subtype: 'breast',
+    started_at: t3 + 1000,
+    ended_at: t3 + 15 * MINUTE,
+    value_num: 15,
+    value_unit: 'ml',
+    note: 'both',
+    source: 'alice-llm',
+    confidence: 0.52,
+    utterance: u3,
+  });
+
+  // 4. Двойная запись: fast-path создал сон, модель создала его же ещё раз.
+  //    Один экземпляр уже мягко удалён — есть что вернуть.
+  const t4 = at(2, 13, 5);
+  const u4 = say('уснул', t4);
+  add({
+    type: 'sleep',
+    subtype: 'nap',
+    started_at: t4,
+    ended_at: t4 + 80 * MINUTE,
+    source: 'alice-fast',
+    confidence: 0.95,
+    utterance: u4,
+  });
+  add({
+    type: 'sleep',
+    subtype: 'nap',
+    started_at: t4 + 40 * 1000,
+    ended_at: t4 + 80 * MINUTE,
+    source: 'alice-llm',
+    confidence: 0.6,
+    deleted_at: t4 + 3 * DAY,
+    utterance: u4,
+  });
+
+  // 5. Время названо словами и уехало: «полчаса назад» посчитали от полуночи.
+  const t5 = at(0, 11, 40);
+  if (past(t5)) {
+    const u5 = say('он уснул полчаса назад', t5);
+    add({
+      type: 'sleep',
+      subtype: 'nap',
+      started_at: at(0, 0, 30),
+      ended_at: at(0, 1, 15),
+      source: 'alice-llm',
+      confidence: 0.38,
+      utterance: u5,
+    });
+  }
+
+  // 6. Симптом: срыгивание после кормления.
+  const t6 = at(2, 19, 25);
+  const u6 = say('срыгнул после кормления, немного', t6);
+  add({
+    type: 'symptom',
+    subtype: 'spit_up',
+    started_at: t6,
+    note: 'немного',
+    source: 'alice-llm',
+    confidence: 0.8,
+    utterance: u6,
+  });
+
+  // 7. Запись, добавленная руками: фразы у неё нет, в ленте стоит отдельной строкой.
+  const t7 = at(1, 21, 15);
+  add({
+    type: 'symptom',
+    subtype: 'colic',
+    started_at: t7,
+    ended_at: t7 + 40 * MINUTE,
+    note: 'поджимал ножки, успокоился на руках',
+    source: 'manual',
+  });
+
+  // 8. Фраза, которую разбор не осилил: события нет вовсе. В ленте видно как пробел.
+  say('он сегодня какой-то не такой, покряхтывает', at(0, 15, 30), 'failed');
+
+  // 9. И одна фраза прямо сейчас в очереди.
+  say('поменяла подгузник и покормила', Date.now() - 4000, 'pending');
+}
+
+for (let d = 6; d >= 0; d--) seedDay(d);
+seedInteresting();
+events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+
+// ------------------------------------------------------------------ выборки
+
+function ageDays() {
+  const birth = Date.parse(`${CHILD_BIRTHDATE}T00:00:00Z`);
+  return Math.max(0, Math.floor((Date.now() - birth) / DAY));
+}
+
+/** §10.1 — ориентиры по возрасту. */
+function norms() {
+  const age = ageDays();
+  return {
+    feed: { min: 8, max: 12 },
+    diaperWet: { min: age < 5 ? Math.max(1, age) : 6, max: null },
+    diaperDirty: { min: 3, max: 4 },
+    sleepMin: { min: 12 * 60, max: 16 * 60 },
+  };
+}
+
+function live() {
+  return events.filter((e) => !e.deleted_at);
+}
+
+function utteranceById(id) {
+  return utterances.find((u) => u.id === id) ?? null;
+}
+
+/** Событие наружу — с приклеенной фразой (§10.4). */
+function toDto(e) {
+  const u = e.utterance_id != null ? utteranceById(e.utterance_id) : null;
+  return {
+    ...e,
+    utterance: u
+      ? {
+          id: u.id,
+          raw_text: u.raw_text,
+          received_at: u.received_at,
+          processed_at: u.processed_at,
+          status: u.status,
+          llm_error: u.llm_error,
+        }
+      : null,
+  };
+}
+
+function localDateKey(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function buildStats(days) {
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const dayMs = at(i, 12);
+    const key = localDateKey(dayMs);
+    const dayEvents = live().filter((e) => localDateKey(Date.parse(e.started_at)) === key);
+
+    const feeds = dayEvents.filter((e) => e.type === 'feed');
+    const diapers = dayEvents.filter((e) => e.type === 'diaper');
+    const sleeps = dayEvents.filter((e) => e.type === 'sleep');
+
+    let totalMin = 0;
+    let nightMin = 0;
+    let napMin = 0;
+    for (const s of sleeps) {
+      const a = Date.parse(s.started_at);
+      const b = s.ended_at ? Date.parse(s.ended_at) : Date.now();
+      const min = Math.max(0, Math.round((b - a) / MINUTE));
+      totalMin += min;
+      if (s.subtype === 'night') nightMin += min;
+      else napMin += min;
+    }
+
+    const lastOf = (subtype) => {
+      const rows = dayEvents
+        .filter((e) => e.type === 'measure' && e.subtype === subtype)
+        .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+      return rows[0]?.value_num ?? null;
+    };
+
+    out.push({
+      date: key,
+      feed: {
+        count: feeds.length,
+        bottleMl: feeds
+          .filter((f) => f.value_unit === 'ml')
+          .reduce((s, f) => s + (f.value_num ?? 0), 0),
+        breastMin: feeds
+          .filter((f) => f.value_unit === 'min')
+          .reduce((s, f) => s + (f.value_num ?? 0), 0),
+      },
+      diaper: {
+        wet: diapers.filter((d) => d.subtype === 'wet' || d.subtype === 'both').length,
+        dirty: diapers.filter((d) => d.subtype === 'dirty' || d.subtype === 'both').length,
+        both: diapers.filter((d) => d.subtype === 'both').length,
+      },
+      sleep: { totalMin, sessions: sleeps.length, nightMin, napMin },
+      measure: {
+        weightG: lastOf('weight'),
+        heightCm: lastOf('height'),
+        headCm: lastOf('head'),
+        tempC: lastOf('temp'),
+      },
+      norms: norms(),
+    });
+  }
+  return out;
+}
+
+function buildState() {
+  const sleeps = live()
+    .filter((e) => e.type === 'sleep')
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  const open = sleeps.find((s) => !s.ended_at);
+  const last = sleeps.find((s) => s.ended_at);
+  const now = Date.now();
+  const today = buildStats(1)[0];
+  return {
+    now: iso(now),
+    child: { name: CHILD_NAME, birthDate: CHILD_BIRTHDATE, ageDays: ageDays() },
+    sleep: {
+      status: open ? 'asleep' : 'awake',
+      since: open ? open.started_at : (last?.ended_at ?? iso(now)),
+      currentDurationMin: open ? Math.round((now - Date.parse(open.started_at)) / MINUTE) : 0,
+      lastSleep: last
+        ? {
+            startedAt: last.started_at,
+            endedAt: last.ended_at,
+            durationMin: Math.round(
+              (Date.parse(last.ended_at) - Date.parse(last.started_at)) / MINUTE,
+            ),
+          }
+        : null,
+    },
+    today: {
+      date: today.date,
+      sleepTotalMin: today.sleep.totalMin,
+      sleepSessions: today.sleep.sessions,
+      longestSleepMin: 0,
+    },
+    pending: utterances.filter((u) => u.status === 'pending').length,
+  };
+}
+
+// ------------------------------------------------------------------ http
+
+const PATCHABLE = new Set([
+  'type',
+  'subtype',
+  'started_at',
+  'ended_at',
+  'value_num',
+  'value_unit',
+  'note',
+  'deleted_at',
+]);
+
+function json(res, code, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(code, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+    'access-control-allow-headers': 'content-type',
+  });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.woff2': 'font/woff2',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
+
+/** Отдаём собранную админку по /dash — так же, как это сделает настоящий сервер. */
+function serveDash(pathname, res) {
+  if (!fs.existsSync(DIST)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('dist не собран: pnpm --filter @babytracker/admin build');
+    return;
+  }
+  const rel = pathname.replace(/^\/dash\/?/, '') || 'index.html';
+  let file = path.join(DIST, rel);
+  if (!file.startsWith(DIST) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    file = path.join(DIST, 'index.html');
+  }
+  res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
+  fs.createReadStream(file).pipe(res);
+}
+
+const server = http.createServer(async (req, res) => {
+  const parsed = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  const pathname = parsed.pathname;
+
+  if (req.method === 'OPTIONS') return json(res, 204, {});
+
+  if (pathname === '/healthz') {
+    return json(res, 200, {
+      ok: true,
+      db: true,
+      worker: { alive: true, lastRunAt: iso(Date.now() - 2000), queueDepth: 0 },
+    });
+  }
+
+  if (pathname.startsWith('/dash')) return serveDash(pathname, res);
+
+  if (!pathname.startsWith('/api/')) {
+    return json(res, 404, { error: 'not found' });
+  }
+
+  if (FORCE_401) {
+    res.writeHead(401, {
+      'www-authenticate': 'Basic realm="babytracker"',
+      'content-type': 'application/json; charset=utf-8',
+    });
+    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
+
+  if (pathname === '/api/state') return json(res, 200, buildState());
+
+  if (pathname === '/api/stats/daily') {
+    const days = Math.min(90, Math.max(1, Number(parsed.searchParams.get('days') ?? 7)));
+    return json(res, 200, {
+      child: { name: CHILD_NAME, birthDate: CHILD_BIRTHDATE, ageDays: ageDays() },
+      days: buildStats(days),
+    });
+  }
+
+  if (pathname === '/api/utterances') {
+    const limit = Math.min(500, Number(parsed.searchParams.get('limit') ?? 20));
+    const rows = [...utterances]
+      .sort((a, b) => Date.parse(b.received_at) - Date.parse(a.received_at))
+      .slice(0, limit);
+    return json(res, 200, { utterances: rows });
+  }
+
+  if (pathname === '/api/events' && req.method === 'GET') {
+    const p = parsed.searchParams;
+    const from = p.get('from') ? Date.parse(p.get('from')) : null;
+    const to = p.get('to') ? Date.parse(p.get('to')) : null;
+    const type = p.get('type');
+    const includeDeleted = p.get('include_deleted') === 'true';
+    const limit = Math.min(1000, Number(p.get('limit') ?? 200));
+
+    const rows = events
+      .filter((e) => includeDeleted || !e.deleted_at)
+      .filter((e) => !type || e.type === type)
+      .filter((e) => {
+        const ms = Date.parse(e.started_at);
+        if (from != null && ms < from) return false;
+        if (to != null && ms > to) return false;
+        return true;
+      })
+      .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+      .slice(0, limit)
+      .map(toDto);
+    return json(res, 200, { events: rows });
+  }
+
+  if (pathname === '/api/events' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body || !body.type || !body.started_at) {
+      return json(res, 400, { error: 'нужны type и started_at' });
+    }
+    const row = add({ ...body, started_at: Date.parse(body.started_at), source: 'manual' });
+    return json(res, 201, { event: toDto(row) });
+  }
+
+  const match = pathname.match(/^\/api\/events\/(\d+)(\/restore)?$/);
+  if (match) {
+    const id = Number(match[1]);
+    const row = events.find((e) => e.id === id);
+    if (!row) return json(res, 404, { error: 'событие не найдено' });
+
+    if (match[2] === '/restore' && req.method === 'POST') {
+      row.deleted_at = null;
+      row.updated_at = iso(Date.now());
+      return json(res, 200, { event: toDto(row) });
+    }
+
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      if (!body) return json(res, 400, { error: 'тело не разобралось' });
+      for (const [key, value] of Object.entries(body)) {
+        if (!PATCHABLE.has(key)) continue;
+        row[key] = value;
+      }
+      row.updated_at = iso(Date.now());
+      return json(res, 200, { event: toDto(row) });
+    }
+
+    if (req.method === 'DELETE') {
+      // §9.1: физического удаления не существует, только deleted_at.
+      row.deleted_at = iso(Date.now());
+      row.updated_at = row.deleted_at;
+      return json(res, 200, { event: toDto(row) });
+    }
+  }
+
+  return json(res, 404, { error: 'not found' });
+});
+
+server.listen(PORT, () => {
+  console.log(`mock BabyTracker API  → http://localhost:${PORT}`);
+  console.log(`  события: ${events.length}, фразы: ${utterances.length}`);
+  if (FORCE_401) console.log('  MOCK_401=1 — /api отвечает 401');
+  if (fs.existsSync(DIST)) console.log(`  собранная админка → http://localhost:${PORT}/dash`);
+});

@@ -64,6 +64,9 @@
   log "сборка дашборда"
   pnpm --filter ./apps/dashboard build 2>&1 | tail -3
 
+  log "сборка админки"
+  pnpm --filter ./apps/admin build 2>&1 | tail -3
+
   log "перезапуск"
   systemctl --user restart babytracker.service
 

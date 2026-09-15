@@ -1,0 +1,1152 @@
+/* ============================================================
+   BabyTracker · /dash — рабочая админка для телефона.
+
+   Родня телевизионному дашборду: тёмный фон, циан/пурпур, моноширинные цифры.
+   Но это инструмент, а не витрина: плотность выше, свечения почти нет,
+   всё нажимаемое — не меньше 44 px. Проектируется от 390 px.
+   ============================================================ */
+
+:root {
+  --sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --mono:
+    ui-monospace, 'SF Mono', SFMono-Regular, 'Roboto Mono', 'DejaVu Sans Mono', Menlo,
+    Consolas, monospace;
+
+  /* Не чистый чёрный: на телефоне в руках мягкий фон читается спокойнее,
+     а выгорание OLED здесь не проблема — экран не висит сутками. */
+  --bg: #070b0e;
+  --bg-card: #0c1319;
+  --bg-sunken: #060a0d;
+  --bg-input: #101a21;
+  --bg-hover: #142029;
+
+  --line: rgba(122, 190, 212, 0.14);
+  --line-strong: rgba(122, 190, 212, 0.28);
+
+  --text: #dbeaf0;
+  --text-2: #93b0bd;
+  --text-3: #62808d;
+
+  --cyan: #3fe9ff;
+  --violet: #a273ff;
+  --amber: #ffb43c;
+  --green: #4df0a9;
+  --red: #ff6b7a;
+
+  /* Тон типа события (§10.2) — одинаковый в ленте, редакторе и сводке. */
+  --t-sleep: #a273ff;
+  --t-feed: #3fe9ff;
+  --t-diaper: #5ad1b0;
+  --t-measure: #ffb43c;
+  --t-meds: #7f9cff;
+  --t-symptom: #ff8f9c;
+  --t-activity: #9fd356;
+  --t-note: #8fa6b0;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+h3,
+p,
+figure {
+  margin: 0;
+}
+
+html {
+  background: var(--bg);
+  /* Высота липкой шапки. Под ней останавливаются заголовки дня. */
+  --chrome: 106px;
+  scroll-padding-top: calc(var(--chrome) + 30px);
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  overflow-wrap: break-word;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Каркас
+   ============================================================ */
+
+.app {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding: calc(var(--safe-top) + 10px) 14px 0;
+  background: rgba(7, 11, 14, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand__name {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.brand__age {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-right: -6px;
+  border-radius: 10px;
+  color: var(--text-2);
+  transition: background 120ms ease;
+}
+
+.icon-btn:active {
+  background: var(--bg-hover);
+}
+
+.icon-btn[data-busy='true'] {
+  color: var(--cyan);
+}
+
+/* --- сегментированный переключатель экранов --- */
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  margin: 10px 0 8px;
+  padding: 3px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.segmented__item {
+  flex: 1;
+  height: 38px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text-2);
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.segmented__item[aria-selected='true'] {
+  background: var(--bg-hover);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.main {
+  flex: 1;
+  padding: 0 12px calc(var(--safe-bottom) + 40px);
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   Полоски-сообщения
+   ============================================================ */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  background: rgba(255, 180, 60, 0.08);
+  border: 1px solid rgba(255, 180, 60, 0.3);
+  color: #ffd79a;
+}
+
+.banner__btn {
+  margin-left: auto;
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 550;
+  color: #ffd79a;
+  border: 1px solid rgba(255, 180, 60, 0.4);
+}
+
+.placeholder {
+  padding: 46px 20px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.placeholder__big {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
+  color: var(--text-2);
+}
+
+/* ============================================================
+   Фильтры
+   ============================================================ */
+
+/* Фильтры намеренно НЕ липкие: вместе с шапкой они съедали четверть экрана телефона,
+   а выставляют их один раз. Лента важнее. */
+.filters {
+  margin: 0 -12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.chiprow {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chiprow::-webkit-scrollbar {
+  display: none;
+}
+
+.chiprow + .chiprow {
+  margin-top: 6px;
+}
+
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 17px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--text-2);
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.chip[aria-pressed='true'] {
+  color: var(--bg);
+  background: var(--chip-on, var(--cyan));
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip-on, var(--text-3));
+}
+
+.chip[aria-pressed='true'] .chip__dot {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.chip--ghost {
+  background: transparent;
+}
+
+.filters__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Лента
+   ============================================================ */
+
+.dayhead {
+  position: sticky;
+  top: calc(var(--safe-top) + var(--chrome, 106px));
+  z-index: 20;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px -12px 8px;
+  padding: 7px 12px;
+  background: rgba(7, 11, 14, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.dayhead__title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+
+.dayhead__date {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.dayhead__count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.group {
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.group--solo {
+  background: transparent;
+  border-color: transparent;
+  margin-bottom: 2px;
+}
+
+/* --- шапка с исходной фразой: смысл всего экрана --- */
+
+.said {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px 9px;
+  background: linear-gradient(180deg, rgba(162, 115, 255, 0.07), rgba(162, 115, 255, 0));
+  border-bottom: 1px solid var(--line);
+}
+
+.said__text {
+  display: block;
+  font-size: 14.5px;
+  line-height: 1.35;
+  color: #cfe0ea;
+}
+
+.said__text::before {
+  content: '«';
+  color: var(--violet);
+}
+
+.said__text::after {
+  content: '»';
+  color: var(--violet);
+}
+
+.said__meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.said__meta b {
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+.said--failed {
+  background: linear-gradient(180deg, rgba(255, 180, 60, 0.08), rgba(255, 180, 60, 0));
+}
+
+.said--failed .said__text::before,
+.said--failed .said__text::after {
+  color: var(--amber);
+}
+
+.group__events {
+  position: relative;
+}
+
+/* Связь «фраза → её записи»: общий рельс слева внутри карточки. */
+.group__events--rows::before {
+  content: '';
+  position: absolute;
+  left: 23px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(162, 115, 255, 0.5), rgba(162, 115, 255, 0.07));
+}
+
+/* «ещё разбирается» — обычное состояние, не повод тревожиться.
+   Жёлтым отмечаем только настоящий пробел: разбор упал или пропущен. */
+.group__empty {
+  padding: 11px 12px 13px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.group__empty--gap {
+  color: var(--amber);
+  opacity: 0.85;
+}
+
+/* --- строка события --- */
+
+.event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: start;
+  gap: 0 9px;
+  width: 100%;
+  min-height: 56px;
+  padding: 9px 10px 10px 12px;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.event-wrap + .event-wrap {
+  border-top: 1px solid rgba(122, 190, 212, 0.07);
+}
+
+.event:active {
+  background: var(--bg-hover);
+}
+
+.event__icon {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--tone);
+  background: var(--bg-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 45%, transparent);
+}
+
+.group--solo .event__icon {
+  background: var(--bg);
+}
+
+.event__body {
+  min-width: 0;
+}
+
+.event__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14.5px;
+  line-height: 1.25;
+}
+
+.event__type {
+  font-weight: 600;
+  color: var(--tone);
+}
+
+.event__sub {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.event__detail {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.event__value {
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.event__note {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.event__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding-top: 1px;
+}
+
+.event__time {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  letter-spacing: -0.01em;
+}
+
+.event__flags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  background: rgba(122, 190, 212, 0.08);
+}
+
+.badge--warn {
+  color: #ffce8a;
+  background: rgba(255, 180, 60, 0.13);
+}
+
+.badge--open {
+  color: var(--violet);
+  background: rgba(162, 115, 255, 0.14);
+}
+
+.event--deleted .event__type,
+.event--deleted .event__sub,
+.event--deleted .event__value {
+  text-decoration: line-through;
+}
+
+.event__trash {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 10px 51px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.event--deleted .event__trash {
+  opacity: 1;
+}
+
+.event__restore {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cyan);
+  border: 1px solid rgba(63, 233, 255, 0.35);
+}
+
+/* Затемняем содержимое удалённой строки, но не кнопку возврата. */
+.event--deleted .event {
+  opacity: 0.45;
+}
+
+.event--busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Нижний лист — редактор
+   ============================================================ */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(2, 5, 7, 0.72);
+  backdrop-filter: blur(3px);
+  animation: fade-in 160ms ease both;
+}
+
+.sheet {
+  position: fixed;
+  z-index: 61;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 92svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border-top: 1px solid var(--line-strong);
+  border-radius: 16px 16px 0 0;
+  animation: sheet-up 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translate3d(0, 24px, 0);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet,
+  .sheet-backdrop {
+    animation: none;
+  }
+}
+
+.sheet__grip {
+  flex: none;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 2px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.sheet__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet__title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.sheet__id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.sheet__close {
+  margin-left: auto;
+  width: 36px;
+  height: 36px;
+  margin-right: -8px;
+  border-radius: 9px;
+  color: var(--text-2);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sheet__foot {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px calc(var(--safe-bottom) + 12px);
+  border-top: 1px solid var(--line);
+  background: var(--bg-card);
+}
+
+.field + .field {
+  margin-top: 14px;
+}
+
+.field__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.field__row {
+  display: flex;
+  gap: 8px;
+}
+
+.field__row > * {
+  min-width: 0;
+}
+
+.field__hint {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 15px;
+}
+
+textarea.input {
+  padding: 10px 11px;
+  min-height: 70px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.input:focus {
+  border-color: var(--line-strong);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(63, 233, 255, 0.16);
+}
+
+.input--time {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.chipgrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chipgrid .chip {
+  min-height: 40px;
+  padding: 0 13px;
+}
+
+.said-quote {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--violet);
+  font-size: 14px;
+  color: #cfe0ea;
+}
+
+.meta-list {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.meta-list dd {
+  margin: 0;
+  color: var(--text-2);
+  text-align: right;
+  font-family: var(--mono);
+}
+
+/* --- кнопки --- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  background: var(--bg-input);
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
+}
+
+.btn:active {
+  background: var(--bg-hover);
+}
+
+.btn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.btn--primary {
+  flex: 1;
+  color: #04141a;
+  background: var(--cyan);
+  border-color: transparent;
+}
+
+.btn--primary:active {
+  background: #6befff;
+}
+
+.btn--danger {
+  color: var(--red);
+  border-color: rgba(255, 107, 122, 0.35);
+  background: transparent;
+}
+
+/* ============================================================
+   Тост «удалено · вернуть»
+   ============================================================ */
+
+.toast {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 14px);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 11px 12px;
+  border-radius: 11px;
+  font-size: 14px;
+  color: var(--text);
+  background: #16232c;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  animation: sheet-up 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.toast__btn {
+  margin-left: auto;
+  flex: none;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cyan);
+  border: 1px solid rgba(63, 233, 255, 0.35);
+}
+
+/* ============================================================
+   Сводка
+   ============================================================ */
+
+.card {
+  margin-bottom: 10px;
+  padding: 13px 14px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card__title {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.card__aside {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.metric__value {
+  font-family: var(--mono);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--tone, var(--text));
+}
+
+.metric__unit {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.metric__aside {
+  margin-left: auto;
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-3);
+}
+
+.meter {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin-top: 9px;
+  overflow: visible;
+}
+
+.meter__status {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.meter__status[data-tone='off'] {
+  color: #ffce8a;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.substat {
+  padding: 10px 11px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+}
+
+.substat__label {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.substat__value {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--tone, var(--text));
+}
+
+.substat__hint {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.growth {
+  display: block;
+  width: 100%;
+  height: 92px;
+  margin-top: 8px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.legend b {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.footnote {
+  margin: 14px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Десктоп: шире, две колонки в сводке. Телефон остаётся главным.
+   ============================================================ */
+
+@media (min-width: 760px) {
+  body {
+    font-size: 15px;
+  }
+
+  .main {
+    max-width: 960px;
+    padding: 0 20px 60px;
+  }
+
+  .topbar {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .segmented {
+    max-width: 320px;
+  }
+
+  .filters {
+    top: calc(var(--safe-top) + 95px);
+    margin: 0 -20px;
+  }
+
+  .chiprow {
+    padding: 0 20px;
+    flex-wrap: wrap;
+  }
+
+  .dayhead {
+    margin-left: -20px;
+    margin-right: -20px;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .event {
+    min-height: 52px;
+  }
+
+  .sheet {
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    top: 50%;
+    width: min(560px, calc(100vw - 48px));
+    transform: translate(-50%, -50%);
+    border-radius: 14px;
+    border: 1px solid var(--line-strong);
+    max-height: 86svh;
+    /* На десктопе лист центрируется трансформом — анимация сдвига его бы сломала. */
+    animation-name: fade-in;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 10px;
+    align-items: start;
+  }
+
+  .stats-grid > .card--wide {
+    grid-column: 1 / -1;
+  }
+}
