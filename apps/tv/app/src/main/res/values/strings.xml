@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">BabyTracker</string>
+    <!-- Видимая подпись в лаунчере Android TV. Меняется только надпись:
+         applicationId, namespace и имена классов остаются прежними. -->
+    <string name="app_name">Andreytracker</string>
 
     <string name="connecting_title">ПОДКЛЮЧЕНИЕ</string>
     <string name="connecting_detail">Открываю дашборд…</string>
