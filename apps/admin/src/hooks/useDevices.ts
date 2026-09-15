@@ -21,6 +21,16 @@ const POLL_MS = 5000;
 /** Когда экран устройств закрыт, хватает и редкой проверки — она для баннера. */
 const IDLE_POLL_MS = 20_000;
 
+/**
+ * Режим опроса.
+ *
+ *  - `active` — экран устройств открыт, человек ждёт появления своей заявки;
+ *  - `idle` — экран закрыт, опрос нужен только баннеру;
+ *  - `off` — сессии нет. Долбить сервер запросами, которые заведомо вернут
+ *    401, незачем: он на них всё равно не ответит ничем полезным.
+ */
+export type DevicesPollMode = 'active' | 'idle' | 'off';
+
 export interface DevicesData {
   pending: PendingDevice[];
   sessions: DeviceSession[];
@@ -34,7 +44,7 @@ export interface DevicesData {
   refresh: () => Promise<void>;
 }
 
-export function useDevices(active: boolean): DevicesData {
+export function useDevices(mode: DevicesPollMode): DevicesData {
   const [pending, setPending] = useState<PendingDevice[]>([]);
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -50,20 +60,23 @@ export function useDevices(active: boolean): DevicesData {
       setSessions(data.sessions);
       setLoaded(true);
     } catch {
-      // Молча: экран не должен мигать ошибкой из-за одного неудачного опроса.
-      // Про 401 позаботится общий обработчик — он уводит на страницу сопряжения.
+      // Молча: экран не должен мигать ошибкой из-за одного неудачного опроса,
+      // а телефон теряет сеть постоянно. Потеря сессии сюда не относится —
+      // её ловит App по 401 из /api/state и показывает «Сессия завершена»,
+      // после чего опрос уходит в режим `off`.
     }
   }, []);
 
   useEffect(() => {
+    if (mode === 'off') return;
     alive.current = true;
     void refresh();
-    const timer = setInterval(() => void refresh(), active ? POLL_MS : IDLE_POLL_MS);
+    const timer = setInterval(() => void refresh(), mode === 'active' ? POLL_MS : IDLE_POLL_MS);
     return () => {
       alive.current = false;
       clearInterval(timer);
     };
-  }, [refresh, active]);
+  }, [refresh, mode]);
 
   /**
    * Действие + немедленное обновление списка. Оптимистично ничего не рисуем:

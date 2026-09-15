@@ -43,7 +43,9 @@ export function App() {
    * сказать об этом не может, а искать экран устройств «на всякий случай»
    * никто не станет.
    */
-  const devices = useDevices(route === 'devices');
+  const devices = useDevices(
+    authBlocked ? 'off' : route === 'devices' ? 'active' : 'idle',
+  );
   const waiting = devices.pending.length;
 
   useEffect(() => {
@@ -198,7 +200,7 @@ export function App() {
         {route === 'overview' ? <OverviewScreen /> : null}
         {route === 'stats' ? <StatsScreen /> : null}
         {route === 'history' ? <HistoryScreen onBusy={onBusy} /> : null}
-        {route === 'devices' ? <DevicesScreen /> : null}
+        {route === 'devices' ? <DevicesScreen devices={devices} /> : null}
       </main>
 
       {settings ? (

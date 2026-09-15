@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useDevices } from '../hooks/useDevices';
+import type { DevicesData } from '../hooks/useDevices';
 import { goToPairing, logout } from '../api';
 import { formatWhen } from '../lib/format';
 import type { DeviceSession, PendingDevice } from '../api';
@@ -153,8 +153,13 @@ function SessionRow({
   );
 }
 
-export function DevicesScreen() {
-  const devices = useDevices(true);
+/**
+ * Данные приходят сверху, а не заводятся здесь своим хуком: тот же список
+ * нужен App для баннера «устройство просит доступ», и два независимых опроса
+ * означали бы два запроса на каждый тик и экран, который спорит сам с собой
+ * о том, есть заявка или уже нет.
+ */
+export function DevicesScreen({ devices }: { devices: DevicesData }) {
   const [leaving, setLeaving] = useState(false);
 
   const onLogout = async () => {
