@@ -51,6 +51,8 @@ export interface UtteranceRow {
   llm_error: string | null;
   attempts: number;
   processed_at: string | null;
+  /** Сколько раз фразу отправляли на повторный разбор из админки. */
+  reparse_count: number;
 }
 
 /** Вид utterance для API/SSE: JSON-поля уже распарсены. */
@@ -64,6 +66,7 @@ export interface UtteranceDto {
   llm_error: string | null;
   fast_result: unknown;
   llm_result: unknown;
+  reparse_count: number;
 }
 
 /** §3.2 `GET /api/state`. */
@@ -183,6 +186,15 @@ export interface YandexDateTimeValue {
  * модели в промпте тоже разная.
  */
 export type FastResult =
+  | {
+      /** Смена подгузника — единственный не-сонный факт, который матчер пишет сам. */
+      kind: 'diaper';
+      subtype: 'wet' | 'dirty';
+      confidence: number;
+      at?: string;
+      mayContainMore: boolean;
+      timeUnresolved: boolean;
+    }
   | {
       kind: 'sleep_start';
       confidence: number;

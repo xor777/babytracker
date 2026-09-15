@@ -140,7 +140,6 @@ export function WeightPanel({ measures, now }: Props) {
       ) : (
         <div className="panel__body weight">
           <div className="weight__now">
-            <span className="stat__label">сейчас</span>
             <span className="weight__value">
               {formatGrams(last.grams)}
               <span className="stat__unit">г</span>

@@ -153,6 +153,20 @@ function seed() {
   for (const ev of sleeps.slice(0, -1)) {
     if (!ev.ended_at) ev.ended_at = iso(Date.parse(ev.started_at) + 60 * MINUTE);
   }
+  // Случайный разброс иногда накладывал сны друг на друга — выкидываем такие,
+  // чтобы тестовые данные не были заведомо противоречивыми.
+  let prevEnd = 0;
+  for (const ev of sleeps) {
+    const start = Date.parse(ev.started_at);
+    if (start < prevEnd) {
+      ev.deleted_at = iso(start);
+      continue;
+    }
+    prevEnd = ev.ended_at ? Date.parse(ev.ended_at) : Infinity;
+  }
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].deleted_at) events.splice(i, 1);
+  }
 
   const phrases = [
     'андрей заснул',

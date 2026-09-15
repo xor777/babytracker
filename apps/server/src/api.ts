@@ -25,6 +25,7 @@ import {
   UTTERANCES_LIMIT_DEFAULT,
   UTTERANCES_LIMIT_MAX,
   listUtterances,
+  reparseUtterance,
   toUtteranceDto,
 } from './utterances.ts';
 import {
@@ -218,6 +219,42 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     const limit = parsed.data.limit ?? UTTERANCES_LIMIT_DEFAULT;
     return { utterances: listUtterances(db, limit).map(toUtteranceDto) };
   });
+
+  /* -------------------------------------------------------------- */
+  /**
+   * Переразбор фразы: кнопка «разобрать заново» в админке.
+   *
+   * Человек видит в ленте, что фраза разобрана неверно или неполно, и чинит
+   * это одним нажатием — без ssh и без повторения вслух. Полезнее любого
+   * словаря: там, где автоматика ошиблась, решает тот, кто видит ошибку.
+   *
+   * Фраза уходит в очередь независимо от политики. Дубли не появятся: модель
+   * получает в промпте события, уже созданные по этой фразе, и тем же
+   * механизмом, что и с матчером, дополняет их, а не создаёт заново.
+   */
+  app.post(
+    '/api/utterances/:id/reparse',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = parseRowId(request.params.id);
+      if (id === null) return badRequest(reply, ROW_ID_HINT);
+
+      const row = reparseUtterance(db, id);
+      if (!row) return reply.code(404).send({ error: 'not_found', id });
+
+      const dto = toUtteranceDto(row);
+      defer(ctx, () => {
+        sse.broadcastUtterance(dto);
+        ctx.notifyWorker();
+      });
+
+      ctx.log.info(
+        { utteranceId: id, reparseCount: dto.reparse_count },
+        'фраза отправлена на повторный разбор',
+      );
+      reply.code(202);
+      return { utterance: dto };
+    },
+  );
 
   /* -------------------------------------------------------------- */
   /** §10.4: правка руками. Через журнал — ручные правки так же обратимы. */

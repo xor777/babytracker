@@ -38,10 +38,10 @@ test('обычные фразы командами не считаются', () 
   }
 });
 
-test('smart: уверенный fast-path модель не зовёт', () => {
+test('smart: короткая каноническая фраза модель не зовёт', () => {
   const d = decide(SURE, 'андрей заснул');
   assert.equal(d.queue, false);
-  assert.match(d.reason, /уверенно/);
+  assert.match(d.reason, /каноническ/);
 });
 
 test('smart: неуверенный fast-path зовёт модель', () => {

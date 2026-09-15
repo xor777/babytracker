@@ -623,3 +623,256 @@ test('нет apps/admin/dist — сервер работает, /dash отдаё
   assert.equal((await h.app.inject({ method: 'GET', url: '/api/state' })).statusCode, 200);
   assert.equal((await h.app.inject({ method: 'GET', url: '/dash' })).statusCode, 404);
 });
+
+/* ------------------------------------------------------------------ */
+/* Админка это PWA: заголовки — часть работоспособности                */
+/*                                                                      */
+/* Оба отказа ниже происходят МОЛЧА, без ошибок в консоли:              */
+/*  - манифест с чужим Content-Type браузер игнорирует, и установка     */
+/*    на домашний экран просто не предлагается;                         */
+/*  - service worker с длинным кешированием застревает вместе со всей   */
+/*    старой версией приложения, и обновления перестают доходить.       */
+/* ------------------------------------------------------------------ */
+
+interface PwaFixture {
+  dir: string;
+  app: Awaited<ReturnType<typeof makeTestApp>>['app'];
+  close: () => Promise<void>;
+}
+
+/** Собранная админка в том виде, в каком её кладёт vite-plugin-pwa. */
+async function makePwaApp(files: Record<string, string>): Promise<PwaFixture> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-pwa-'));
+  for (const [name, content] of Object.entries(files)) {
+    const full = path.join(dir, name);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
+  }
+
+  const cfg = testConfig({ ADMIN_DIST: dir, DASHBOARD_DIST: path.join(dir, 'нет-такого') });
+  const db = testDb();
+  const { app, sse } = createApp({ cfg, db, logger: false });
+  await app.ready();
+
+  return {
+    dir,
+    app,
+    close: async () => {
+      sse.close();
+      await app.close();
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+const PWA_FILES = {
+  'index.html': '<!doctype html><html><head><link rel="manifest" href="/dash/manifest.webmanifest"></head></html>',
+  'manifest.webmanifest': '{"name":"BabyTracker","scope":"/dash/","start_url":"/dash/"}',
+  'sw.js': 'self.addEventListener("install", () => {});',
+  'registerSW.js': 'console.log("register");',
+  'pwa-192.png': 'PNG',
+  'assets/index-B7xK9a.js': 'console.log("bundle");',
+  'assets/index-C2mQ4z.css': ':root{--x:1}',
+};
+
+test('манифест PWA отдаётся с типом application/manifest+json', async (t) => {
+  const h = await makePwaApp(PWA_FILES);
+  t.after(h.close);
+
+  const res = await h.app.inject({ method: 'GET', url: '/dash/manifest.webmanifest' });
+  assert.equal(res.statusCode, 200);
+  assert.match(
+    String(res.headers['content-type']),
+    /^application\/manifest\+json/,
+    'с другим типом браузер молча не предложит установку на домашний экран',
+  );
+  assert.equal(JSON.parse(res.body).scope, '/dash/', 'содержимое отдаётся как есть');
+});
+
+test('service worker не кешируется надолго и работает в области /dash/', async (t) => {
+  const h = await makePwaApp(PWA_FILES);
+  t.after(h.close);
+
+  const res = await h.app.inject({ method: 'GET', url: '/dash/sw.js' });
+  assert.equal(res.statusCode, 200);
+
+  const cache = String(res.headers['cache-control']);
+  assert.match(cache, /no-cache/, 'закешированный воркер перестаёт получать обновления');
+  assert.equal(/max-age=[1-9]/.test(cache), false, `длительное кеширование воркера: ${cache}`);
+
+  // тип должен быть исполняемым JS, иначе регистрация воркера падает
+  assert.match(String(res.headers['content-type']), /javascript/);
+
+  // область: ровно /dash/, не шире — воркеру админки нечего делать на «/»
+  assert.equal(res.headers['service-worker-allowed'], '/dash/');
+});
+
+test('оболочка приложения перепроверяется, хешированные ассеты кешируются навсегда', async (t) => {
+  const h = await makePwaApp(PWA_FILES);
+  t.after(h.close);
+
+  // index.html и по /dash, и по /dash/ — иначе застрянет старая версия
+  for (const url of ['/dash', '/dash/']) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.equal(res.statusCode, 200);
+    assert.match(String(res.headers['cache-control']), /no-cache/, `${url}: оболочка не кешируется`);
+  }
+
+  // имя с хешем содержимого -> можно кешировать навсегда
+  for (const url of ['/dash/assets/index-B7xK9a.js', '/dash/assets/index-C2mQ4z.css']) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.equal(res.statusCode, 200);
+    assert.match(String(res.headers['cache-control']), /max-age=31536000/, url);
+    assert.match(String(res.headers['cache-control']), /immutable/, url);
+  }
+
+  // файлы верхнего уровня имя не меняют -> перепроверять
+  for (const url of ['/dash/registerSW.js', '/dash/pwa-192.png']) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.match(String(res.headers['cache-control']), /no-cache/, url);
+  }
+});
+
+test('манифеста и воркера ещё нет — сервер работает, отдаёт 404 на них', async (t) => {
+  // ровно текущее состояние: админка собрана, PWA-файлы появятся позже
+  const h = await makePwaApp({
+    'index.html': '<html>админка без PWA</html>',
+    'assets/index-B7xK9a.js': 'console.log("bundle");',
+  });
+  t.after(h.close);
+
+  assert.equal((await h.app.inject({ method: 'GET', url: '/healthz' })).statusCode, 200);
+  assert.equal((await h.app.inject({ method: 'GET', url: '/api/state' })).statusCode, 200);
+  assert.equal((await h.app.inject({ method: 'GET', url: '/dash' })).statusCode, 200);
+  assert.equal(
+    (await h.app.inject({ method: 'GET', url: '/dash/assets/index-B7xK9a.js' })).statusCode,
+    200,
+  );
+
+  for (const url of ['/dash/manifest.webmanifest', '/dash/sw.js']) {
+    assert.equal((await h.app.inject({ method: 'GET', url })).statusCode, 404, url);
+  }
+});
+
+test('заголовки PWA не мешают остальным маршрутам', async (t) => {
+  const h = await makePwaApp(PWA_FILES);
+  t.after(h.close);
+
+  const state = await h.app.inject({ method: 'GET', url: '/api/state' });
+  assert.equal(state.statusCode, 200);
+  assert.match(String(state.headers['content-type']), /application\/json/);
+
+  const missing = await h.app.inject({ method: 'GET', url: '/api/чего-нет' });
+  assert.equal(missing.statusCode, 404);
+  assert.match(String(missing.headers['content-type']), /application\/json/);
+
+  assert.equal((await h.app.inject({ method: 'GET', url: '/healthz' })).statusCode, 200);
+
+  const alice = await h.app.inject({
+    method: 'POST',
+    url: `/alice/${TEST_SECRET}`,
+    payload: aliceBody('андрей заснул'),
+  });
+  assert.equal(alice.statusCode, 200);
+});
+
+test('404 на манифест остаётся JSON-ошибкой, а не притворяется манифестом', async (t) => {
+  const h = await makePwaApp({ 'index.html': '<html>админка</html>' });
+  t.after(h.close);
+
+  const res = await h.app.inject({ method: 'GET', url: '/dash/manifest.webmanifest' });
+  assert.equal(res.statusCode, 404);
+  assert.match(
+    String(res.headers['content-type']),
+    /application\/json/,
+    'тело — ошибка, и тип должен быть честным',
+  );
+  assert.equal((res.json() as { error: string }).error, 'not_found');
+});
+
+/* ------------------------------------------------------------------ */
+/* Переразбор фразы: кнопка «разобрать заново»                         */
+/* ------------------------------------------------------------------ */
+
+test('POST /api/utterances/:id/reparse возвращает фразу в очередь', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  // фраза, которую матчер счёл разобранной и модели не отдал
+  const inserted = insertUtterance(h.db, {
+    rawText: 'что он закончил кушать когда лег спать',
+    fastResult: { kind: 'sleep_start', confidence: 0.95 },
+    status: 'skipped',
+    llmError: 'не отправлено модели: fast-path уверенно разобрал',
+  });
+
+  const res = await h.app.inject({
+    method: 'POST',
+    url: `/api/utterances/${inserted.id}/reparse`,
+  });
+
+  assert.equal(res.statusCode, 202);
+  const { utterance } = res.json() as {
+    utterance: { id: number; status: string; attempts: number; reparse_count: number; llm_error: string | null };
+  };
+
+  assert.equal(utterance.id, inserted.id);
+  assert.equal(utterance.status, 'pending', 'фраза обязана вернуться в очередь');
+  assert.equal(utterance.attempts, 0, 'человек просит заново — попытки обнуляются');
+  assert.equal(utterance.reparse_count, 1);
+  assert.equal(utterance.llm_error, null, 'прошлое объяснение снято');
+});
+
+test('переразбор работает независимо от политики и повторяется', async (t) => {
+  // даже в самом экономном режиме кнопка обязана работать
+  const h = await makeTestApp({ LLM_QUEUE_POLICY: 'unknown' });
+  t.after(() => h.close());
+
+  const inserted = insertUtterance(h.db, {
+    rawText: 'андрей заснул',
+    fastResult: { kind: 'sleep_start', confidence: 0.95 },
+    status: 'skipped',
+  });
+
+  for (const expected of [1, 2, 3]) {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/utterances/${inserted.id}/reparse`,
+    });
+    assert.equal(res.statusCode, 202);
+    assert.equal(
+      (res.json() as { utterance: { reparse_count: number } }).utterance.reparse_count,
+      expected,
+    );
+  }
+});
+
+test('переразбор: неверный и несуществующий id', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  for (const bad of ['1abc', '0', '-1', 'абв']) {
+    const res = await h.app.inject({ method: 'POST', url: `/api/utterances/${bad}/reparse` });
+    assert.equal(res.statusCode, 400, `id=${bad}`);
+  }
+  assert.equal(
+    (await h.app.inject({ method: 'POST', url: '/api/utterances/999999/reparse' })).statusCode,
+    404,
+  );
+});
+
+test('переразбор виден в ленте фраз', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const inserted = insertUtterance(h.db, { rawText: 'что-то невнятное', status: 'failed' });
+  await h.app.inject({ method: 'POST', url: `/api/utterances/${inserted.id}/reparse` });
+
+  const { utterances } = (
+    await h.app.inject({ method: 'GET', url: '/api/utterances' })
+  ).json() as { utterances: Array<{ status: string; reparse_count: number }> };
+
+  assert.equal(utterances[0]?.status, 'pending');
+  assert.equal(utterances[0]?.reparse_count, 1, 'админка видит, что фразу переразбирали');
+});

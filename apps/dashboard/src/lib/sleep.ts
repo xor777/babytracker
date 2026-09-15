@@ -37,7 +37,29 @@ export function toSegments(
       subtype: ev.subtype ?? null,
     });
   }
-  return out.sort((a, b) => a.start - b.start);
+  return mergeOverlaps(out.sort((a, b) => a.start - b.start));
+}
+
+/**
+ * Склеивает пересекающиеся отрезки сна.
+ *
+ * По контракту §1 одновременно открыт только один сон, но закрытые события
+ * пересекаться могут — например, если модель разобрала одну и ту же ночь дважды.
+ * Без склейки лента рисует наложенные блоки с наложенными подписями, а сумма
+ * «сон за 24 часа» считает пересечение дважды и завышает итог.
+ */
+function mergeOverlaps(sorted: SleepSegment[]): SleepSegment[] {
+  const out: SleepSegment[] = [];
+  for (const seg of sorted) {
+    const last = out[out.length - 1];
+    if (last && seg.start <= last.end) {
+      last.end = Math.max(last.end, seg.end);
+      last.ongoing = last.ongoing || seg.ongoing;
+      continue;
+    }
+    out.push({ ...seg });
+  }
+  return out;
 }
 
 /** Слияние массива событий по id — SSE может прислать и создание, и обновление. */

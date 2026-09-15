@@ -35,14 +35,39 @@ function subtypeLabel(subtype: string | null | undefined): string | null {
   return null;
 }
 
-function Timer({ ms, suffix }: { ms: number; suffix?: string }) {
+/**
+ * Секундомер — признак живого. Тикающие секунды и акцентный цвет есть только
+ * у того, что происходит прямо сейчас.
+ */
+function Timer({ ms }: { ms: number }) {
   const { hm, sec } = formatStopwatch(ms);
   return (
     <span className="hero__timer">
       {hm}
       <span className="hero__timer-sec">:{sec}</span>
-      {suffix && <span className="hero__timer-suffix">{suffix}</span>}
     </span>
+  );
+}
+
+/**
+ * Прошедшее событие. Растущий счётчик «01:12:44» выглядел точно так же, как
+ * идущий, и читался как «кормление ещё идёт» — слово «назад» с трёх метров
+ * не видно. Поэтому у прошедшего крупно стоит **время события**, оно не
+ * меняется, а «сколько прошло» — мелко, словами и без секунд.
+ */
+function Past({ at, now, tail }: { at: number; now: number; tail?: string }) {
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  return (
+    <>
+      <span className="hero__when">
+        <span className="hero__when-prefix">в</span>
+        {formatTime(at)}
+      </span>
+      <span className="hero__ago">
+        {minutes < 1 ? 'только что' : `${formatMinutes(minutes)} назад`}
+        {tail ? ` · ${tail}` : ''}
+      </span>
+    </>
   );
 }
 
@@ -86,7 +111,7 @@ function StateHalf({
           <span className="orb__core" />
         </div>
         <div className="hero__stack">
-          <span className="hero__label">сейчас</span>
+          <span className="hero__label">Андрей сейчас</span>
           <span className="hero__word">{ongoing.word}</span>
           <Timer ms={Math.max(0, now - ongoing.startedAt)} />
           <span className="hero__sub">
@@ -106,7 +131,9 @@ function StateHalf({
         <span className="orb__core" />
       </div>
       <div className="hero__stack">
-        <span className="hero__label">сон</span>
+        {/* «СОН · СПИТ» — заголовок, повторяющий значение. Фраза про человека
+            читается целиком и работает во всех трёх состояниях. */}
+        <span className="hero__label">Андрей сейчас</span>
         <span className="hero__word">{asleep ? 'СПИТ' : 'БОДРСТВУЕТ'}</span>
         <Timer ms={awakeFor} />
         <span className="hero__sub">
@@ -138,8 +165,7 @@ function FeedHalf({
       <div className="hero__half hero__half--feed">
         <span className="hero__rule" />
         <div className="hero__stack">
-          <span className="hero__label">последнее кормление</span>
-          <span className="hero__word hero__word--muted">НЕ ЗАКРЫТО</span>
+          <span className="hero__word hero__word--muted">КОРМЛЕНИЕ НЕ ЗАКРЫТО</span>
           <span className="hero__open">
             начато в <b>{formatTime(openFeed.startedAt)}</b>, окончание неизвестно
           </span>
@@ -160,20 +186,20 @@ function FeedHalf({
       <div className="hero__half hero__half--feed">
         <span className="hero__rule" />
         <div className="hero__stack">
-          <span className="hero__label">предыдущее кормление</span>
+          <span className="hero__label">{prev && prevAt != null ? 'до этого ел' : ''}</span>
           {prev && prevAt != null ? (
             <>
               <span className="hero__word">{(feedLabel(prev) ?? 'кормление').toUpperCase()}</span>
-              <Timer ms={Math.max(0, now - prevAt)} suffix="назад" />
-              <span className="hero__sub">
-                в <b>{formatTime(prevAt)}</b>
-                {feeds.count > 0 ? ` · сейчас идёт ${feeds.count}-е` : ''}
-              </span>
+              <Past
+                at={prevAt}
+                now={now}
+                tail={feeds.count > 0 ? `сейчас идёт ${feeds.count}-е` : undefined}
+              />
             </>
           ) : (
             <>
-              <span className="hero__word hero__word--muted">ПЕРВОЕ ЗА СУТКИ</span>
-              <span className="hero__hint">других кормлений сегодня не записано</span>
+              <span className="hero__word hero__word--muted">ПЕРВОЕ КОРМЛЕНИЕ ЗА СУТКИ</span>
+              <span className="hero__hint">других сегодня не записано</span>
             </>
           )}
         </div>
@@ -191,8 +217,7 @@ function FeedHalf({
       <div className="hero__half hero__half--feed">
         <span className="hero__rule" />
         <div className="hero__stack">
-          <span className="hero__label">питание</span>
-          <span className="hero__word hero__word--muted">ЗАПИСЕЙ НЕТ</span>
+          <span className="hero__word hero__word--muted">ЕЩЁ НЕ КОРМИЛИ</span>
           <span className="hero__hint">
             скажите Алисе: <b>«Андрей поел 120 миллилитров»</b>
           </span>
@@ -205,13 +230,9 @@ function FeedHalf({
     <div className="hero__half hero__half--feed">
       <span className="hero__rule" />
       <div className="hero__stack">
-        <span className="hero__label">последнее кормление</span>
+        <span className="hero__label">последний раз ел</span>
         <span className="hero__word">{(feedLabel(last) ?? 'кормление').toUpperCase()}</span>
-        <Timer ms={Math.max(0, now - at)} suffix="назад" />
-        <span className="hero__sub">
-          в <b>{formatTime(at)}</b>
-          {feeds.count > 0 ? ` · ${feeds.count}-е за сутки` : ''}
-        </span>
+        <Past at={at} now={now} tail={feeds.count > 0 ? `${feeds.count}-е за сутки` : undefined} />
       </div>
     </div>
   );

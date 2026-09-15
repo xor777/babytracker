@@ -144,6 +144,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
 `;
 
 /**
+ * Повторный разбор фразы (кнопка «разобрать заново» в админке).
+ * Счётчик нужен модели: по нему она понимает, что события по этой фразе уже
+ * могли быть созданы, и не плодит дубли.
+ */
+const SCHEMA_V4 = `
+ALTER TABLE utterances ADD COLUMN reparse_count INTEGER NOT NULL DEFAULT 0;
+`;
+
+/**
  * Список миграций. Индекс + 1 == user_version после применения.
  * Добавлять только в конец, никогда не переписывать уже вышедшие.
  */
@@ -156,6 +165,9 @@ const MIGRATIONS: ReadonlyArray<(db: Db) => void> = [
   },
   (db) => {
     db.exec(SCHEMA_V3);
+  },
+  (db) => {
+    db.exec(SCHEMA_V4);
   },
 ];
 
@@ -256,7 +268,8 @@ export const EVENT_COLUMNS =
   'id, child_id, type, subtype, started_at, ended_at, value_num, value_unit, note, source, utterance_id, confidence, created_at, updated_at, deleted_at';
 
 export const UTTERANCE_COLUMNS =
-  'id, raw_text, alice_user_id, session_id, received_at, status, fast_result, llm_result, llm_error, attempts, processed_at';
+  'id, raw_text, alice_user_id, session_id, received_at, status, fast_result, llm_result, ' +
+  'llm_error, attempts, processed_at, reparse_count';
 
 export function getEventById(db: Db, id: number): EventRow | undefined {
   return get<EventRow>(db, `SELECT ${EVENT_COLUMNS} FROM events WHERE id = ?`, [id]);

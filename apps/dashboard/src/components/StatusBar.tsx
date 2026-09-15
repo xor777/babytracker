@@ -4,6 +4,8 @@ import { formatClock, plural } from '../lib/format';
 interface Props {
   link: LinkStatus;
   health: Health | null;
+  /** Наша зона отображения назвала сегодняшний день иначе, чем сервер. */
+  tzMismatch: boolean;
   pending: number;
   lastSyncAt: number | null;
   now: number;
@@ -25,7 +27,16 @@ function linkChip(link: LinkStatus, lastSyncAt: number | null, now: number) {
   return { color: 'var(--amber)', text: 'нет связи · переподключаюсь', alert: true, live: true, note };
 }
 
-export function StatusBar({ link, health, pending, lastSyncAt, now, childName, ageDays }: Props) {
+export function StatusBar({
+  link,
+  health,
+  tzMismatch,
+  pending,
+  lastSyncAt,
+  now,
+  childName,
+  ageDays,
+}: Props) {
   const chip = linkChip(link, lastSyncAt, now);
   // Когда claude недоступен, воркер помечает фразы skipped и очередь всегда пуста —
   // показываем вместо неё честную причину. Два чипа сразу в строку не влезут.
@@ -54,6 +65,18 @@ export function StatusBar({ link, health, pending, lastSyncAt, now, childName, a
         >
           <i className="chip__dot" />
           очередь разбора <b>{pending}</b>
+        </span>
+      )}
+
+      {/* Молчаливое расхождение хуже явной поломки: если пояс телевизора
+          разошёлся с серверным, счётчики суток соврут — и это надо видеть. */}
+      {tzMismatch && (
+        <span
+          className="chip chip--alert chip--shrink"
+          style={{ ['--chip-color' as string]: 'var(--amber)' }}
+        >
+          <i className="chip__dot" />
+          часовой пояс расходится
         </span>
       )}
 

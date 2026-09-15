@@ -16,6 +16,7 @@ import type {
   Utterance,
 } from '../types';
 import { upsertEvent } from '../lib/sleep';
+import { loadSnapshot, saveSnapshot } from '../lib/snapshot';
 
 const UTTERANCE_LIMIT = 20;
 /** Раз в столько мс освежаем REST-данные даже при живом SSE (страховка от рассинхрона). */
@@ -62,18 +63,24 @@ export interface TrackerData {
   clockOffset: number;
   /** Ни разу не получили данных — показываем экран загрузки. */
   booting: boolean;
+  /** Сохранить снимок прямо сейчас (перед самообновлением). */
+  persist: () => void;
 }
 
 export function useTracker(): TrackerData {
-  const [state, setState] = useState<TrackerState | null>(null);
-  const [events, setEvents] = useState<TrackerEvent[]>([]);
-  const [measures, setMeasures] = useState<TrackerEvent[]>([]);
-  const [utterances, setUtterances] = useState<Utterance[]>([]);
+  // Снимок прошлой сессии: после самообновления экран рисуется сразу,
+  // без чёрной паузы, а свежие данные подъезжают через секунду.
+  const restored = useRef(loadSnapshot()).current;
+
+  const [state, setState] = useState<TrackerState | null>(restored?.state ?? null);
+  const [events, setEvents] = useState<TrackerEvent[]>(restored?.events ?? []);
+  const [measures, setMeasures] = useState<TrackerEvent[]>(restored?.measures ?? []);
+  const [utterances, setUtterances] = useState<Utterance[]>(restored?.utterances ?? []);
   const [link, setLink] = useState<LinkStatus>('connecting');
   const [health, setHealth] = useState<Health | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [clockOffset, setClockOffset] = useState(0);
-  const [booting, setBooting] = useState(true);
+  const [booting, setBooting] = useState(restored === null);
 
   const offsetRef = useRef(0);
   const mountedRef = useRef(true);
@@ -339,5 +346,33 @@ export function useTracker(): TrackerData {
     };
   }, []);
 
-  return { state, events, measures, utterances, link, health, lastSyncAt, clockOffset, booting };
+  // --- снимок для мгновенного старта ---
+  const latest = useRef({ state, events, measures, utterances });
+  latest.current = { state, events, measures, utterances };
+
+  const persist = useCallback(() => saveSnapshot(latest.current), []);
+
+  useEffect(() => {
+    // Раз в 15 с, а не на каждое изменение: сериализовать сотни событий
+    // каждую секунду ни к чему.
+    const timer = setInterval(persist, 15_000);
+    window.addEventListener('pagehide', persist);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('pagehide', persist);
+    };
+  }, [persist]);
+
+  return {
+    state,
+    events,
+    measures,
+    utterances,
+    link,
+    health,
+    lastSyncAt,
+    clockOffset,
+    booting,
+    persist,
+  };
 }

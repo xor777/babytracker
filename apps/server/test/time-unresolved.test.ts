@@ -121,9 +121,18 @@ test('время из YANDEX.DATETIME разобрано -> модель не н
     assert.equal('at' in res ? res.at : null, expectedAt, `время должно разобраться: «${phrase}»`);
     assert.equal(res.timeUnresolved, false, `«${phrase}»: время разобрано`);
     assert.ok('confidence' in res && res.confidence >= 0.9, `уверенность высокая: «${phrase}»`);
+    assert.equal(
+      decideQueue({ policy: 'unknown', threshold: 0.8, fast: res, command: phrase }).queue,
+      false,
+      'самый экономный режим на разобранном времени модель не зовёт',
+    );
 
+    // Под новым принципом (белый список канонических форм) фраза со временем
+    // НЕ канонична даже с разобранным временем: «без чисел, без времени» —
+    // часть определения простой формы. Матчер записывает событие с верным
+    // временем сразу, а модель дополнительно проверяет, не потерян ли факт.
     const decision = decideQueue({ policy: 'smart', threshold: 0.8, fast: res, command: phrase });
-    assert.equal(decision.queue, false, `разобранное время модели не требует: «${phrase}»`);
+    assert.equal(decision.queue, true, `фраза со временем уходит модели: «${phrase}»`);
   }
 });
 

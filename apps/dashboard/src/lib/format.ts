@@ -1,13 +1,21 @@
+import { DISPLAY_TZ } from './tz';
+
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 
-const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const timeFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: DISPLAY_TZ,
+  hour: '2-digit',
+  minute: '2-digit',
+});
 const clockFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: DISPLAY_TZ,
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
 });
 const dateFmt = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: DISPLAY_TZ,
   weekday: 'long',
   day: 'numeric',
   month: 'long',

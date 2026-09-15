@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { TrackerEvent } from '../types';
 import { formatMinutes, HOUR, parseTs } from '../lib/format';
 import { toSegments } from '../lib/sleep';
+import { zonedHour } from '../lib/tz';
 
 interface Props {
   events: TrackerEvent[];
@@ -46,13 +47,13 @@ export function DayTimeline({ events, now }: Props) {
   const ticks: { t: number; hour: number; major: boolean }[] = [];
   const firstHour = Math.ceil(from / HOUR) * HOUR;
   for (let t = firstHour; t <= anchor; t += HOUR) {
-    const hour = new Date(t).getHours();
+    const hour = zonedHour(t);
     ticks.push({ t, hour, major: hour % 3 === 0 });
   }
 
   const nightBands: { x1: number; x2: number }[] = [];
   for (let t = Math.floor(from / HOUR) * HOUR; t < anchor; t += HOUR) {
-    const hour = new Date(t).getHours();
+    const hour = zonedHour(t);
     if (hour >= 22 || hour < 7) {
       nightBands.push({ x1: Math.max(0, x(t)), x2: Math.min(W, x(t + HOUR)) });
     }

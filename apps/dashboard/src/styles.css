@@ -406,12 +406,23 @@ body {
   min-width: 0;
 }
 
-/* Питание — своя палитра: зелёный не спорит ни с сонным циан,
-   ни с янтарным «бодрствует». */
-.hero__half--feed {
-  --accent: #4df0a9;
-  --accent-soft: #b9ffdf;
-  --accent-glow: rgba(77, 240, 169, 0.45);
+/*
+ * Цвет — признак живого, а не темы.
+ *
+ * Раньше зелёной была вся правая половина, и во время кормления обе половины
+ * выглядели одинаково активными: крупные тикающие цифры «идёт сейчас» и
+ * «прошло с тех пор» читались одним и тем же. Теперь акцент горит только у
+ * того, что происходит прямо сейчас, а прошедшее — спокойное и серое.
+ */
+.hero__half--feed .hero__word {
+  color: var(--text);
+  text-shadow: none;
+}
+
+.hero__half--feed .hero__rule {
+  background: #2f9d74;
+  box-shadow: none;
+  opacity: 0.6;
 }
 
 .hero__rule {
@@ -519,13 +530,30 @@ body {
   opacity: 0.92;
 }
 
-.hero__timer-suffix {
-  margin-left: 16px;
-  font-size: 26px;
-  letter-spacing: 0.16em;
+/* Прошедшее: метка времени вместо секундомера. Не тикает, не светится,
+   короче на три знака — разница видна раньше, чем прочитаешь подпись. */
+.hero__when {
+  font-size: 84px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.hero__when-prefix {
+  margin-right: 16px;
+  font-size: 34px;
+  letter-spacing: 0.1em;
   color: var(--text-faint);
-  text-transform: uppercase;
-  text-shadow: none;
+}
+
+.hero__ago {
+  margin-top: 2px;
+  font-size: 30px;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .hero__sub {
@@ -861,6 +889,23 @@ body {
   align-items: center;
   gap: 12px;
   white-space: nowrap;
+  /* Часы и возраст не должны вытесняться предупреждениями. */
+  flex: none;
+}
+
+/* Единственный чип, которому позволено ужаться: предупреждение о поясе. */
+.chip--shrink {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.chip--shrink .chip__dot {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 12px;
 }
 
 .chip b {

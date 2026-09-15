@@ -510,6 +510,7 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       fastEvent: fastEventFor(utterance.id),
       state: getState(db, cfg),
       utteranceId: utterance.id,
+      reparseCount: utterance.reparse_count,
       changeSets: listChangeSets(db, 5),
       recentEvents: queryEvents(db, { limit: 20 }),
       // Без истории фраз не отличить «случилось дважды» от «сказали дважды».

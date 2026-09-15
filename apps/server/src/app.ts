@@ -5,7 +5,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import type { SetHeadersResponse } from '@fastify/static';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import type { Config } from './config.ts';
@@ -21,6 +23,58 @@ import { registerAliceRoutes, neutralReply } from './alice.ts';
  */
 export function maskUrl(url: string): string {
   return url.replace(/^\/alice\/[^/?#]+/, '/alice/***');
+}
+
+/* ------------------------------------------------------------------ */
+/* Заголовки статики админки: она же PWA                               */
+/* ------------------------------------------------------------------ */
+
+/** Год — обычный срок для файла, имя которого содержит хеш содержимого. */
+const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
+/**
+ * `no-cache` НЕ значит «не кешировать»: браузер положит файл в кеш, но каждый
+ * раз переспросит, не изменился ли он. Ровно то, что нужно оболочке приложения,
+ * манифесту и service worker'у.
+ */
+const REVALIDATE_CACHE = 'no-cache';
+
+/**
+ * Заголовки для файлов админки (она же PWA под /dash).
+ *
+ * Оба правила ниже — про отказы, которые происходят МОЛЧА, без единой ошибки
+ * в консоли, и потому отлаживаются мучительно:
+ *
+ *  - манифест с чужим Content-Type браузер просто игнорирует, и предложение
+ *    «установить на домашний экран» не появляется;
+ *  - service worker, отданный с длинным сроком кеширования, застревает в
+ *    браузере вместе со всей старой версией приложения: обновления перестают
+ *    доходить, а пользователь видит работающее, но устаревшее приложение.
+ *
+ * Что кешировать долго, определяем не списком имён, а расположением: Vite
+ * кладёт в `assets/` файлы с хешем содержимого в имени, их можно кешировать
+ * навсегда. Всё остальное на верхнем уровне сборки — оболочка, манифест,
+ * воркер, иконки — имя не меняет, значит должно перепроверяться.
+ */
+export function setDashHeaders(res: SetHeadersResponse, filePath: string): void {
+  const relative = filePath.replace(/\\/g, '/');
+  const name = relative.slice(relative.lastIndexOf('/') + 1).toLowerCase();
+  const hashedAsset = /\/assets\//.test(relative);
+
+  res.setHeader('Cache-Control', hashedAsset ? IMMUTABLE_CACHE : REVALIDATE_CACHE);
+
+  if (isServiceWorker(name)) {
+    // Воркер лежит в /dash/ и по умолчанию управляет только этим путём — ровно
+    // та область, которая нужна. Заголовок фиксирует её явно и НЕ расширяет:
+    // дашборду телевизора на «/» воркер админки управлять не должен.
+    // Content-Type воркеру ставит send: «application/javascript» — валидный
+    // для регистрации тип, переопределять его отсюда всё равно не выйдет.
+    res.setHeader('Service-Worker-Allowed', '/dash/');
+  }
+}
+
+/** Файл воркера у Vite PWA называется sw.js или service-worker.js. */
+function isServiceWorker(name: string): boolean {
+  return name === 'sw.js' || name === 'service-worker.js';
 }
 
 export interface CreateAppOptions {
@@ -150,20 +204,49 @@ export function createApp(options: CreateAppOptions): CreatedApp {
     (options.serveStatic ?? true) && fs.existsSync(cfg.adminDist) && fs.existsSync(adminIndexHtml);
 
   if (adminAvailable) {
-    void app.register(fastifyStatic, {
-      root: cfg.adminDist,
-      prefix: '/dash/',
-      index: ['index.html'],
-      wildcard: true,
-      // sendFile уже добавлен первой регистрацией — второй раз декорировать нельзя
-      decorateReply: false,
-      cacheControl: true,
-      maxAge: '5m',
+    void app.register(async (scope) => {
+      /*
+       * Content-Type манифеста приходится чинить здесь, а не в setHeaders:
+       * `send` выставляет тип ПОСЛЕ setHeaders и затирает всё, что там задано
+       * (проверено фактом — запрошенный charset до ответа не доезжал).
+       * onSend же срабатывает последним, поэтому только он даёт гарантию.
+       *
+       * Гарантия нужна именно здесь: манифест с чужим типом браузер молча
+       * игнорирует, установка на домашний экран просто не предлагается,
+       * и ни одной ошибки в консоли при этом нет.
+       */
+      scope.addHook('onSend', async (request, reply, payload) => {
+        const pathname = request.url.split('?')[0] ?? '';
+        // Только для успешной отдачи файла: 404 — это JSON с ошибкой,
+        // и выдавать его за манифест было бы враньём в заголовке.
+        if (reply.statusCode === 200 && pathname.endsWith('.webmanifest')) {
+          void reply.header('Content-Type', 'application/manifest+json; charset=utf-8');
+        }
+        return payload;
+      });
+
+      await scope.register(fastifyStatic, {
+        root: cfg.adminDist,
+        prefix: '/dash/',
+        index: ['index.html'],
+        wildcard: true,
+        // sendFile уже добавлен первой регистрацией — второй раз декорировать нельзя
+        decorateReply: false,
+        // Cache-Control ставим сами: у PWA это часть работоспособности,
+        // а не оптимизация — см. setDashHeaders
+        cacheControl: false,
+        setHeaders: setDashHeaders,
+      });
     });
 
-    // /dash без слэша: отдаём index напрямую, без лишнего редиректа
+    // /dash без слэша: отдаём оболочку напрямую, без лишнего редиректа.
+    // Кеширование задаём руками — сюда setHeaders статики не доходит,
+    // а закешированная оболочка означает застрявшую версию приложения.
     app.get('/dash', (_request, reply) =>
-      reply.type('text/html; charset=utf-8').send(fs.createReadStream(adminIndexHtml)),
+      reply
+        .type('text/html; charset=utf-8')
+        .header('Cache-Control', REVALIDATE_CACHE)
+        .send(fs.createReadStream(adminIndexHtml)),
     );
 
     app.log.info({ dist: cfg.adminDist }, 'статика админки: раздаём по /dash');

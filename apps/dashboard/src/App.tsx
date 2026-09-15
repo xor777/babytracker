@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useClock } from './hooks/useClock';
 import { isDebug, useStage, type StageInfo } from './hooks/useStage';
 import { useTracker } from './hooks/useTracker';
+import { useVersionWatch } from './hooks/useVersionWatch';
 import { TopBar } from './components/TopBar';
 import { HeroPanel } from './components/HeroPanel';
 import { SummaryPanel } from './components/SummaryPanel';
@@ -10,6 +11,8 @@ import { WeightPanel } from './components/WeightPanel';
 import { UtteranceFeed } from './components/UtteranceFeed';
 import { StatusBar } from './components/StatusBar';
 import { findOngoing, localDate, summarizeDay } from './lib/day';
+import { DISPLAY_TZ, TZ_IS_EXPLICIT } from './lib/tz';
+import { parseTs } from './lib/format';
 
 /** Сколько суток ребёнку — считаем локально, чтобы цифра не «застывала» до следующего state. */
 function ageDays(birthDate: string, now: number, fallback: number): number {
@@ -19,7 +22,17 @@ function ageDays(birthDate: string, now: number, fallback: number): number {
 }
 
 /** Виден только по ?debug=1 — чтобы можно было снять метрики прямо с телевизора. */
-function DebugPanel({ stage, link }: { stage: StageInfo; link: string }) {
+function DebugPanel({
+  stage,
+  link,
+  serverDate,
+  screenDate,
+}: {
+  stage: StageInfo;
+  link: string;
+  serverDate: string;
+  screenDate: string;
+}) {
   return (
     <div className="debug">
       {[
@@ -30,6 +43,9 @@ function DebugPanel({ stage, link }: { stage: StageInfo; link: string }) {
         `visualViewport   ${stage.visual}`,
         `dpr              ${stage.dpr}`,
         `связь            ${link}`,
+        `зона экрана      ${DISPLAY_TZ}${TZ_IS_EXPLICIT ? ' (задана)' : ' (от устройства)'}`,
+        `дата сервера     ${serverDate}`,
+        `дата экрана      ${screenDate}`,
       ].join('\n')}
     </div>
   );
@@ -53,8 +69,11 @@ export default function App() {
   const stage = useStage();
   const debug = isDebug();
   const tick = useClock();
-  const { state, events, measures, utterances, link, health, lastSyncAt, clockOffset, booting } =
+  const { state, events, measures, utterances, link, health, lastSyncAt, clockOffset, booting, persist } =
     useTracker();
+
+  // Экран висит сутками: новую версию он должен заметить сам.
+  useVersionWatch({ onBeforeReload: persist });
 
   // Единое «сейчас» для всего экрана: локальные часы, выровненные по серверу.
   const now = tick + clockOffset;
@@ -68,13 +87,26 @@ export default function App() {
   // Фразу связываем и со старыми замерами: «12 сентября он весил 4 528»
   // породило событие за пределами 30-часового окна.
   const linkable = useMemo(() => [...events, ...measures], [events, measures]);
+  // Дата серверного «сейчас» в нашей зоне: если она разошлась с датой сервера,
+  // счётчики суток считаются по чужим границам.
+  const serverNowMs = state ? parseTs(state.now) : null;
+  const screenDate = serverNowMs != null ? localDate(serverNowMs) : localDate(now);
+  const tzMismatch = state != null && serverNowMs != null && screenDate !== state.today.date;
+
   const asleep = state?.sleep.status === 'asleep';
   const busy = !asleep && ongoing !== null && !ongoing.stale;
   const stateClass = asleep ? 'is-asleep' : busy ? 'is-feeding' : 'is-awake';
 
   return (
     <>
-      {debug && <DebugPanel stage={stage} link={link} />}
+      {debug && (
+        <DebugPanel
+          stage={stage}
+          link={link}
+          serverDate={state?.today.date ?? '—'}
+          screenDate={screenDate}
+        />
+      )}
       <div className={`stage ${stateClass}`}>
         <div className="stage__drift">
           <div className="backdrop" />
@@ -111,6 +143,7 @@ export default function App() {
               <StatusBar
                 link={link}
                 health={health}
+                tzMismatch={tzMismatch}
                 pending={state.pending}
                 lastSyncAt={lastSyncAt}
                 now={now}

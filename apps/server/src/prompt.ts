@@ -169,6 +169,8 @@ export interface BuildPromptInput {
   state: StateDto;
   /** id разбираемой фразы — им связываются созданные события (§10.4). */
   utteranceId?: number | null;
+  /** Сколько раз фразу уже присылали на повторный разбор. */
+  reparseCount?: number | null;
   /** Последние наборы изменений — чтобы «отмени последнее» имело смысл (§9.5). */
   changeSets?: ChangeSetDto[];
   /** Последние события — чтобы модель видела, что уже записано, и не дублировала. */
@@ -704,6 +706,7 @@ export function selectCaseCards(input: CaseInput): CaseCard[] {
 export function buildPrompt(input: BuildPromptInput): string {
   const { cfg, rawText, fast, fastEvent, state } = input;
   const utteranceId = input.utteranceId ?? null;
+  const reparseCount = input.reparseCount ?? 0;
   const now = input.now ?? new Date();
   const changeSets = input.changeSets ?? [];
   const recentEvents = input.recentEvents ?? [];
@@ -847,6 +850,22 @@ ${rawText}
 # ЧТО УЖЕ СДЕЛАЛ БЫСТРЫЙ МАТЧЕР
 
 ${describeFast(fast, fastEvent)}
+${
+  reparseCount > 0
+    ? `
+# ЭТО ПОВТОРНЫЙ РАЗБОР (${reparseCount}-й раз)
+
+Человек нажал в админке «разобрать заново»: значит, прошлый разбор этой фразы
+его не устроил — скорее всего, какой-то факт был потерян или записан неверно.
+Посмотри свежим взглядом и найди то, что упустили.
+
+События по этой фразе, возможно, УЖЕ СОЗДАНЫ прошлым разбором. Они видны
+в списке последних событий ниже и связаны с utterance_id = ${utteranceId ?? '?'}.
+Проверь их через query_events и ДОПОЛНИ недостающее, а не создавай заново:
+повторный разбор не должен удваивать то, что уже записано верно.
+`
+    : ''
+}
 
 # ПОСЛЕДНИЕ ФРАЗЫ РОДИТЕЛЯ
 

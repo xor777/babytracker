@@ -129,6 +129,34 @@ export function releaseUtterance(db: Db, id: number, note: string): UtteranceRow
   return getUtterance(db, id);
 }
 
+/**
+ * Повторный разбор фразы по требованию человека («разобрать заново» в админке).
+ *
+ * Возвращает фразу в очередь НЕЗАВИСИМО от политики и от того, чем закончился
+ * прошлый разбор: именно так чинится уже случившаяся потеря факта — иначе
+ * пропущенное не вернуть, кроме как повторить вслух. Счётчик попыток
+ * обнуляется (человек просит заново, а не система повторяет), а reparse_count
+ * растёт — по нему модель понимает, что события по этой фразе уже могли быть
+ * созданы, и не плодит дубли.
+ */
+export function reparseUtterance(db: Db, id: number): UtteranceRow | null {
+  const existing = getUtterance(db, id);
+  if (!existing) return null;
+
+  run(
+    db,
+    `UPDATE utterances
+        SET status = 'pending',
+            attempts = 0,
+            llm_error = NULL,
+            processed_at = NULL,
+            reparse_count = reparse_count + 1
+      WHERE id = ?`,
+    [p(id)],
+  );
+  return getUtterance(db, id) ?? null;
+}
+
 /** Возврат в очередь для повторной попытки. */
 export function requeueUtterance(db: Db, id: number, error: string): UtteranceRow | undefined {
   run(db, `UPDATE utterances SET status = 'pending', llm_error = ? WHERE id = ?`, [
@@ -187,5 +215,6 @@ export function toUtteranceDto(row: UtteranceRow): UtteranceDto {
     llm_error: row.llm_error,
     fast_result: parseJson(row.fast_result),
     llm_result: parseJson(row.llm_result),
+    reparse_count: Number(row.reparse_count ?? 0),
   };
 }

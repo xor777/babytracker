@@ -13,7 +13,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AppContext } from './context.ts';
 import type { AliceRequestBody, AliceResponseBody, FastResult } from './types.ts';
 import { matchFast } from './fastpath.ts';
-import { endSleep, getState, startSleep } from './events.ts';
+import { endSleep, getState, insertEvent, startSleep } from './events.ts';
 import { getUtterance, insertUtterance, toUtteranceDto } from './utterances.ts';
 import { getEventById } from './db.ts';
 import { newChangeSetId, type JournalContext } from './journal.ts';
@@ -479,6 +479,26 @@ export function handleAliceRequest(
         text = 'А он и не спал. Записала, что проснулся';
         scheduleEventBroadcast(ctx, 'created', res.event.id);
       }
+      break;
+    }
+
+    case 'diaper': {
+      const { event } = insertEvent(
+        db,
+        {
+          type: 'diaper',
+          subtype: fast.subtype,
+          started_at: fast.at ?? now.toISOString(),
+          ended_at: fast.at ?? now.toISOString(),
+          source: 'alice-fast',
+          utterance_id: utterance.id,
+          confidence: fast.confidence,
+        },
+        'close-previous',
+        journal,
+      );
+      text = fast.subtype === 'dirty' ? 'Записала: покакал' : 'Записала: пописал';
+      scheduleEventBroadcast(ctx, 'created', event.id);
       break;
     }
 

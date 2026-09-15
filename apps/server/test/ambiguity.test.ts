@@ -78,6 +78,7 @@ function utterance(id: number, text: string, minutesAgo: number, status = 'done'
     llm_error: null,
     attempts: 0,
     processed_at: null,
+    reparse_count: 0,
   };
 }
 

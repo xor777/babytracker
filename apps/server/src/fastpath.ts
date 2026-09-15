@@ -227,6 +227,19 @@ const QUERY_PATTERNS: RegExp[] = [
 
 const QUERY_TOKENS = new Set(['статус', 'отчет', 'сводка', 'итоги', 'состояние']);
 
+/**
+ * Подгузник — единственный не-сонный факт, который матчер пишет сам.
+ * Только однословные, ни с чем не путающиеся формы: всё сложнее уходит модели.
+ */
+const DIAPER_DIRTY_TOKENS = new Set([
+  'покакал', 'покакала', 'какал', 'какала', 'накакал', 'накакала',
+  'обкакался', 'обкакалась', 'покакали',
+]);
+
+const DIAPER_WET_TOKENS = new Set([
+  'пописал', 'пописала', 'описался', 'описалась', 'пописали', 'нассал',
+]);
+
 /* ------------------------------------------------------------------ */
 /* Команды управления данными (§9.4)                                   */
 /* ------------------------------------------------------------------ */
@@ -674,6 +687,115 @@ function extractDateTime(nlu: AliceNlu | undefined, now: Date, tz: string): stri
 }
 
 /* ------------------------------------------------------------------ */
+/* Белый список канонических фраз                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * КЛЮЧЕВОЕ РЕШЕНИЕ ПРОЕКТА, принятое после трёх одинаковых инцидентов на проде:
+ *
+ *   1. «покушал и уснул»            — не было правила про составные фразы;
+ *   2. «заснул полтора часа назад»  — не было правила про неразрешённое время;
+ *   3. «что он закончил кушать когда лег спать» — «когда» не было в списке
+ *      связок, а «кушать» не покрывалось стемами еды. ДВЕ дыры в одной фразе.
+ *
+ * Каждый раз список опасностей дописывали ПОСЛЕ того, как он подвёл, и каждый
+ * раз ценой потерянного факта в дневнике ребёнка. Полный список русских связок
+ * не составить: впереди «как только», «пока», «и тут», «а сам», «перед тем как».
+ *
+ * Поэтому направление решения перевёрнуто, ровно как со списком колонок
+ * в валидаторе SQL. Было: «матчер уверен -> модель не зовём». Стало:
+ *
+ *   ФРАЗА СОВПАЛА С КОРОТКОЙ КАНОНИЧЕСКОЙ ФОРМОЙ -> не зовём.
+ *   ВСЁ ОСТАЛЬНОЕ -> зовём.
+ *
+ * Канонична фраза, в которой КАЖДОЕ слово матчеру знакомо. Незнакомое слово —
+ * само по себе достаточная причина отдать фразу модели: именно незнакомые слова
+ * («кушать», «когда») и уносили факты все три раза. Список угроз перестаёт быть
+ * точкой отказа: чтобы дыра появилась, теперь надо ошибочно ДОБАВИТЬ слово
+ * в белый список, а не забыть добавить в чёрный.
+ */
+
+/** Слова, которые ничего не значат для разбора и не мешают каноничности. */
+const CANONICAL_FILLERS = new Set([
+  'андрей', 'андрея', 'андрею', 'андрейка',
+  'он', 'она', 'малыш', 'ребенок', 'сын',
+  'уже', 'наконец', 'наконец то', 'опять', 'снова', 'все', 'ну', 'да', 'ладно',
+  'вот', 'так', 'и', 'а',
+]);
+
+/** Слова фразы-маркера (многословные формы вроде «положили спать»). */
+function wordsOf(phrases: readonly string[]): string[] {
+  return phrases.flatMap((phrase) => phrase.split(' '));
+}
+
+/** Разрешённый словарь для каждого вида разбора. */
+const CANONICAL_VOCABULARY: Readonly<Record<string, ReadonlySet<string>>> = {
+  sleep_start: new Set([...SLEEP_START_TOKENS, ...wordsOf(SLEEP_START_PHRASES)]),
+  sleep_end: new Set([...SLEEP_END_TOKENS, ...wordsOf(SLEEP_END_PHRASES)]),
+  diaper: new Set([...DIAPER_DIRTY_TOKENS, ...DIAPER_WET_TOKENS]),
+  exit: new Set([...EXIT_TOKENS, ...wordsOf(EXIT_PHRASES), ...FILLERS]),
+  query_state: new Set([
+    ...QUERY_TOKENS,
+    'сколько', 'спал', 'спит', 'проспал', 'проспала', 'спала',
+    'как', 'что', 'там', 'дела', 'сегодня', 'всего', 'долго', 'сну', 'сном', 'по', 'со',
+  ]),
+};
+
+/** Сколько значимых слов допускает каноническая форма. */
+export const CANONICAL_MAX_WORDS = 4;
+
+export interface CanonicalCheck {
+  canonical: boolean;
+  /** Почему НЕ канонична — попадает в ленту распознавания, чтобы было видно. */
+  reason: string;
+}
+
+/**
+ * Совпадает ли фраза с короткой канонической формой, которую матчер понимает
+ * целиком и в которой ошибиться негде.
+ */
+export function checkCanonical(command: string, fast: FastResult): CanonicalCheck {
+  if (fast.kind === 'unknown') {
+    return { canonical: false, reason: 'матчер не понял фразу' };
+  }
+  if (fast.mayContainMore) {
+    return { canonical: false, reason: 'во фразе может быть ещё событие' };
+  }
+  if (fast.timeUnresolved) {
+    return { canonical: false, reason: 'во фразе названо время, разобрать его не удалось' };
+  }
+
+  const { text: source } = clampCommand(typeof command === 'string' ? command : '');
+  const normalized = normalize(source);
+  if (normalized.length === 0) return { canonical: false, reason: 'пустая фраза' };
+
+  if (looksLikeQuestion(source, normalized)) {
+    return { canonical: false, reason: 'это вопрос, а не утверждение' };
+  }
+  if (countNumbers(normalized) > 0) {
+    return { canonical: false, reason: 'во фразе есть число' };
+  }
+  if (hasTimeReference(normalized)) {
+    return { canonical: false, reason: 'во фразе есть указание на время' };
+  }
+  if (countSignificantWords(normalized) > CANONICAL_MAX_WORDS) {
+    return { canonical: false, reason: 'фраза длиннее короткой канонической формы' };
+  }
+
+  const vocabulary = CANONICAL_VOCABULARY[fast.kind];
+  if (!vocabulary) return { canonical: false, reason: `разбор «${fast.kind}» не каноничен` };
+
+  for (const token of tokenize(normalized)) {
+    if (vocabulary.has(token) || CANONICAL_FILLERS.has(token)) continue;
+    // Незнакомое слово — самостоятельная причина отдать фразу модели.
+    // Именно незнакомые слова унесли факты все три раза.
+    return { canonical: false, reason: `матчеру незнакомо слово «${token}»` };
+  }
+
+  return { canonical: true, reason: 'короткая каноническая фраза, понятная матчеру целиком' };
+}
+
+/* ------------------------------------------------------------------ */
 /* Матчер                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -811,6 +933,22 @@ export function matchFast(
   }
   if (hasAnyToken(tokens, SLEEP_START_TOKENS)) {
     return sleepResult('sleep_start', at, more('sleep'), timeUnresolved);
+  }
+
+  // 7. Подгузник: однословные, ни с чем не путающиеся формы.
+  for (const [subtype, dictionary] of [
+    ['dirty', DIAPER_DIRTY_TOKENS],
+    ['wet', DIAPER_WET_TOKENS],
+  ] as const) {
+    if (!hasAnyToken(tokens, dictionary)) continue;
+    const base = {
+      kind: 'diaper' as const,
+      subtype,
+      confidence: timeUnresolved ? C_TIME_UNRESOLVED : C_DIRECT,
+      mayContainMore: more('diaper'),
+      timeUnresolved,
+    };
+    return at === undefined ? base : { ...base, at };
   }
 
   return { kind: 'unknown', mayContainMore: more(null), timeUnresolved };

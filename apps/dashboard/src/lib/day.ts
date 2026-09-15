@@ -1,11 +1,10 @@
 import type { TrackerEvent } from '../types';
 import { parseTs } from './format';
+import { zonedDateString } from './tz';
 
-/** Локальная дата события в формате YYYY-MM-DD. */
+/** Дата события в зоне отображения, YYYY-MM-DD. */
 export function localDate(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return zonedDateString(ms);
 }
 
 export function isAlive(ev: TrackerEvent): boolean {
