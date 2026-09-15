@@ -54,6 +54,9 @@ export const SLOW_DOWN_STEP_SEC = 5;
 /** Потолок интервала: дальше наращивать бессмысленно, клиент и так наказан. */
 const MAX_INTERVAL_SEC = 60;
 
+/** Допуск к интервалу опроса: сеть и таймеры не обязаны попадать в миллисекунду. */
+const POLL_TOLERANCE_MS = 500;
+
 /**
  * Срок жизни сессии телефона — скользящий, от последнего обращения.
  * Телевизор живёт бессрочно, см. `sessionExpiry`.
@@ -67,7 +70,30 @@ export const PHONE_SESSION_TTL_DAYS = 90;
  */
 const TOUCH_THROTTLE_MS = 60_000;
 
-export const SESSION_COOKIE = 'bt_session';
+/**
+ * Имя куки сессии.
+ *
+ * Их два, и это не прихоть. Префикс `__Host-` — это обещание браузеру и
+ * требование к нему одновременно: такую куку нельзя поставить ни с соседнего
+ * поддомена, ни с другим `Path`, ни без `Secure`. Без него сосед по домену
+ * (что-нибудь ещё на nuanu.ai) мог бы подбросить `bt_session=…; Path=/dash`,
+ * и браузер отправил бы ЕЁ вперёд настоящей — по RFC 6265 более длинный Path
+ * идёт первым. Это фиксация сессии, и `__Host-` закрывает её на корню.
+ *
+ * Но требование `Secure` жёсткое: по http браузер такую куку просто выбросит.
+ * Поэтому при выключенном `Secure` (только локальная разработка без TLS)
+ * имя обычное — иначе вход на localhost перестал бы работать вовсе.
+ */
+export const SESSION_COOKIE_HOST = '__Host-bt_session';
+export const SESSION_COOKIE_PLAIN = 'bt_session';
+
+/** Как называется кука при таких настройках. */
+export function sessionCookieName(secure: boolean): string {
+  return secure ? SESSION_COOKIE_HOST : SESSION_COOKIE_PLAIN;
+}
+
+/** Совместимость: имя по умолчанию для тестов и старого кода. */
+export const SESSION_COOKIE = SESSION_COOKIE_PLAIN;
 
 /* ------------------------------------------------------------------ */
 /* Типы                                                                */
@@ -242,6 +268,19 @@ export class RateLimiter {
     const entry = this.#hits.get(key);
     if (!entry) return 0;
     return Math.max(1, Math.ceil((entry.resetAt - this.#clock()) / 1000));
+  }
+
+  /**
+   * Вернуть одну попытку в окно.
+   *
+   * Не то же самое, что `reset`: сброс окна целиком превратил бы жёсткий
+   * предел в амортизированный. Имея возможность завести себе заявку (эндпоинт
+   * открыт), перебирающий получал бы схему «пять неверных, одно верное своё,
+   * снова пять» — то есть впятеро больше попыток, чем задумано.
+   */
+  refund(key: string): void {
+    const entry = this.#hits.get(key);
+    if (entry && entry.count > 0) entry.count -= 1;
   }
 
   reset(key?: string): void {
@@ -445,36 +484,50 @@ export function startPairing(db: Db, options: StartPairingOptions): StartedPairi
   const ttl = options.ttlSec ?? CODE_TTL_SEC;
   const deviceCode = newDeviceCode();
 
-  // Столкновение коротких кодов при 20^8 маловероятно, но «маловероятно» —
-  // не «невозможно»: два одновременно ждущих устройства с одним кодом означали
-  // бы, что одобрение уходит не тому. Поэтому просто пробуем ещё раз.
+  /*
+   * Столкновение коротких кодов при 20^8 маловероятно, но «маловероятно» —
+   * не «невозможно»: два одновременно ждущих устройства с одним кодом означали
+   * бы, что одобрение уходит не тому.
+   *
+   * Судья здесь — частичный UNIQUE-индекс по `pending`, а не предварительный
+   * SELECT. Проверка чтением и индекс расходятся в одном месте: просроченная
+   * заявка остаётся `pending` в таблице, пока её кто-нибудь не опросит, — для
+   * чтения она «свободна», для индекса занята. Поэтому не спрашиваем, а
+   * пробуем вставить и ловим отказ.
+   */
   let userCode = '';
+  let lastError: unknown = null;
   for (let attempt = 0; attempt < 8; attempt++) {
     const candidate = newUserCode();
-    if (!findPendingByUserCode(db, candidate, now)) {
+    try {
+      run(
+        db,
+        `INSERT INTO device_codes
+           (device_code_hash, user_code, kind, label, user_agent, status, created_at, expires_at,
+            approved_at, approved_by, claimed_at, session_id, last_polled_at, interval_sec)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NULL, NULL, NULL, NULL, NULL, ?)`,
+        [
+          sha256(deviceCode),
+          candidate,
+          options.kind,
+          p(options.label ?? null),
+          p(clip(options.userAgent, 300)),
+          nowIso(now),
+          plusSec(now, ttl),
+          POLL_INTERVAL_SEC,
+        ],
+      );
       userCode = candidate;
       break;
+    } catch (err) {
+      lastError = err;
+      // Занятым может оказаться только короткий код: длинный — 256 бит.
+      if (!/UNIQUE|constraint/i.test(String(err))) throw err;
     }
   }
-  if (!userCode) throw new Error('не удалось выдать свободный код сопряжения');
-
-  run(
-    db,
-    `INSERT INTO device_codes
-       (device_code_hash, user_code, kind, label, user_agent, status, created_at, expires_at,
-        approved_at, approved_by, claimed_at, session_id, last_polled_at, interval_sec)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NULL, NULL, NULL, NULL, NULL, ?)`,
-    [
-      sha256(deviceCode),
-      userCode,
-      options.kind,
-      p(options.label ?? null),
-      p(clip(options.userAgent, 300)),
-      nowIso(now),
-      plusSec(now, ttl),
-      POLL_INTERVAL_SEC,
-    ],
-  );
+  if (!userCode) {
+    throw new Error(`не удалось выдать свободный код сопряжения: ${String(lastError)}`);
+  }
 
   const row = get<DeviceCodeRow>(
     db,
@@ -490,6 +543,46 @@ export function startPairing(db: Db, options: StartPairingOptions): StartedPairi
     expiresIn: ttl,
     interval: POLL_INTERVAL_SEC,
   };
+}
+
+/**
+ * Сколько ЖДУЩИХ заявок разрешено держать одновременно.
+ *
+ * Это единственный предел, который нельзя обойти подделкой адреса: ограничитель
+ * частоты ключуется по `X-Forwarded-For`, а он за доверенным прокси приходит
+ * от клиента. Здесь же счёт идёт по самой таблице, и сколько бы адресов ни
+ * перебрал заваливающий, экран одобрения не превратится в простыню, а таблица
+ * не станет расти без края.
+ *
+ * Двадцать — с большим запасом: в семье устройств единицы, а заявка живёт
+ * десять минут.
+ */
+export const MAX_PENDING_CODES = 20;
+
+/**
+ * Прибраться в таблице заявок.
+ *
+ * Делает две вещи: помечает просроченные ждущие как `expired` (иначе они
+ * занимают короткий код в частичном индексе, хотя давно мертвы) и удаляет
+ * старые завершённые. Удаление здесь безопасно — это не `events`, и триггера
+ * §9 на этой таблице нет: заявка на сопряжение не история ребёнка.
+ */
+export function pruneCodes(db: Db, now: number = Date.now(), keepDays = 7): number {
+  run(db, `UPDATE device_codes SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?`, [
+    nowIso(now),
+  ]);
+  const cutoff = new Date(now - keepDays * 86_400_000).toISOString();
+  const res = run(
+    db,
+    `DELETE FROM device_codes WHERE status IN ('claimed', 'denied', 'expired') AND created_at < ?`,
+    [cutoff],
+  );
+  return res.changes;
+}
+
+/** Сколько заявок ждёт одобрения прямо сейчас (после уборки просроченных). */
+export function countPendingCodes(db: Db, now: number = Date.now()): number {
+  return listPendingCodes(db, now).length;
 }
 
 export function getCodeById(db: Db, id: number): DeviceCodeRow | undefined {
@@ -596,10 +689,30 @@ export function pollForSession(db: Db, deviceCode: string, options: PollOptions 
 
   const interval = Math.max(POLL_INTERVAL_SEC, row.interval_sec || POLL_INTERVAL_SEC);
 
-  // Слишком частый опрос: RFC §3.5 требует не отказать, а замедлить —
-  // и увеличение интервала остаётся навсегда, а не только на этот запрос.
+  /*
+   * Истечение проверяем ПЕРВЫМ. Иначе мёртвый код при частом опросе отвечал бы
+   * `slow_down` вместо `expired_token` — и клиент, послушно замедляясь, ждал бы
+   * у заведомо закрытой двери вместо того, чтобы взять новый код.
+   */
+  const expires = ms(row.expires_at);
+  if (expires !== null && expires <= now) {
+    if (row.status === 'pending') {
+      run(db, `UPDATE device_codes SET status = 'expired' WHERE id = ?`, [row.id]);
+    }
+    return { ok: false, error: 'expired_token', interval };
+  }
+
+  /*
+   * Слишком частый опрос: RFC §3.5 требует не отказать, а замедлить, и
+   * увеличение интервала остаётся навсегда, а не только на этот запрос.
+   *
+   * Допуск в полсекунды — не послабление. Мы сами назвали клиенту интервал,
+   * а сеть и таймеры дают разброс: пришедший на 4990 мс вместо 5000 выполнил
+   * договор, и наказывать его постоянной прибавкой не за что. Без допуска
+   * аккуратный клиент разгонял бы себе интервал до потолка на ровном месте.
+   */
   const lastPolled = ms(row.last_polled_at);
-  if (lastPolled !== null && now - lastPolled < interval * 1000) {
+  if (lastPolled !== null && now - lastPolled < interval * 1000 - POLL_TOLERANCE_MS) {
     const next = Math.min(MAX_INTERVAL_SEC, interval + SLOW_DOWN_STEP_SEC);
     run(db, 'UPDATE device_codes SET interval_sec = ?, last_polled_at = ? WHERE id = ?', [
       next,
@@ -610,14 +723,6 @@ export function pollForSession(db: Db, deviceCode: string, options: PollOptions 
   }
 
   run(db, 'UPDATE device_codes SET last_polled_at = ? WHERE id = ?', [nowIso(now), row.id]);
-
-  const expires = ms(row.expires_at);
-  if (expires !== null && expires <= now) {
-    if (row.status === 'pending') {
-      run(db, `UPDATE device_codes SET status = 'expired' WHERE id = ?`, [row.id]);
-    }
-    return { ok: false, error: 'expired_token', interval };
-  }
 
   if (row.status === 'denied') return { ok: false, error: 'access_denied', interval };
   if (row.status === 'expired') return { ok: false, error: 'expired_token', interval };
@@ -678,18 +783,55 @@ export function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-/** Разбор заголовка Cookie. Отдельная зависимость ради этого не нужна. */
-export function readCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
+/**
+ * Все значения куки с данным именем, в порядке присылки.
+ *
+ * Именно ВСЕ, а не первое. Браузер вправе прислать несколько кук с одним
+ * именем — например, если кто-то подбросил свою с другим `Path`, — и по
+ * RFC 6265 вперёд идёт более специфичная. Возвращая только первую, мы бы
+ * позволили мусорной куке заслонить настоящую сессию, и человек получил бы
+ * необъяснимое «сессия завершена» на ровном месте.
+ *
+ * Отдельная зависимость ради этого разбора не нужна.
+ */
+export function readCookies(header: string | undefined, name: string): string[] {
+  if (!header) return [];
+  const found: string[] = [];
   for (const part of header.split(';')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
     if (part.slice(0, eq).trim() !== name) continue;
     const raw = part.slice(eq + 1).trim();
     try {
-      return decodeURIComponent(raw);
+      found.push(decodeURIComponent(raw));
     } catch {
-      return raw;
+      found.push(raw);
+    }
+  }
+  return found;
+}
+
+/** Первое значение куки. Оставлено для мест, где множественность не важна. */
+export function readCookie(header: string | undefined, name: string): string | null {
+  return readCookies(header, name)[0] ?? null;
+}
+
+/**
+ * Найти живую сессию по любому из предъявленных секретов.
+ *
+ * Перебираются оба имени куки (с префиксом `__Host-` и без) и все значения
+ * каждого: устройство могло войти до смены настроек `Secure`, а чужая кука
+ * не должна заслонять свою.
+ */
+export function lookupSessionFromCookies(
+  db: Db,
+  header: string | undefined,
+  now: number = Date.now(),
+): SessionRow | null {
+  for (const name of [SESSION_COOKIE_HOST, SESSION_COOKIE_PLAIN]) {
+    for (const token of readCookies(header, name)) {
+      const session = lookupSession(db, token, now);
+      if (session) return session;
     }
   }
   return null;
@@ -711,7 +853,7 @@ export interface CookieOptions {
  */
 export function buildSessionCookie(token: string, options: CookieOptions): string {
   const parts = [
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    `${sessionCookieName(options.secure)}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
@@ -727,8 +869,32 @@ export function buildSessionCookie(token: string, options: CookieOptions): strin
   return parts.join('; ');
 }
 
+/**
+ * Гашение куки.
+ *
+ * Гасим ОБА имени: устройство могло войти до того, как поменялась настройка
+ * `Secure`, и оставшаяся кука под вторым именем означала бы «вышел, но всё
+ * ещё внутри». Возвращается список — на один ответ ставится несколько
+ * заголовков Set-Cookie.
+ */
+export function clearSessionCookies(options: CookieOptions): string[] {
+  return [SESSION_COOKIE_HOST, SESSION_COOKIE_PLAIN].map((name) => {
+    const parts = [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+    // `__Host-` без Secure браузер не примет — значит и не погасит.
+    if (options.secure || name === SESSION_COOKIE_HOST) parts.push('Secure');
+    return parts.join('; ');
+  });
+}
+
+/** Гашение одной куки — той, которой пользуются при текущих настройках. */
 export function clearSessionCookie(options: CookieOptions): string {
-  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+  const parts = [
+    `${sessionCookieName(options.secure)}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
   if (options.secure) parts.push('Secure');
   return parts.join('; ');
 }

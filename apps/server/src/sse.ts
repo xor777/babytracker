@@ -33,6 +33,15 @@ interface Client {
 export interface SseHubOptions {
   heartbeatMs?: number;
   onError?: (err: unknown) => void;
+  /**
+   * Жива ли ещё сессия этого потока. Проверяется на каждом heartbeat.
+   *
+   * Отзыв устройства рвёт поток сразу и явно (`closeSession`), так что это
+   * не основной механизм, а второй рубеж: он ловит случаи, до которых явный
+   * разрыв не дотягивается — истёкшую сессию и отзыв, сделанный мимо
+   * работающего сервера (например, командой `auth revoke` по ssh).
+   */
+  isSessionLive?: (sessionId: string) => boolean;
 }
 
 export class SseHub {
@@ -41,10 +50,17 @@ export class SseHub {
   #timer: NodeJS.Timeout | null = null;
   #heartbeatMs: number;
   #onError: (err: unknown) => void;
+  #isSessionLive: ((sessionId: string) => boolean) | null;
 
   constructor(options: SseHubOptions = {}) {
     this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
     this.#onError = options.onError ?? (() => {});
+    this.#isSessionLive = options.isSessionLive ?? null;
+  }
+
+  /** Ставится после создания хаба: проверке нужна БД, а хаб создаётся раньше. */
+  setSessionCheck(fn: (sessionId: string) => boolean): void {
+    this.#isSessionLive = fn;
   }
 
   get clientCount(): number {
@@ -176,9 +192,36 @@ export class SseHub {
   #ensureHeartbeat(): void {
     if (this.#timer || this.#clients.size === 0) return;
     this.#timer = setInterval(() => {
+      this.#dropDeadSessions();
       this.#writeAll(`: ping ${Date.now()}\n\n`);
     }, this.#heartbeatMs);
     this.#timer.unref();
+  }
+
+  /**
+   * Закрыть потоки, чья сессия перестала быть живой.
+   *
+   * Проверка на входе потоку больше не встретится: соединение установлено и
+   * висит часами. Без этого истёкшая сессия продолжала бы получать события
+   * ребёнка ровно до тех пор, пока не оборвётся сеть.
+   */
+  #dropDeadSessions(): void {
+    const check = this.#isSessionLive;
+    if (!check || this.#clients.size === 0) return;
+    for (const [id, client] of [...this.#clients]) {
+      if (client.sessionId === null) continue;
+      let live: boolean;
+      try {
+        live = check(client.sessionId);
+      } catch (err) {
+        // База занята или закрывается — это не повод рвать живым людям поток.
+        this.#onError(err);
+        continue;
+      }
+      if (live) continue;
+      this.#clients.delete(id);
+      client.close();
+    }
   }
 
   #maybeStopHeartbeat(): void {

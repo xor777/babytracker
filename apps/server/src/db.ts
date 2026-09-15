@@ -275,7 +275,12 @@ export function migrate(db: Db): void {
     const migration = MIGRATIONS[version];
     if (!migration) continue;
     // node:sqlite не поддерживает параметры в PRAGMA, версия — число из кода, не из ввода.
-    db.exec('BEGIN');
+    //
+    // IMMEDIATE, а не отложенный BEGIN: с отложенным блокировка повышается уже
+    // посреди DDL, и живой второй писатель (воркер, MCP-сервер) способен
+    // уронить апгрейд в SQLITE_BUSY на полпути. Остальной код проекта
+    // (inTransaction ниже) по той же причине берёт блокировку сразу.
+    db.exec('BEGIN IMMEDIATE');
     try {
       migration(db);
       db.exec(`PRAGMA user_version = ${version + 1}`);

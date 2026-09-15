@@ -18,13 +18,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AppContext } from './context.ts';
-import {
-  SESSION_COOKIE,
-  lookupSession,
-  readCookie,
-  touchSession,
-  type SessionRow,
-} from './device-auth.ts';
+import { lookupSessionFromCookies, touchSession, type SessionRow } from './device-auth.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -37,31 +31,63 @@ declare module 'fastify' {
 export const PAIR_PATH = '/pair';
 
 /**
+ * Признаки того, что путь пытается сойти с места.
+ *
+ * Появилось не из осторожности, а по факту: `GET /alice/../index.html`
+ * отдавал собранный дашборд без всякой сессии. Механизм такой — дверь
+ * сверяла СЫРОЙ путь и видела открытый префикс `/alice/`, а дальше
+ * маршрутизатор и раздача статики работали с ДЕКОДИРОВАННЫМ и
+ * НОРМАЛИЗОВАННЫМ путём, в котором `..` уже схлопнулся в `/index.html`.
+ * Работали все три написания: `..`, `%2e%2e` и `..%2f`.
+ *
+ * Отсюда правило: путь, в котором есть `..` или процентное кодирование
+ * точки либо слеша, открытым не считается никогда. Ни один законный адрес
+ * проекта такого не содержит — секрет Алисы это 32 hex-символа.
+ */
+const TRAVERSAL = /(\.\.)|(%2e)|(%2f)|(%5c)|\\/i;
+
+/**
  * Что открыто без сессии. Больше здесь не будет ничего:
  *
  *  - `/healthz` — нужен выкатке и мониторингу, отдаёт только «жив/не жив»;
- *  - `/alice` и `/alice/*` — вебхук Алисы. Не трогаем вовсе: там общаются
- *    машины, Алиса не умеет ни кук, ни basic auth, и защищает её 32-символьный
- *    секрет в самом адресе плюс сверка идентичности (§3.1);
+ *  - `/alice` и `/alice/<секрет>` — вебхук Алисы. Не трогаем вовсе: там
+ *    общаются машины, Алиса не умеет ни кук, ни basic auth, и защищает её
+ *    32-символьный секрет в самом адресе плюс сверка идентичности (§3.1).
+ *    Ровно ОДИН сегмент после `/alice/`: префиксное правило шире адреса,
+ *    который оно должно открывать, и эта разница уже стоила утечки статики;
  *  - `/pair` — страница сопряжения. Показать код и опросить сервер нужно
  *    ровно тому, у кого сессии ещё нет;
  *  - `/api/device/code` и `/api/device/token` — два эндпоинта самого потока.
  *
  * Сверка идёт по СЫРОМУ пути, без декодирования процентов. Это не лень:
- * маршрутизатор Fastify тоже получает сырой путь, и если декодировать здесь,
- * а там нет, то `/%68ealthz` открылся бы дверью как `/healthz`, а отдался бы
- * SPA-fallback'ом — то есть дашбордом. Сырая сверка ошибается только в сторону
- * лишнего запрета.
+ * маршрутизатор Fastify получает тот же сырой путь, и если декодировать
+ * здесь, а там нет, то `/%68ealthz` открылся бы дверью как `/healthz`,
+ * а отдался бы SPA-fallback'ом — то есть дашбордом. Сырая сверка ошибается
+ * только в сторону лишнего запрета, и именно поэтому всё, что хоть
+ * отдалённо похоже на кодирование, закрыто целиком.
  */
-export function isOpenPath(method: string, rawPath: string): boolean {
-  // Предполётный запрос CORS тела не несёт и данных не отдаёт, а заблокировать
-  // его значит сломать разработку с отдельным Vite.
-  if (method === 'OPTIONS') return true;
+export function isOpenPath(method: string, rawPath: string, isPreflight = false): boolean {
+  /*
+   * Предполётный запрос CORS тела не несёт и данных не отдаёт, а заблокировать
+   * его значит сломать разработку с отдельным Vite. Но пропускаем не «метод
+   * OPTIONS», а именно preflight — по обязательному для него заголовку
+   * `Access-Control-Request-Method`. Исключение по одному методу пережило бы
+   * появление первого же прикладного маршрута, отвечающего на OPTIONS,
+   * и тот оказался бы снаружи двери молча.
+   */
+  if (method === 'OPTIONS' && isPreflight) return true;
+
+  // Проверяется ПЕРВОЙ и для всех путей сразу: если бы она стояла внутри
+  // ветки про Алису, следующее префиксное правило завело бы дыру заново.
+  if (TRAVERSAL.test(rawPath)) return false;
 
   if (rawPath === '/healthz') return true;
-  if (rawPath === '/alice' || rawPath.startsWith('/alice/')) return true;
   if (rawPath === PAIR_PATH) return true;
   if (rawPath === '/api/device/code' || rawPath === '/api/device/token') return true;
+
+  // `/alice` и `/alice/<один сегмент>` — и ничего глубже.
+  if (rawPath === '/alice') return true;
+  if (rawPath.startsWith('/alice/') && !rawPath.includes('/', '/alice/'.length)) return true;
 
   return false;
 }
@@ -115,10 +141,13 @@ export function registerAuthGuard(
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     const rawPath = pathOf(request.url);
 
-    if (isOpenPath(request.method, rawPath)) return;
+    // Настоящий preflight всегда несёт этот заголовок — он и отличает его от
+    // обычного OPTIONS, который мог бы что-то отдать.
+    const preflight = typeof request.headers['access-control-request-method'] === 'string';
 
-    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
-    const session = token ? lookupSession(ctx.db, token, now()) : null;
+    if (isOpenPath(request.method, rawPath, preflight)) return;
+
+    const session = lookupSessionFromCookies(ctx.db, request.headers.cookie, now());
 
     if (!session) {
       if (isNavigation(request)) {

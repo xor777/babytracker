@@ -113,6 +113,86 @@ test('открыт ровно перечень, и ни один похожий 
   }
 });
 
+test('traversal через открытый префикс закрыт: ни в одном написании', () => {
+  /*
+   * Настоящий обход, найденный на разборе и воспроизведённый руками.
+   *
+   * Дверь сверяла СЫРОЙ путь и видела открытый префикс `/alice/`, а дальше
+   * маршрутизатор и раздача статики работали с ДЕКОДИРОВАННЫМ и
+   * НОРМАЛИЗОВАННЫМ путём, где `..` уже схлопнулся. `GET /alice/../index.html`
+   * отдавал собранный дашборд без всякой сессии — и точно так же работали
+   * `%2e%2e` и `..%2f`.
+   *
+   * Правило теперь двойное: ни одного `..` и ни одного процентного кодирования
+   * точки или слеша в открытом пути, плюс после `/alice/` ровно один сегмент.
+   */
+  const attacks = [
+    '/alice/../index.html',
+    '/alice/%2e%2e/index.html',
+    '/alice/%2E%2E/index.html',
+    '/alice/..%2findex.html',
+    '/alice/..%2Findex.html',
+    '/alice/../assets/app.js',
+    '/alice/../../etc/passwd',
+    '/alice/../api/state',
+    '/alice/./../index.html',
+    '/alice/секрет/../../index.html',
+    '/alice/%2e%2e%2f%2e%2e%2findex.html',
+    '/alice\\..\\index.html',
+    '/healthz/../index.html',
+    '/pair/../index.html',
+    '/api/device/code/../../state',
+  ];
+  for (const attack of attacks) {
+    assert.equal(isOpenPath('GET', attack), false, `${attack} обязан быть закрыт`);
+  }
+
+  // При этом настоящий адрес вебхука не пострадал.
+  assert.equal(isOpenPath('POST', `/alice/${TEST_SECRET}`), true);
+  assert.equal(isOpenPath('POST', '/alice'), true);
+});
+
+test('обход через traversal закрыт на живом приложении, а не только в функции', async (t) => {
+  const h = await makeFullApp();
+  t.after(h.close);
+
+  // Ровно те запросы, которыми утечка воспроизводилась.
+  for (const url of [
+    '/alice/../index.html',
+    '/alice/%2e%2e/index.html',
+    '/alice/..%2findex.html',
+    '/alice/../assets/app-a1b2c3.js',
+  ]) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.equal(
+      res.body.includes(DASHBOARD_MARK),
+      false,
+      `${url}: дашборд утёк без сессии`,
+    );
+    assert.ok(
+      res.statusCode === 401 || res.statusCode === 303,
+      `${url} → ${res.statusCode}`,
+    );
+  }
+
+  // Вебхук Алисы при этом работает как ни в чём не бывало.
+  const alice = await h.app.inject({
+    method: 'POST',
+    url: `/alice/${TEST_SECRET}`,
+    payload: aliceBody('андрей заснул'),
+  });
+  assert.equal(alice.statusCode, 200);
+  assert.match((alice.json() as { response: { text: string } }).response.text, /Записала/);
+});
+
+test('OPTIONS открыт только как настоящий preflight', () => {
+  // Исключение по одному методу пережило бы появление первого же прикладного
+  // маршрута, отвечающего на OPTIONS, и тот оказался бы снаружи двери молча.
+  assert.equal(isOpenPath('OPTIONS', '/api/state', true), true, 'preflight пропускаем');
+  assert.equal(isOpenPath('OPTIONS', '/api/state', false), false, 'обычный OPTIONS — нет');
+  assert.equal(isOpenPath('OPTIONS', '/api/state'), false, 'по умолчанию не preflight');
+});
+
 test('строка запроса и якорь не превращают закрытый путь в открытый', () => {
   assert.equal(pathOf('/healthz?x=1'), '/healthz');
   assert.equal(pathOf('/api/state?from=x#y'), '/api/state');

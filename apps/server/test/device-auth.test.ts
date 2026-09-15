@@ -51,12 +51,26 @@ interface StartedCode {
   interval: number;
 }
 
+/**
+ * User-Agent под тип устройства.
+ *
+ * Нужен потому, что тип решает СЕРВЕР по заголовку, а не клиент по полю в теле
+ * (иначе любой браузер выписывал бы себе бессрочную сессию телевизора).
+ * Значит и тест обязан представляться телевизором, если хочет им быть.
+ */
+const USER_AGENTS: Record<string, string> = {
+  tv: 'Mozilla/5.0 (Linux; Android 11; BRAVIA 4K VH2) AppleWebKit/537.36 Chrome/120',
+  phone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148',
+  browser: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/120',
+};
+
 /** Завести заявку так, как это делает страница сопряжения. */
 async function startCode(h: TestApp, kind = 'tv'): Promise<StartedCode> {
   const res = await h.anon({
     method: 'POST',
     url: '/api/device/code',
     payload: { kind },
+    headers: { 'user-agent': USER_AGENTS[kind] ?? USER_AGENTS.browser ?? '' },
   });
   assert.equal(res.statusCode, 200, `заявка не завелась: ${res.body}`);
   const body = res.json() as Record<string, string>;
@@ -448,25 +462,44 @@ test('подбор user_code упирается в ограничитель', as
   assert.equal(real.statusCode, 429);
 });
 
-test('верная догадка не тратит окно: ошибся, потом набрал правильно — работает', async (t) => {
+test('верная догадка возвращает ровно одну попытку, а не сбрасывает окно', async (t) => {
   const clock = makeClock();
   const h = await makeTestApp({}, { now: clock.now });
   t.after(() => h.close());
 
-  const code = await startCode(h);
-
+  /*
+   * Тонкость, из-за которой жёсткий предел легко превращается в мягкий.
+   *
+   * Человеку, который ошибся при вводе и потом набрал верно, нельзя отказывать
+   * из-за прошлой опечатки — значит верная попытка не должна идти в счёт.
+   * Но если возвращать ВСЁ окно, получается схема «четыре неверных, одно
+   * верное своё (завести заявку может кто угодно, эндпоинт открыт), снова
+   * четыре» — и пяти попыток за окно превращаются в бесконечность.
+   *
+   * Поэтому возвращается ровно одна попытка.
+   */
+  const first = await startCode(h);
   for (let i = 0; i < 4; i++) {
     assert.equal((await approveByCode(h, newUserCode())).statusCode, 404);
   }
+  assert.equal(
+    (await approveByCode(h, first.display)).statusCode,
+    200,
+    'опечатка не должна мешать набрать верный код',
+  );
 
-  assert.equal((await approveByCode(h, code.display)).statusCode, 200, 'верный код принят');
-
-  // Окно вернулось: следующая заявка снова получает полный запас попыток.
+  /*
+   * Счёт: четыре неверных израсходовали четыре попытки, верная забрала пятую
+   * и вернула её же обратно. В запасе осталась ровно одна — а не всё окно,
+   * как было бы при полном сбросе.
+   */
   const second = await startCode(h);
-  for (let i = 0; i < 4; i++) {
-    assert.equal((await approveByCode(h, newUserCode())).statusCode, 404);
-  }
-  assert.equal((await approveByCode(h, second.display)).statusCode, 200);
+  assert.equal((await approveByCode(h, newUserCode())).statusCode, 404, 'последняя попытка');
+  assert.equal(
+    (await approveByCode(h, second.display)).statusCode,
+    429,
+    'окно исчерпано — верный код тоже ждёт, иначе предел обходился бы по кругу',
+  );
 });
 
 /* ================================================================== */
@@ -602,7 +635,13 @@ test('кука сессии: HttpOnly, Secure, SameSite=Lax', async (t) => {
   const res = await poll(h, code.deviceCode);
 
   const cookie = cookieOf(res) ?? '';
-  assert.match(cookie, /^bt_session=/);
+  /*
+   * Префикс `__Host-` — обещание браузеру и требование к нему: такую куку
+   * нельзя поставить ни с соседнего поддомена, ни с другим Path, ни без
+   * Secure. Без него сосед по домену мог бы подбросить `bt_session=…;
+   * Path=/dash`, и браузер отправил бы ЕЁ вперёд настоящей.
+   */
+  assert.match(cookie, /^__Host-bt_session=/, 'префикс закрывает фиксацию сессии');
   assert.match(cookie, /HttpOnly/, 'скрипт на странице не должен читать сессию');
   assert.match(cookie, /SameSite=Lax/, 'чужой сайт не должен ходить от нашего имени');
   assert.match(cookie, /Secure/, 'по http секрет уходить не должен');
@@ -621,6 +660,9 @@ test('AUTH_COOKIE_SECURE=false снимает Secure — и только он', 
   const cookie = cookieOf(await poll(h, code.deviceCode)) ?? '';
 
   assert.equal(/Secure/.test(cookie), false, 'локальная разработка без TLS');
+  // Префикс `__Host-` требует Secure — без него браузер такую куку выбросит,
+  // и вход на localhost перестал бы работать вовсе. Поэтому имя обычное.
+  assert.match(cookie, /^bt_session=/, 'без Secure префикс невозможен');
   assert.match(cookie, /HttpOnly/, 'остальные флаги остаются на месте');
   assert.match(cookie, /SameSite=Lax/);
 });
@@ -701,6 +743,137 @@ test('срок телефона скользит от последнего об�
     headers: { cookie: `${SESSION_COOKIE}=${token}` },
   });
   assert.equal(dead.statusCode, 401, 'забытая сессия истекает сама');
+});
+
+test('бессрочную сессию нельзя выписать себе самому, назвавшись телевизором', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  /*
+   * У телевизора сессия БЕССРОЧНАЯ (§11.5) — это и делало поле `kind` в теле
+   * запроса лазейкой: обычный браузер, отправив `{"kind":"tv"}`, выписывал
+   * себе вечный ключ, а девяностодневная страховка становилась добровольной.
+   * Теперь «телевизор» может сказать только заголовок User-Agent.
+   */
+  const res = await h.anon({
+    method: 'POST',
+    url: '/api/device/code',
+    payload: { kind: 'tv' },
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/120' },
+  });
+  assert.equal(res.statusCode, 200);
+  const code = (res.json() as Record<string, string>).user_code_display as string;
+
+  assert.equal((await approveByCode(h, code)).statusCode, 200);
+
+  const list = await h.app.inject({ method: 'GET', url: '/api/devices' });
+  const pending = (list.json() as { pending: Array<{ kind: string }> }).pending;
+  assert.equal(pending.length, 0, 'заявку уже одобрили');
+
+  const row = all<{ kind: string }>(h.db, "SELECT kind FROM device_codes WHERE status = 'approved'")[0];
+  assert.equal(row?.kind, 'browser', 'подсказка «tv» от браузера не принимается');
+
+  // И у выданной по ней сессии срок есть.
+  const deviceCode = (res.json() as Record<string, string>).device_code as string;
+  clock.advance(6000);
+  assert.equal((await poll(h, deviceCode)).statusCode, 200);
+  const session = all<{ kind: string; expires_at: string | null }>(
+    h.db,
+    "SELECT kind, expires_at FROM device_sessions WHERE kind = 'browser'",
+  )[0];
+  assert.ok(session?.expires_at, 'сессия браузера обязана иметь срок');
+});
+
+test('телевизор по заголовку получает свой тип и бессрочную сессию', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  const res = await h.anon({
+    method: 'POST',
+    url: '/api/device/code',
+    payload: { kind: 'phone' },
+    headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 11; BRAVIA 4K) Chrome/120' },
+  });
+  const body = res.json() as Record<string, string>;
+  assert.equal((await approveByCode(h, body.user_code_display as string)).statusCode, 200);
+  clock.advance(6000);
+  assert.equal((await poll(h, body.device_code as string)).statusCode, 200);
+
+  const session = all<{ kind: string; expires_at: string | null }>(
+    h.db,
+    "SELECT kind, expires_at FROM device_sessions WHERE kind = 'tv'",
+  )[0];
+  assert.equal(session?.expires_at, null, 'телевизор бессрочен, заголовок сильнее подсказки');
+});
+
+test('число ждущих заявок ограничено — экран одобрения не превратить в простыню', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  /*
+   * Этот предел, в отличие от ограничителя частоты, нельзя обойти подделкой
+   * адреса: он считает по самой таблице. Ограничитель же ключуется по
+   * X-Forwarded-For, а он за доверенным прокси приходит от клиента.
+   */
+  let refused = 0;
+  for (let i = 0; i < 40; i++) {
+    const res = await h.anon({
+      method: 'POST',
+      url: '/api/device/code',
+      payload: { kind: 'phone' },
+      // Каждый раз новый «адрес» — ровно то, что сделал бы заваливающий.
+      headers: { 'x-forwarded-for': `203.0.113.${i}` },
+    });
+    if (res.statusCode === 429) refused += 1;
+  }
+
+  assert.ok(refused > 0, 'бесконечная выдача заявок обязана упереться в предел');
+  const pending = all<{ n: number }>(
+    h.db,
+    "SELECT COUNT(*) AS n FROM device_codes WHERE status = 'pending'",
+  );
+  assert.ok(Number(pending[0]?.n) <= 20, `ждущих заявок не больше предела: ${pending[0]?.n}`);
+});
+
+test('послушный клиент не наказывается: допуск к интервалу опроса', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  const code = await startCode(h);
+  await poll(h, code.deviceCode);
+
+  // Клиенту сказали «5 секунд», он пришёл на 4.9 — сеть и таймеры не обязаны
+  // попадать в миллисекунду. Это выполнение договора, а не нарушение.
+  clock.advance(4900);
+  const res = await poll(h, code.deviceCode);
+  assert.equal(
+    (res.json() as { error: string }).error,
+    'authorization_pending',
+    'разброс в сотню миллисекунд не повод навсегда поднимать интервал',
+  );
+
+  // А вот приход сразу же — нарушение.
+  const rude = await poll(h, code.deviceCode);
+  assert.equal((rude.json() as { error: string }).error, 'slow_down');
+});
+
+test('мёртвый код отвечает «истёк», а не «помедленнее»', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({ PAIR_CODE_TTL_SEC: '120' }, { now: clock.now });
+  t.after(() => h.close());
+
+  const code = await startCode(h);
+  await poll(h, code.deviceCode);
+  clock.advance(121_000);
+
+  // Опрос сразу после предыдущего: раньше это давало slow_down, и клиент
+  // послушно ждал у заведомо закрытой двери вместо того, чтобы взять новый код.
+  const res = await poll(h, code.deviceCode);
+  assert.equal((res.json() as { error: string }).error, 'expired_token');
 });
 
 /* ================================================================== */

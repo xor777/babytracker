@@ -72,11 +72,36 @@ async function putStamped(cacheName, request, response) {
   return response;
 }
 
+/**
+ * Сессии больше нет — забыть всё сохранённое, немедленно.
+ *
+ * Не кэшировать 401 недостаточно, и это самая опасная ловушка во всей схеме.
+ * Представьте: телефон потеряли, устройство отозвали из админки, нашедший
+ * включает авиарежим. Приложение поднимается из кэша оболочки, `networkFirst`
+ * не может достучаться до сети и честно отдаёт сохранённые ответы — и человек
+ * читает историю ребёнка, ни разу не дойдя до сервера. Отзыв, ради которого
+ * всё и затевалось, оказывается бесполезен.
+ *
+ * Поэтому первый же 401 сносит кэш целиком. Цена — потеря офлайна до
+ * следующего удачного запроса; она того стоит.
+ */
+async function forgetEverything() {
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+  } catch (err) {
+    // Хранилище недоступно — офлайн-копии в этом случае и нет.
+  }
+}
+
 async function networkFirst(request) {
   try {
     const fresh = await fetch(request);
-    // 401 в кэш не кладём: иначе требование войти подменится «успешным» ответом.
-    if (fresh.status === 401) return fresh;
+    // 401 в кэш не кладём и заодно выбрасываем всё, что успели сохранить.
+    if (fresh.status === 401) {
+      await forgetEverything();
+      return fresh;
+    }
     return await putStamped(DATA, request, fresh);
   } catch (err) {
     const cached = await caches.match(request);
@@ -89,7 +114,10 @@ async function cacheFirst(request, cacheName) {
   const cached = await caches.match(request);
   if (cached) return cached;
   const fresh = await fetch(request);
-  if (fresh.status === 401) return fresh;
+  if (fresh.status === 401) {
+    await forgetEverything();
+    return fresh;
+  }
   return putStamped(cacheName, request, fresh);
 }
 
@@ -104,8 +132,14 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
-        .then((res) => {
-          // Увели на сопряжение — отдаём как есть и НЕ трогаем кэш оболочки.
+        .then(async (res) => {
+          // Увели на сопряжение — значит сессии нет. Отдаём как есть, кэш
+          // оболочки НЕ трогаем и заодно выбрасываем сохранённые данные:
+          // редирект здесь — такой же признак потери доступа, как и 401.
+          if (res.redirected || res.status === 401) {
+            await forgetEverything();
+            return res;
+          }
           if (!cacheable(res)) return res;
           return putStamped(SHELL, INDEX, res);
         })

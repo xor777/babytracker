@@ -18,7 +18,7 @@ import { registerApiRoutes } from './api.ts';
 import { registerAliceRoutes, neutralReply } from './alice.ts';
 import { registerAuthGuard } from './auth-guard.ts';
 import { registerAuthRoutes } from './auth-routes.ts';
-import { RateLimiter } from './device-auth.ts';
+import { RateLimiter, getSessionById } from './device-auth.ts';
 
 /**
  * Секрет вебхука — часть пути. В логи он попасть НЕ ДОЛЖЕН, поэтому маскируем
@@ -141,6 +141,18 @@ export function createApp(options: CreateAppOptions): CreatedApp {
 
   const sse = new SseHub({
     onError: (err) => app.log.debug({ err }, 'sse: клиент отвалился'),
+    /*
+     * Второй рубеж отзыва (§11.5). Основной — явный разрыв в момент отзыва;
+     * этот ловит то, до чего разрыв не дотягивается: истёкшую сессию и отзыв,
+     * сделанный мимо работающего сервера, командой `auth revoke` по ssh.
+     */
+    isSessionLive: (id) => {
+      const row = getSessionById(db, id);
+      if (!row || row.revoked_at) return false;
+      if (!row.expires_at) return true;
+      const until = Date.parse(row.expires_at);
+      return !Number.isFinite(until) || until > Date.now();
+    },
   });
 
   let workerStatusFn: () => WorkerStatus = options.workerStatus ?? (() => IDLE_WORKER);
