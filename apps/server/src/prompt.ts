@@ -16,6 +16,7 @@
 import type { Config } from './config.ts';
 import type { EventRow, FastResult, StateDto } from './types.ts';
 import type { ChangeSetDto } from './journal.ts';
+import { taxonomyForPrompt } from './taxonomy.ts';
 import { formatDurationRu, formatTimeLocal } from './ru.ts';
 import { zonedParts, pad2 } from './time.ts';
 
@@ -29,6 +30,8 @@ export interface BuildPromptInput {
   fastEvent: EventRow | null;
   /** Снимок состояния на момент запуска разбора (уже с учётом записи fast-path). */
   state: StateDto;
+  /** id разбираемой фразы — им связываются созданные события (§10.4). */
+  utteranceId?: number | null;
   /** Последние наборы изменений — чтобы «отмени последнее» имело смысл (§9.5). */
   changeSets?: ChangeSetDto[];
   /** Последние события — чтобы модель видела, что уже записано, и не дублировала. */
@@ -107,6 +110,14 @@ function describeFast(fast: FastResult | null, fastEvent: EventRow | null): stri
     lines.push(`Из фразы извлечено время: ${fast.at} (UTC).`);
   }
 
+  if (fast.mayContainMore) {
+    lines.push(
+      'СИГНАЛ: во фразе, судя по всему, НЕ ОДНО событие (союз, перечисление, слова из',
+      'другой темы, несколько чисел или просто длинная фраза). Именно поэтому её',
+      'отправили тебе, хотя матчер что-то понял. Разложи фразу целиком.',
+    );
+  }
+
   if (fastEvent) {
     lines.push(
       'ВНИМАНИЕ: fast-path УЖЕ ЗАПИСАЛ это в базу. Вот созданная/изменённая строка:',
@@ -155,6 +166,7 @@ function describeRecentEvents(events: EventRow[], tz: string): string {
 
 export function buildPrompt(input: BuildPromptInput): string {
   const { cfg, rawText, fast, fastEvent, state } = input;
+  const utteranceId = input.utteranceId ?? null;
   const now = input.now ?? new Date();
   const changeSets = input.changeSets ?? [];
   const recentEvents = input.recentEvents ?? [];
@@ -173,7 +185,7 @@ export function buildPrompt(input: BuildPromptInput): string {
 быстрый матчер, — то есть его запись, если она была, уже учтена):
 ${describeState(state, cfg)}
 
-# ФРАЗА РОДИТЕЛЯ
+# ФРАЗА РОДИТЕЛЯ${utteranceId === null ? '' : ` (utterance_id = ${utteranceId})`}
 
 Распознана Алисой как:
 """
@@ -206,26 +218,53 @@ ${describeFast(fast, fastEvent)}
 - Если сомневаешься, было событие или нет, — не записывай. Пропущенное событие
   родитель поправит голосом, а выдуманное он не заметит.
 
+# В ОДНОЙ ФРАЗЕ МОЖЕТ БЫТЬ НЕСКОЛЬКО СОБЫТИЙ
+
+Мама говорит свободно: «Андрей покушал и уснул», «поменяли подгузник, покакал,
+и он опять заснул», «проснулся, поели грудью минут пятнадцать». Это НЕ одно
+событие, а два-три. Разложи фразу на все события и создай КАЖДОЕ отдельным
+вызовом log_event (или одним sql_execute на событие).
+
+Четыре требования, в порядке важности:
+
+1. НИЧЕГО НЕ ТЕРЯТЬ. Если кусок фразы не раскладывается ни в один тип —
+   запиши его как note с этим текстом, а не проглатывай. Потерянное мамой
+   событие она не заметит и будет думать, что записала.
+2. НЕ ДУБЛИРОВАТЬ. Быстрый матчер мог уже создать событие по этой же фразе —
+   оно показано выше вместе с id. Дополни или исправь его, но не создавай
+   второе такое же.
+3. ПОРЯДОК И ВРЕМЯ. «Покушал и уснул» — кормление РАНЬШЕ сна. Если время
+   не названо, ставь события на момент фразы, но сохраняй порядок:
+   разнеси started_at хотя бы на секунду, чтобы лента не перепуталась.
+4. ОДНА ФРАЗА — ОДИН НАБОР ИЗМЕНЕНИЙ. Про это можешь не думать: сервер сам
+   складывает все твои правки за запуск в один change_set (вместе с тем, что
+   успел записать матчер), чтобы «отмени последнее» откатывало фразу целиком,
+   а не половину.
+5. СВЯЗЬ С ФРАЗОЙ. log_event проставляет utterance_id сам. Но если создаёшь
+   событие через sql_execute — укажи utterance_id${utteranceId === null ? '' : ` = ${utteranceId}`}
+   явно, иначе в ленте у записи не будет видно, из какой фразы она взялась.
+
 # ПРАВИЛА ДАННЫХ
 
 - Все времена — ISO 8601 в UTC, с суффиксом Z: 2026-09-15T14:32:05.000Z.
   Родитель говорит в местном времени (${cfg.tz}) — переводи сам, не ленись.
 - «Полчаса назад», «в три», «утром» считай относительно «сейчас» из блока КОНТЕКСТ.
   Если получилось время в будущем — значит, речь о прошедших сутках.
-- Не выдумывай данных. Объём кормления не назван — не ставь value_num.
+- ОБЪЁМ НЕОБЯЗАТЕЛЕН ВЕЗДЕ. При смешанном вскармливании граммы имеют смысл
+  только для бутылочки; грудь измеряют стороной и длительностью. Если мама
+  числа не назвала — оставь value_num пустым. Отсутствующее значение это NULL,
+  а НЕ ноль: ноль означает «покормили нулём миллилитров», это ложь в данных.
+  Никогда не подставляй «типичное» или «примерное» число от себя.
+- Неизвестный subtype — не повод терять событие: запиши type, а подробности
+  словами в note.
 - Одновременно открытым может быть максимум ОДИН сон (ended_at = null).
   Хочешь открыть новый — сначала закрой предыдущий через update_event.
 - Сон, начавшийся с 19:00 до 06:00 местного времени, — subtype "night",
   остальной — "nap".
 
-Справочник типов:
-- sleep   — subtype night | nap
-- feed    — subtype breast | bottle | solid; объём value_num + value_unit "ml",
-            длительность кормления — value_unit "min"
-- diaper  — subtype wet | dirty | both
-- measure — subtype weight (g или kg) | height (cm) | temp (c)
-- meds    — subtype = название препарата, доза value_num + "ml" или "mg"
-- note    — всё прочее, текст в поле note
+# ТАКСОНОМИЯ СОБЫТИЙ
+
+${taxonomyForPrompt()}
 
 # ПОСЛЕДНИЕ СОБЫТИЯ В БАЗЕ
 
@@ -258,7 +297,9 @@ ${describeChangeSets(changeSets, cfg.tz)}
 # СХЕМА ДАННЫХ
 
 events(
-  id INTEGER, child_id TEXT, type TEXT, subtype TEXT,
+  id INTEGER, child_id TEXT,
+  type TEXT,    -- sleep | feed | pump | diaper | measure | meds | symptom | activity | note
+  subtype TEXT,
   started_at TEXT, ended_at TEXT,          -- ISO 8601 UTC; ended_at NULL = событие идёт
   value_num REAL, value_unit TEXT, note TEXT,
   source TEXT,                             -- alice-fast | alice-llm | api | manual
@@ -301,8 +342,9 @@ event_revisions(id, change_set_id, event_id, op, before_json, after_json, actor,
 
 # ОТВЕТ
 
-Закончив, напиши ОДНУ строку по-русски: что именно ты сделал,
-либо «Ничего не изменил: <причина>». Эта строка попадёт в историю изменений
+Закончив, напиши ОДНУ строку по-русски: что именно ты сделал — перечисли ВСЕ
+созданные события, а не только первое, — либо «Ничего не изменил: <причина>».
+Эта строка попадёт в историю изменений
 и будет показана родителю, когда он спросит «что ты там наделала» — пиши
 по-человечески: «Удалила 3 записи сна за сегодня», а не «выполнен UPDATE».`;
 }

@@ -6,9 +6,9 @@ import { decideQueue } from '../src/queue-policy.ts';
 import { looksLikeDataCommand, matchFast } from '../src/fastpath.ts';
 import type { FastResult } from '../src/types.ts';
 
-const SURE: FastResult = { kind: 'sleep_start', confidence: 0.95 };
-const SHAKY: FastResult = { kind: 'sleep_end', confidence: 0.5 };
-const UNKNOWN: FastResult = { kind: 'unknown' };
+const SURE: FastResult = { kind: 'sleep_start', confidence: 0.95, mayContainMore: false };
+const SHAKY: FastResult = { kind: 'sleep_end', confidence: 0.5, mayContainMore: false };
+const UNKNOWN: FastResult = { kind: 'unknown', mayContainMore: false };
 
 const decide = (fast: FastResult, command: string, policy: 'smart' | 'all' | 'unknown' = 'smart') =>
   decideQueue({ policy, threshold: 0.8, fast, command });
@@ -76,7 +76,7 @@ test('порог уверенности соблюдается на границ
   const at = decideQueue({
     policy: 'smart',
     threshold: 0.8,
-    fast: { kind: 'sleep_start', confidence: 0.8 },
+    fast: { kind: 'sleep_start', confidence: 0.8, mayContainMore: false },
     command: 'заснул',
   });
   assert.equal(at.queue, false, '0.8 >= 0.8 — не зовём');
@@ -84,7 +84,7 @@ test('порог уверенности соблюдается на границ
   const below = decideQueue({
     policy: 'smart',
     threshold: 0.8,
-    fast: { kind: 'sleep_start', confidence: 0.79 },
+    fast: { kind: 'sleep_start', confidence: 0.79, mayContainMore: false },
     command: 'заснул',
   });
   assert.equal(below.queue, true);

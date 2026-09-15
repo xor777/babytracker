@@ -30,8 +30,8 @@ import {
 } from './journal.ts';
 import { checkSqlQuery } from './sql-guard.ts';
 import type { EventPatch } from './events.ts';
+import { EVENT_TYPES, VALUE_UNITS, TAXONOMY, isEventType } from './taxonomy.ts';
 import {
-  EVENT_TYPES,
   clampLimit,
   dailySleep,
   getState,
@@ -86,18 +86,28 @@ const TOOLS: Tool[] = [
         subtype: {
           type: 'string',
           description:
-            'sleep: night|nap; feed: breast|bottle|solid; diaper: wet|dirty|both; ' +
-            'measure: weight|height|temp; meds: название препарата',
+            Object.entries(TAXONOMY)
+              .filter(([, spec]) => spec.subtypes.length > 0 || spec.freeSubtype)
+              .map(([type, spec]) =>
+                `${type}: ${spec.freeSubtype ? 'название препарата' : spec.subtypes.join('|')}`,
+              )
+              .join('; ') +
+            '. Незнакомый подтип — не повод терять событие: запиши type и опиши словами в note',
         },
         started_at: { type: 'string', description: `Начало, ${ISO_HINT}. По умолчанию — сейчас` },
         ended_at: {
           type: 'string',
           description: `Конец, ${ISO_HINT}. Не задавай, если событие ещё идёт (например, начавшийся сон)`,
         },
-        value_num: { type: 'number', description: 'Числовое значение: мл, г, кг, °C, см, минуты' },
+        value_num: {
+          type: 'number',
+          description:
+            'Числовое значение: мл, г, кг, °C, см, минуты. НЕОБЯЗАТЕЛЬНО. ' +
+            'Если мама числа не называла — не указывай вовсе, не подставляй ноль',
+        },
         value_unit: {
           type: 'string',
-          enum: ['ml', 'g', 'kg', 'c', 'cm', 'min', 'mg'],
+          enum: [...VALUE_UNITS],
           description: 'Единица измерения value_num',
         },
         note: { type: 'string', description: 'Свободный комментарий' },
@@ -121,7 +131,7 @@ const TOOLS: Tool[] = [
         started_at: { type: 'string', description: ISO_HINT },
         ended_at: { type: ['string', 'null'], description: `${ISO_HINT}; null — снова открыть событие` },
         value_num: { type: ['number', 'null'] },
-        value_unit: { type: ['string', 'null'] },
+        value_unit: { type: ['string', 'null'], enum: [...VALUE_UNITS, null] },
         note: { type: ['string', 'null'] },
         confidence: { type: ['number', 'null'] },
       },
@@ -273,8 +283,11 @@ export async function main(): Promise<void> {
 
         case 'log_event': {
           const type = arg<string>(args, 'type');
-          if (!type || !EVENT_TYPES.includes(type as (typeof EVENT_TYPES)[number])) {
-            return fail(`Неизвестный type="${String(type)}". Допустимо: ${EVENT_TYPES.join(', ')}`);
+          if (!isEventType(type)) {
+            return fail(
+              `Неизвестный type="${String(type)}". Допустимо: ${EVENT_TYPES.join(', ')}. ` +
+                'Если событие не подходит ни под один тип — запиши его как note с текстом.',
+            );
           }
           const { event, closedPrevious } = insertEvent(
             db,
@@ -288,6 +301,10 @@ export async function main(): Promise<void> {
               note: arg<string>(args, 'note') ?? null,
               confidence: arg<number>(args, 'confidence') ?? null,
               source: 'alice-llm',
+              // §10.4: связь с исходной фразой — чтобы в ленте админки было
+              // видно, как речь превратилась в запись. Модели об этом думать
+              // не надо, проставляем сами.
+              utterance_id: journal.utteranceId ?? null,
             },
             'close-previous',
             journal,

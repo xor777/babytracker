@@ -3,7 +3,18 @@
  * см. §1 контракта. Локальная таймзона живёт только на слое представления.
  */
 
-export type EventType = 'sleep' | 'feed' | 'diaper' | 'measure' | 'meds' | 'note';
+/** §10.2 — полная таксономия. */
+export type EventType =
+  | 'sleep'
+  | 'feed'
+  | 'pump'
+  | 'diaper'
+  | 'measure'
+  | 'meds'
+  | 'symptom'
+  | 'activity'
+  | 'note';
+
 export type EventSource = 'alice-fast' | 'alice-llm' | 'api' | 'manual';
 export type ValueUnit = 'ml' | 'g' | 'kg' | 'c' | 'cm' | 'min' | 'mg';
 export type UtteranceStatus = 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
@@ -158,9 +169,14 @@ export interface YandexDateTimeValue {
 /* Fast-path (§4)                                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * §10.3: `mayContainMore` — признак того, что во фразе может быть что-то ещё,
+ * кроме распознанного. При `true` фраза уходит модели независимо от confidence
+ * и политики очереди. Без этого «покушал и уснул» молча теряет кормление.
+ */
 export type FastResult =
-  | { kind: 'sleep_start'; confidence: number; at?: string }
-  | { kind: 'sleep_end'; confidence: number; at?: string }
-  | { kind: 'query_state'; confidence: number }
-  | { kind: 'exit' }
-  | { kind: 'unknown' };
+  | { kind: 'sleep_start'; confidence: number; at?: string; mayContainMore: boolean }
+  | { kind: 'sleep_end'; confidence: number; at?: string; mayContainMore: boolean }
+  | { kind: 'query_state'; confidence: number; mayContainMore: boolean }
+  | { kind: 'exit'; mayContainMore: boolean }
+  | { kind: 'unknown'; mayContainMore: boolean };

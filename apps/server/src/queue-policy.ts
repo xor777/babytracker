@@ -27,6 +27,13 @@ export interface QueueDecisionInput {
 export function decideQueue(input: QueueDecisionInput): QueueDecision {
   const { policy, threshold, fast, command } = input;
 
+  // §10.3. Первым делом и БЕЗ оглядки на политику: во фразе может быть ещё
+  // событие, кроме распознанного. Экономия здесь означала бы тихую потерю
+  // данных — «покушал и уснул» без этой ветки теряет кормление молча.
+  if (fast.mayContainMore) {
+    return { queue: true, reason: 'во фразе может быть ещё событие, кроме распознанного' };
+  }
+
   // Команда управления данными идёт модели всегда: fast-path такое не умеет.
   if (looksLikeDataCommand(command)) {
     return { queue: true, reason: 'похоже на команду правки данных' };

@@ -13,10 +13,14 @@ import {
   EVENTS_LIMIT_MAX,
   clampLimit,
   dailySleep,
+  dailyStats,
   getState,
   insertEvent,
-  queryEvents,
+  queryEventsWithUtterance,
+  softDeleteEvent,
+  updateEvent,
 } from './events.ts';
+import { EVENT_TYPES, VALUE_UNITS } from './taxonomy.ts';
 import {
   UTTERANCES_LIMIT_DEFAULT,
   UTTERANCES_LIMIT_MAX,
@@ -43,7 +47,7 @@ const boolish = z
 const eventsQuerySchema = z.object({
   from: isoish.optional(),
   to: isoish.optional(),
-  type: z.enum(['sleep', 'feed', 'diaper', 'measure', 'meds', 'note']).optional(),
+  type: z.enum(EVENT_TYPES as unknown as [string, ...string[]]).optional(),
   limit: z.coerce.number().int().positive().max(EVENTS_LIMIT_MAX).optional(),
   include_deleted: boolish.optional(),
 });
@@ -61,16 +65,36 @@ const utterancesQuerySchema = z.object({
 });
 
 /** §3.7: тело — Event без id/created_at/updated_at; source принудительно 'manual'. */
+const eventTypeEnum = z.enum(EVENT_TYPES as unknown as [string, ...string[]]);
+const valueUnitEnum = z.enum(VALUE_UNITS as unknown as [string, ...string[]]);
+
 const createEventSchema = z.object({
   child_id: z.string().min(1).max(64).optional(),
-  type: z.enum(['sleep', 'feed', 'diaper', 'measure', 'meds', 'note']),
+  type: eventTypeEnum,
   subtype: z.string().max(200).nullish(),
   started_at: isoish.optional(),
   ended_at: isoish.nullish(),
   value_num: z.number().finite().nullish(),
-  value_unit: z.enum(['ml', 'g', 'kg', 'c', 'cm', 'min', 'mg']).nullish(),
+  value_unit: valueUnitEnum.nullish(),
   note: z.string().max(4000).nullish(),
   confidence: z.number().min(0).max(1).nullish(),
+});
+
+/** §10.4: правка руками из админ-дашборда. Все поля необязательны. */
+const patchEventSchema = z
+  .object({
+    type: eventTypeEnum.optional(),
+    subtype: z.string().max(200).nullish(),
+    started_at: isoish.optional(),
+    ended_at: isoish.nullish(),
+    value_num: z.number().finite().nullish(),
+    value_unit: valueUnitEnum.nullish(),
+    note: z.string().max(4000).nullish(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'нечего менять: тело пустое' });
+
+const statsQuerySchema = z.object({
+  days: z.coerce.number().int().positive().max(90).optional(),
 });
 
 function badRequest(reply: FastifyReply, issues: unknown): FastifyReply {
@@ -127,8 +151,10 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     const parsed = eventsQuerySchema.safeParse(request.query);
     if (!parsed.success) return badRequest(reply, parsed.error.issues);
     const { from, to, type, limit, include_deleted: includeDeleted } = parsed.data;
+    // §10.4: рядом с каждым событием — исходная фраза, чтобы было видно,
+    // как речь превратилась в запись, и можно было поймать ошибку разбора.
     return {
-      events: queryEvents(db, {
+      events: queryEventsWithUtterance(db, {
         from: from ?? null,
         to: to ?? null,
         type: type ?? null,
@@ -184,6 +210,72 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (!parsed.success) return badRequest(reply, parsed.error.issues);
     const limit = parsed.data.limit ?? UTTERANCES_LIMIT_DEFAULT;
     return { utterances: listUtterances(db, limit).map(toUtteranceDto) };
+  });
+
+  /* -------------------------------------------------------------- */
+  /** §10.4: правка руками. Через журнал — ручные правки так же обратимы. */
+  app.patch(
+    '/api/events/:id',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = Number.parseInt(request.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return badRequest(reply, 'id должен быть числом');
+
+      const parsed = patchEventSchema.safeParse(request.body);
+      if (!parsed.success) return badRequest(reply, parsed.error.issues);
+
+      const journal: JournalContext = {
+        changeSetId: newChangeSetId(),
+        actor: 'manual',
+        summary: `Ручная правка события ${id} через дашборд`,
+      };
+
+      let updated;
+      try {
+        updated = updateEvent(db, id, parsed.data, journal);
+      } catch (err) {
+        return badRequest(reply, err instanceof Error ? err.message : String(err));
+      }
+      if (!updated) return reply.code(404).send({ error: 'not_found', id });
+
+      defer(ctx, () => {
+        sse.broadcastEvent('updated', updated);
+        sse.broadcastState(getState(db, cfg));
+      });
+
+      return { event: updated, changeSetId: journal.changeSetId };
+    },
+  );
+
+  /** §10.4: удаление мягкое и обратимое. Физического удаления не существует (§9.1). */
+  app.delete(
+    '/api/events/:id',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = Number.parseInt(request.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return badRequest(reply, 'id должен быть числом');
+
+      const journal: JournalContext = {
+        changeSetId: newChangeSetId(),
+        actor: 'manual',
+        summary: `Удаление события ${id} через дашборд`,
+      };
+
+      const deleted = softDeleteEvent(db, id, journal);
+      if (!deleted) return reply.code(404).send({ error: 'not_found', id });
+
+      defer(ctx, () => {
+        sse.broadcastEvent('deleted', deleted);
+        sse.broadcastState(getState(db, cfg));
+      });
+
+      return { event: deleted, changeSetId: journal.changeSetId, revertWith: journal.changeSetId };
+    },
+  );
+
+  /** §10.4: суточная аналитика с нормами для текущего возраста (§10.1). */
+  app.get('/api/stats/daily', async (request: FastifyRequest, reply) => {
+    const parsed = statsQuerySchema.safeParse(request.query);
+    if (!parsed.success) return badRequest(reply, parsed.error.issues);
+    return { days: dailyStats(db, cfg, parsed.data.days ?? DAILY_DAYS_DEFAULT) };
   });
 
   /* -------------------------------------------------------------- */

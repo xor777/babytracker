@@ -11,7 +11,8 @@ import { all, get, run, count, p, EVENT_COLUMNS, getEventById } from './db.ts';
 import type { JournalContext } from './journal.ts';
 import { journaledChange } from './journal.ts';
 import type { Config } from './config.ts';
-import type { DailySleepDto, EventRow, EventSource, StateDto, EventType } from './types.ts';
+import { normsForAge, type AgeNorms } from './taxonomy.ts';
+import type { DailySleepDto, EventRow, EventSource, StateDto } from './types.ts';
 import {
   localDateISO,
   localDayStartMs,
@@ -24,14 +25,8 @@ import {
 
 export const DEFAULT_CHILD_ID = 'andrey';
 
-export const EVENT_TYPES: readonly EventType[] = [
-  'sleep',
-  'feed',
-  'diaper',
-  'measure',
-  'meds',
-  'note',
-];
+// Таксономия живёт в одном месте — см. taxonomy.ts (§10.2)
+export { EVENT_TYPES } from './taxonomy.ts';
 
 /* ------------------------------------------------------------------ */
 /* Вставка / изменение                                                 */
@@ -404,6 +399,61 @@ export interface QueryEventsParams {
 export const EVENTS_LIMIT_DEFAULT = 200;
 export const EVENTS_LIMIT_MAX = 1000;
 
+/** §10.4: событие вместе с исходной фразой — чтобы видеть, как речь стала записью. */
+export interface EventWithUtterance extends EventRow {
+  utterance_text: string | null;
+}
+
+/**
+ * Те же события, но с подтянутым текстом фразы (LEFT JOIN по utterance_id).
+ * Нужно ленте истории в админ-дашборде: без исходного текста нельзя поймать
+ * ошибку разбора.
+ */
+export function queryEventsWithUtterance(
+  db: Db,
+  params: QueryEventsParams = {},
+): EventWithUtterance[] {
+  const { where, sql } = buildEventsWhere(params);
+  // все колонки условия относятся к events — префиксуем, чтобы JOIN не был двусмысленным
+  const joinWhere = where.replace(/\b(deleted_at|started_at|type)\b/g, 'e.$1');
+  return all<EventWithUtterance>(
+    db,
+    `SELECT ${EVENT_COLUMNS.split(', ').map((c) => `e.${c}`).join(', ')}, u.raw_text AS utterance_text
+       FROM events e
+       LEFT JOIN utterances u ON u.id = e.utterance_id
+      WHERE ${joinWhere}
+      ORDER BY e.started_at DESC, e.id DESC LIMIT ?`,
+    sql,
+  );
+}
+
+interface EventsWhere {
+  where: string;
+  sql: SqlParam[];
+}
+
+function buildEventsWhere(params: QueryEventsParams): EventsWhere {
+  const where: string[] = [];
+  const sql: SqlParam[] = [];
+
+  if (!params.includeDeleted) where.push('deleted_at IS NULL');
+  if (params.from) {
+    where.push('started_at >= ?');
+    sql.push(p(toIsoUtc(params.from) ?? params.from));
+  }
+  if (params.to) {
+    where.push('started_at <= ?');
+    sql.push(p(toIsoUtc(params.to) ?? params.to));
+  }
+  if (params.type) {
+    where.push('type = ?');
+    sql.push(p(params.type));
+  }
+
+  sql.push(clampLimit(params.limit, EVENTS_LIMIT_DEFAULT, EVENTS_LIMIT_MAX));
+  return { where: where.length > 0 ? where.join(' AND ') : '1=1', sql };
+}
+
 export function queryEvents(db: Db, params: QueryEventsParams = {}): EventRow[] {
   const where: string[] = [];
   const sql: SqlParam[] = [];
@@ -607,6 +657,107 @@ export function dailySleep(
       sessions: stats.sessions,
       nightMin: stats.nightMin,
       napMin: stats.napMin,
+    });
+  }
+
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* §10.4: суточная статистика для админ-дашборда                       */
+/* ------------------------------------------------------------------ */
+
+export interface DailyStatsDto {
+  date: string;
+  ageDays: number;
+  feeds: { total: number; breast: number; bottle: number; solid: number; volumeMl: number | null };
+  diapers: { wet: number; dirty: number; both: number; total: number };
+  sleep: { totalMin: number; sessions: number; longestMin: number };
+  /** Последнее за сутки измерение; null — в этот день не измеряли. */
+  measures: { weightG: number | null; heightCm: number | null; headCm: number | null; tempMaxC: number | null };
+  norms: AgeNorms;
+}
+
+/** Последнее за день измерение нужного подтипа, приведённое к базовой единице. */
+function lastMeasure(
+  rows: EventRow[],
+  subtype: string,
+  convert: (value: number, unit: string | null) => number,
+): number | null {
+  const found = rows
+    .filter((e) => e.type === 'measure' && e.subtype === subtype && e.value_num !== null)
+    .sort((a, b) => a.started_at.localeCompare(b.started_at))
+    .at(-1);
+  return found?.value_num === null || found === undefined
+    ? null
+    : convert(found.value_num, found.value_unit);
+}
+
+export function dailyStats(
+  db: Db,
+  cfg: Config,
+  days: number = DAILY_DAYS_DEFAULT,
+  now: Date = new Date(),
+): DailyStatsDto[] {
+  const total = Math.min(Math.max(1, Math.trunc(days)), DAILY_DAYS_MAX);
+  const todayISO = localDateISO(now, cfg.tz);
+  const nowMs = now.getTime();
+  const result: DailyStatsDto[] = [];
+
+  for (let i = total - 1; i >= 0; i--) {
+    const date = shiftLocalDate(todayISO, -i);
+    const from = localDayStartMs(date, cfg.tz);
+    const to = localDayStartMs(shiftLocalDate(date, 1), cfg.tz);
+
+    const rows = all<EventRow>(
+      db,
+      `SELECT ${EVENT_COLUMNS} FROM events
+        WHERE deleted_at IS NULL AND started_at >= ? AND started_at < ?
+        ORDER BY started_at ASC`,
+      [new Date(from).toISOString(), new Date(to).toISOString()],
+    );
+
+    const feeds = rows.filter((e) => e.type === 'feed');
+    const volumes = feeds.filter((e) => e.value_unit === 'ml' && e.value_num !== null);
+    const diapers = rows.filter((e) => e.type === 'diaper');
+    const sleep = sleepStatsForRange(db, from, to, nowMs);
+
+    const wet = diapers.filter((e) => e.subtype === 'wet').length;
+    const dirty = diapers.filter((e) => e.subtype === 'dirty').length;
+    const both = diapers.filter((e) => e.subtype === 'both').length;
+
+    result.push({
+      date,
+      ageDays: Math.max(0, daysBetween(cfg.childBirthDate, date)),
+      feeds: {
+        total: feeds.length,
+        breast: feeds.filter((e) => e.subtype === 'breast').length,
+        bottle: feeds.filter((e) => e.subtype === 'bottle').length,
+        solid: feeds.filter((e) => e.subtype === 'solid').length,
+        // объём необязателен (§10.2): нет ни одного названного — отдаём null, а не 0
+        volumeMl:
+          volumes.length === 0
+            ? null
+            : Math.round(volumes.reduce((sum, e) => sum + (e.value_num ?? 0), 0)),
+      },
+      diapers: {
+        wet,
+        dirty,
+        both,
+        // «both» засчитывается и в мокрые, и в грязные — так считают нормы
+        total: diapers.length,
+      },
+      sleep: { totalMin: sleep.totalMin, sessions: sleep.sessions, longestMin: sleep.longestMin },
+      measures: {
+        weightG: lastMeasure(rows, 'weight', (v, u) => (u === 'kg' ? Math.round(v * 1000) : v)),
+        heightCm: lastMeasure(rows, 'height', (v) => v),
+        headCm: lastMeasure(rows, 'head', (v) => v),
+        tempMaxC:
+          rows
+            .filter((e) => e.type === 'measure' && e.subtype === 'temp' && e.value_num !== null)
+            .reduce<number | null>((max, e) => Math.max(max ?? -Infinity, e.value_num ?? 0), null),
+      },
+      norms: normsForAge(Math.max(0, daysBetween(cfg.childBirthDate, date))),
     });
   }
 

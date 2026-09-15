@@ -323,3 +323,215 @@ test('/healthz показывает состояние лимита отдель
     assert.ok(key in worker, `нет поля worker.${key}`);
   }
 });
+
+
+/* ------------------------------------------------------------------ */
+/* §10.4: админ-API                                                    */
+/* ------------------------------------------------------------------ */
+
+test('GET /api/events отдаёт исходный текст фразы рядом с событием', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  await h.app.inject({
+    method: 'POST',
+    url: '/alice/0123456789abcdef0123456789abcdef',
+    payload: {
+      session: { session_id: 's', skill_id: 'k', user_id: 'u' },
+      request: { command: 'андрей заснул', nlu: {} },
+      version: '1.0',
+    },
+  });
+
+  const res = await h.app.inject({ method: 'GET', url: '/api/events' });
+  const events = (res.json() as { events: Array<Record<string, unknown>> }).events;
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.utterance_text, 'андрей заснул', 'без исходной фразы не поймать ошибку разбора');
+  // все поля события на месте
+  for (const key of ['id', 'type', 'started_at', 'source', 'deleted_at']) {
+    assert.ok(key in (events[0] ?? {}), `нет поля ${key}`);
+  }
+
+  // событие, созданное вручную, живёт без фразы и не ломает джойн
+  await h.app.inject({ method: 'POST', url: '/api/events', payload: { type: 'diaper', subtype: 'wet' } });
+  const both = (await h.app.inject({ method: 'GET', url: '/api/events' })).json() as {
+    events: Array<{ utterance_text: string | null }>;
+  };
+  assert.equal(both.events.length, 2);
+  assert.ok(both.events.some((e) => e.utterance_text === null));
+});
+
+test('PATCH /api/events/:id правит событие через журнал', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const { event } = insertEvent(h.db, {
+    type: 'feed',
+    subtype: 'bottle',
+    started_at: '2026-09-15T10:00:00.000Z',
+    source: 'alice-llm',
+  });
+
+  const res = await h.app.inject({
+    method: 'PATCH',
+    url: `/api/events/${event.id}`,
+    payload: { subtype: 'breast', value_num: 15, value_unit: 'min', note: 'левая грудь' },
+  });
+
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { event: Record<string, unknown>; changeSetId: string };
+  assert.equal(body.event.subtype, 'breast');
+  assert.equal(body.event.value_num, 15);
+  assert.equal(body.event.note, 'левая грудь');
+  assert.ok(body.changeSetId);
+
+  // ручная правка обратима ровно как правка модели
+  const revert = await h.app.inject({
+    method: 'POST',
+    url: `/api/change-sets/${body.changeSetId}/revert`,
+  });
+  assert.equal(revert.statusCode, 200);
+  const after = (await h.app.inject({ method: 'GET', url: '/api/events' })).json() as {
+    events: Array<{ subtype: string; note: string | null }>;
+  };
+  assert.equal(after.events[0]?.subtype, 'bottle', 'правка откатилась');
+  assert.equal(after.events[0]?.note, null);
+});
+
+test('PATCH: несуществующий id, мусорный id и пустое тело', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  assert.equal(
+    (await h.app.inject({ method: 'PATCH', url: '/api/events/999999', payload: { note: 'x' } }))
+      .statusCode,
+    404,
+  );
+  assert.equal(
+    (await h.app.inject({ method: 'PATCH', url: '/api/events/абв', payload: { note: 'x' } }))
+      .statusCode,
+    400,
+  );
+  assert.equal(
+    (await h.app.inject({ method: 'PATCH', url: '/api/events/1', payload: { type: 'нечто' } }))
+      .statusCode,
+    400,
+  );
+});
+
+test('DELETE /api/events/:id — мягкое удаление с возможностью вернуть', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const { event } = insertEvent(h.db, {
+    type: 'sleep',
+    started_at: '2026-09-15T10:00:00.000Z',
+    ended_at: '2026-09-15T11:00:00.000Z',
+    source: 'manual',
+  });
+
+  const res = await h.app.inject({ method: 'DELETE', url: `/api/events/${event.id}` });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { event: { deleted_at: string }; revertWith: string };
+  assert.ok(body.event.deleted_at);
+
+  assert.equal(
+    ((await h.app.inject({ method: 'GET', url: '/api/events' })).json() as { events: unknown[] })
+      .events.length,
+    0,
+  );
+  assert.equal(
+    (
+      (
+        await h.app.inject({ method: 'GET', url: '/api/events?include_deleted=true' })
+      ).json() as { events: unknown[] }
+    ).events.length,
+    1,
+    'физически строка на месте',
+  );
+
+  await h.app.inject({ method: 'POST', url: `/api/change-sets/${body.revertWith}/revert` });
+  assert.equal(
+    ((await h.app.inject({ method: 'GET', url: '/api/events' })).json() as { events: unknown[] })
+      .events.length,
+    1,
+    'удаление откатилось',
+  );
+
+  assert.equal(
+    (await h.app.inject({ method: 'DELETE', url: '/api/events/999999' })).statusCode,
+    404,
+  );
+});
+
+test('GET /api/stats/daily считает кормления, подгузники, сон и нормы', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const today = new Date().toISOString().slice(0, 10);
+  const at = (hh: string) => `${today}T${hh}:00:00.000Z`;
+
+  insertEvent(h.db, { type: 'feed', subtype: 'bottle', started_at: at('06'), value_num: 120, value_unit: 'ml', source: 'manual' });
+  insertEvent(h.db, { type: 'feed', subtype: 'breast', started_at: at('07'), value_num: 15, value_unit: 'min', source: 'manual' });
+  insertEvent(h.db, { type: 'diaper', subtype: 'wet', started_at: at('06'), source: 'manual' });
+  insertEvent(h.db, { type: 'diaper', subtype: 'wet', started_at: at('08'), source: 'manual' });
+  insertEvent(h.db, { type: 'diaper', subtype: 'dirty', started_at: at('09'), source: 'manual' });
+  insertEvent(h.db, { type: 'measure', subtype: 'weight', started_at: at('10'), value_num: 7.2, value_unit: 'kg', source: 'manual' });
+  insertEvent(h.db, { type: 'measure', subtype: 'head', started_at: at('10'), value_num: 43, value_unit: 'cm', source: 'manual' });
+
+  const res = await h.app.inject({ method: 'GET', url: '/api/stats/daily?days=1' });
+  assert.equal(res.statusCode, 200);
+  const day = (res.json() as { days: Array<Record<string, never>> }).days[0] as unknown as {
+    feeds: { total: number; bottle: number; breast: number; volumeMl: number | null };
+    diapers: { wet: number; dirty: number; total: number };
+    measures: { weightG: number | null; headCm: number | null; heightCm: number | null };
+    norms: { feeds: { min: number; max: number }; wetDiapers: { min: number } };
+    ageDays: number;
+  };
+
+  assert.equal(day.feeds.total, 2);
+  assert.equal(day.feeds.bottle, 1);
+  assert.equal(day.feeds.breast, 1);
+  assert.equal(day.feeds.volumeMl, 120, 'минуты груди в миллилитры не суммируются');
+  assert.equal(day.diapers.wet, 2);
+  assert.equal(day.diapers.dirty, 1);
+  assert.equal(day.measures.weightG, 7200, 'кг приведены к граммам');
+  assert.equal(day.measures.headCm, 43, 'окружность головы (§10.2)');
+  assert.equal(day.measures.heightCm, null, 'не измеряли — null, а не ноль');
+  assert.equal(day.norms.feeds.min, 8);
+  assert.equal(day.norms.feeds.max, 12);
+  assert.equal(day.norms.wetDiapers.min, 6, 'ребёнку сильно больше 5 дней');
+});
+
+test('объём не выдумывается: без чисел volumeMl = null, а не 0', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const today = new Date().toISOString().slice(0, 10);
+  insertEvent(h.db, { type: 'feed', subtype: 'breast', started_at: `${today}T06:00:00.000Z`, source: 'manual' });
+
+  const day = (
+    (await h.app.inject({ method: 'GET', url: '/api/stats/daily?days=1' })).json() as {
+      days: Array<{ feeds: { total: number; volumeMl: number | null } }>;
+    }
+  ).days[0];
+
+  assert.equal(day?.feeds.total, 1);
+  assert.equal(day?.feeds.volumeMl, null, 'ноль означал бы «покормили нулём мл» — это ложь в данных');
+});
+
+test('новые типы §10.2 принимаются API', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  for (const payload of [
+    { type: 'pump', value_num: 80, value_unit: 'ml' },
+    { type: 'symptom', subtype: 'spit_up' },
+    { type: 'activity', subtype: 'bath', value_num: 20, value_unit: 'min' },
+    { type: 'measure', subtype: 'head', value_num: 43, value_unit: 'cm' },
+  ]) {
+    const res = await h.app.inject({ method: 'POST', url: '/api/events', payload });
+    assert.equal(res.statusCode, 201, `тип ${payload.type} должен приниматься`);
+  }
+});

@@ -28,7 +28,9 @@ import {
 } from './utterances.ts';
 import { buildPrompt } from './prompt.ts';
 import {
+  countRevisionsByActor,
   createSnapshot,
+  findChangeSetByUtterance,
   listChangeSets,
   newChangeSetId,
   setChangeSetSummary,
@@ -437,7 +439,12 @@ export function createWorker(ctx: AppContext): WorkerHandle {
     }
 
     const runStartedAt = new Date().toISOString();
-    const changeSetId = newChangeSetId();
+
+    // §10.3: все события ОДНОЙ фразы — в один набор изменений. Быстрый матчер
+    // уже мог завести набор по этой фразе; дописываем в него, а не заводим свой,
+    // иначе «отмени последнее» откатит только половину сказанного.
+    const changeSetId =
+      findChangeSetByUtterance(db, utterance.id)?.id ?? newChangeSetId();
 
     snapshotBeforeRun();
 
@@ -447,6 +454,7 @@ export function createWorker(ctx: AppContext): WorkerHandle {
       fast: parseFast(utterance.fast_result),
       fastEvent: fastEventFor(utterance.id),
       state: getState(db, cfg),
+      utteranceId: utterance.id,
       changeSets: listChangeSets(db, 5),
       recentEvents: queryEvents(db, { limit: 20 }),
     });
@@ -511,7 +519,10 @@ export function createWorker(ctx: AppContext): WorkerHandle {
   /** Записывает итоговую строку модели в summary набора изменений, если он появился. */
   function rememberSummary(changeSetId: string, payload: unknown): void {
     try {
-      if (!getChangeSet(db, changeSetId)) return; // модель ничего не меняла
+      if (!getChangeSet(db, changeSetId)) return; // набор так и не появился
+      // Набор мог быть создан быстрым матчером: если модель в него ничего не
+      // добавила, её «ничего не изменил» затрёт осмысленное описание — не трогаем.
+      if (countRevisionsByActor(db, changeSetId, 'alice-llm') === 0) return;
       const result =
         payload && typeof payload === 'object' && 'result' in payload
           ? String((payload as { result: unknown }).result ?? '')

@@ -127,6 +127,33 @@ export function getChangeSet(db: Db, id: string): ChangeSetRow | null {
   );
 }
 
+/**
+ * §10.3: одна фраза — один набор изменений. Быстрый матчер уже мог создать набор
+ * по этой фразе; модель должна дописывать в него же, иначе «отмени последнее»
+ * откатит половину фразы — сон вернётся, а кормление останется.
+ */
+export function findChangeSetByUtterance(db: Db, utteranceId: number): ChangeSetRow | null {
+  return (
+    get<ChangeSetRow>(
+      db,
+      `SELECT ${CHANGE_SET_COLUMNS} FROM change_sets
+        WHERE utterance_id = ? AND reverted_at IS NULL
+        ORDER BY created_at ASC LIMIT 1`,
+      [utteranceId],
+    ) ?? null
+  );
+}
+
+/** Сколько ревизий в наборе внёс конкретный актор. */
+export function countRevisionsByActor(db: Db, changeSetId: string, actor: Actor): number {
+  const row = get<{ n: number }>(
+    db,
+    'SELECT COUNT(*) AS n FROM event_revisions WHERE change_set_id = ? AND actor = ?',
+    [changeSetId, actor],
+  );
+  return Number(row?.n ?? 0);
+}
+
 export function listRevisions(db: Db, changeSetId: string): RevisionRow[] {
   return all<RevisionRow>(
     db,

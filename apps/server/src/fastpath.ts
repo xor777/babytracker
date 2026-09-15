@@ -251,6 +251,156 @@ export function looksLikeDataCommand(command: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/* Домены событий (§10.2) и «во фразе может быть ещё что-то» (§10.3)    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Ключевые слова доменов. Нужны не для разбора (этим занимается модель),
+ * а чтобы ПОНЯТЬ, что фразу нельзя закрывать одним fast-path.
+ *
+ * Сравнение по началу слова: «покорм» ловит «покормили», «покормила», «покормить».
+ */
+export const DOMAIN_STEMS: Readonly<Record<string, readonly string[]>> = {
+  feed: [
+    'покушал', 'кушал', 'кушает', 'поел', 'поела', 'поели', 'ест', 'едим',
+    'покорм', 'кормл', 'кормил', 'кормим', 'кормит', 'кормить',
+    'груд', 'сиськ', 'сисю', 'титьк', 'сосал', 'сосет', 'присосал',
+    'бутылочк', 'бутылк', 'смес', 'прикорм', 'докорм', 'пюре', 'кашк', 'каш',
+  ],
+  pump: ['сцед', 'сцеживан'],
+  diaper: [
+    'подгузник', 'памперс', 'покакал', 'какал', 'покак', 'обкакал',
+    'пописал', 'писал', 'описал', 'пеленк', 'подмыл', 'грязн', 'мокр',
+  ],
+  measure: [
+    'взвесил', 'взвеш', 'весит', 'весил', 'вес', 'рост', 'выраст', 'измерил',
+    'померил', 'температур', 'градусник', 'окружност', 'сантиметр', 'килограмм', 'грамм',
+  ],
+  meds: [
+    'витамин', 'лекарств', 'капл', 'сироп', 'таблетк', 'парацетамол', 'нурофен',
+    'фенистил', 'аквадетрим', 'дозу', 'жаропониж', 'свеч',
+  ],
+  symptom: [
+    'срыгн', 'срыгив', 'вырвал', 'рвот', 'сып', 'колик', 'плач', 'плакал',
+    'кашл', 'сопл', 'насморк', 'болит', 'беспоко', 'капризнич', 'жар',
+  ],
+  activity: [
+    'купал', 'ванн', 'гулял', 'гулять', 'прогулк', 'выклад', 'животик', 'массаж', 'зарядк',
+  ],
+  sleep: [
+    'спал', 'спит', 'сон', 'засн', 'усн', 'засып', 'проснул', 'просып', 'дрых', 'уложил',
+  ],
+};
+
+/** Числительные словами — «минут пятнадцать» это одно число. */
+const NUMERAL_STEMS: readonly string[] = [
+  'один', 'одну', 'одна', 'два', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь',
+  'восемь', 'девять', 'десять', 'одиннадцат', 'двенадцат', 'тринадцат', 'четырнадцат',
+  'пятнадцат', 'шестнадцат', 'семнадцат', 'восемнадцат', 'девятнадцат', 'двадцат',
+  'тридцат', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяност',
+  'двест', 'трист', 'полчаса', 'половин',
+];
+
+/** Слова, которые не считаются «значимыми» при подсчёте длины фразы. */
+const INSIGNIFICANT = new Set([
+  'и', 'а', 'но', 'же', 'то', 'ли', 'бы', 'в', 'во', 'на', 'с', 'со', 'у', 'к', 'ко',
+  'о', 'об', 'за', 'по', 'из', 'от', 'до', 'для', 'при', 'про', 'над', 'под',
+  'он', 'она', 'они', 'мы', 'я', 'ты', 'его', 'ее', 'их', 'нам', 'мне', 'ему',
+  'уже', 'еще', 'так', 'там', 'тут', 'вот', 'это', 'этот', 'что', 'как', 'ну',
+  'андрей', 'андрея', 'андрею', 'алиса', 'сегодня', 'вчера', 'сейчас',
+]);
+
+/**
+ * Союзы и перечисления (§10.3). Запятая проверяется по СЫРОЙ фразе:
+ * нормализация её уже съела.
+ */
+const CONJUNCTION_PATTERNS: readonly RegExp[] = [
+  / и /u,
+  / а /u,
+  / потом/u,
+  / затем/u,
+  / после/u,
+  / плюс/u,
+];
+
+function startsWithAny(token: string, stems: readonly string[]): boolean {
+  for (const stem of stems) if (token.startsWith(stem)) return true;
+  return false;
+}
+
+/** Домены, ключевые слова которых встречаются во фразе. */
+export function detectDomains(normalized: string): Set<string> {
+  const found = new Set<string>();
+  const tokens = tokenize(normalized);
+  for (const [domain, stems] of Object.entries(DOMAIN_STEMS)) {
+    for (const token of tokens) {
+      if (startsWithAny(token, stems)) {
+        found.add(domain);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/** Сколько чисел во фразе: цифрами и словами. */
+export function countNumbers(normalized: string): number {
+  let count = (normalized.match(/\d+/gu) ?? []).length;
+  for (const token of tokenize(normalized)) {
+    if (/\d/.test(token)) continue; // уже посчитали цифрами
+    if (startsWithAny(token, NUMERAL_STEMS)) count++;
+  }
+  return count;
+}
+
+/** Значимые слова — без предлогов, местоимений и имени ребёнка. */
+export function countSignificantWords(normalized: string): number {
+  return tokenize(normalized).filter((t) => !INSIGNIFICANT.has(t)).length;
+}
+
+export const MAX_SIMPLE_WORDS = 6;
+
+export interface MayContainMoreInput {
+  /** Сырая фраза — по ней ищем запятые, которые нормализация убирает. */
+  raw: string;
+  normalized: string;
+  /** Домен, который уже распознал fast-path ('sleep' либо null). */
+  recognizedDomain: string | null;
+}
+
+/**
+ * §10.3: может ли во фразе быть что-то, кроме распознанного.
+ *
+ * Это защита от тихой потери данных, а не оптимизация: «Андрей покушал и уснул»
+ * fast-path видит как уверенный sleep_start, и без этой проверки кормление
+ * исчезло бы молча — мама думает, что записала, а записи нет.
+ * Поэтому правило сознательно срабатывает с запасом: лишний вызов модели дёшев,
+ * потерянное событие — нет.
+ */
+export function computeMayContainMore(input: MayContainMoreInput): boolean {
+  const { raw, normalized, recognizedDomain } = input;
+  if (normalized.length === 0) return false;
+
+  // 1. Союз или перечисление
+  if (raw.includes(',')) return true;
+  const padded_ = padded(normalized);
+  if (CONJUNCTION_PATTERNS.some((re) => re.test(padded_))) return true;
+
+  // 2. Ключевое слово из другого домена
+  for (const domain of detectDomains(normalized)) {
+    if (domain !== recognizedDomain) return true;
+  }
+
+  // 3. Больше одного числа
+  if (countNumbers(normalized) > 1) return true;
+
+  // 4. Длинная фраза
+  if (countSignificantWords(normalized) > MAX_SIMPLE_WORDS) return true;
+
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
 /* Отрицания                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -400,15 +550,16 @@ function sleepResult(
   kind: 'sleep_start' | 'sleep_end',
   confidence: number,
   at: string | undefined,
+  mayContainMore: boolean,
 ): FastResult {
   if (kind === 'sleep_start') {
     return at === undefined
-      ? { kind: 'sleep_start', confidence }
-      : { kind: 'sleep_start', confidence, at };
+      ? { kind: 'sleep_start', confidence, mayContainMore }
+      : { kind: 'sleep_start', confidence, at, mayContainMore };
   }
   return at === undefined
-    ? { kind: 'sleep_end', confidence }
-    : { kind: 'sleep_end', confidence, at };
+    ? { kind: 'sleep_end', confidence, mayContainMore }
+    : { kind: 'sleep_end', confidence, at, mayContainMore };
 }
 
 export interface MatchFastOptions {
@@ -433,31 +584,45 @@ export function matchFast(
   const tz = options.tz ?? 'Europe/Moscow';
 
   const normalized = normalize(command);
-  if (normalized.length === 0) return { kind: 'unknown' };
+  if (normalized.length === 0) return { kind: 'unknown', mayContainMore: false };
 
   const text = padded(normalized);
   const tokens = tokenize(normalized);
 
+  /** §10.3: считается относительно того, что распознали. */
+  const more = (recognizedDomain: string | null): boolean =>
+    computeMayContainMore({ raw: command, normalized, recognizedDomain });
+
   // 1. Выход — раньше всего: это управление диалогом, а не событие.
-  if (isExit(text, tokens)) return { kind: 'exit' };
+  if (isExit(text, tokens)) return { kind: 'exit', mayContainMore: false };
 
   const at = extractDateTime(nlu, now, tz);
 
   // 2. Многословные маркеры пробуждения (в т.ч. «не спит») — до проверки отрицаний.
-  if (containsPhrase(text, SLEEP_END_PHRASES)) return sleepResult('sleep_end', C_DIRECT, at);
+  if (containsPhrase(text, SLEEP_END_PHRASES)) {
+    return sleepResult('sleep_end', C_DIRECT, at, more('sleep'));
+  }
 
   // 3. Многословные маркеры засыпания.
-  if (containsPhrase(text, SLEEP_START_PHRASES)) return sleepResult('sleep_start', C_DIRECT, at);
+  if (containsPhrase(text, SLEEP_START_PHRASES)) {
+    return sleepResult('sleep_start', C_DIRECT, at, more('sleep'));
+  }
 
   // 4. Запрос состояния.
-  if (isQuery(text, tokens)) return { kind: 'query_state', confidence: C_QUERY };
+  if (isQuery(text, tokens)) {
+    return { kind: 'query_state', confidence: C_QUERY, mayContainMore: false };
+  }
 
   // 5. Отрицание рядом с ключевым словом сна — отдаём LLM, сами не гадаем.
-  if (hasNegatedSleepKeyword(tokens)) return { kind: 'unknown' };
+  if (hasNegatedSleepKeyword(tokens)) return { kind: 'unknown', mayContainMore: more(null) };
 
   // 6. Одиночные ключевые слова.
-  if (hasAnyToken(tokens, SLEEP_END_TOKENS)) return sleepResult('sleep_end', C_DIRECT, at);
-  if (hasAnyToken(tokens, SLEEP_START_TOKENS)) return sleepResult('sleep_start', C_DIRECT, at);
+  if (hasAnyToken(tokens, SLEEP_END_TOKENS)) {
+    return sleepResult('sleep_end', C_DIRECT, at, more('sleep'));
+  }
+  if (hasAnyToken(tokens, SLEEP_START_TOKENS)) {
+    return sleepResult('sleep_start', C_DIRECT, at, more('sleep'));
+  }
 
-  return { kind: 'unknown' };
+  return { kind: 'unknown', mayContainMore: more(null) };
 }
