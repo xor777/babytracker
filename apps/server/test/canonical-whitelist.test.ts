@@ -130,7 +130,12 @@ test('причина отказа объясняет, что именно пом
 /* Подгузник: матчер закрывает его сам, иначе факт был бы потерян      */
 /* ------------------------------------------------------------------ */
 
-test('однословный подгузник записывается матчером и не зовёт модель', async (t) => {
+/**
+ * Подгузник матчер пишет сам — иначе при недоступной модели факт терялся бы
+ * совсем. А вот «модель звать не нужно» перестало быть правдой: политика по
+ * умолчанию `all`, и уверенность словаря больше не повод молчать (§9.4).
+ */
+test('однословный подгузник записывается матчером, и фраза всё равно уходит модели', async (t) => {
   const h = await makeTestApp();
   t.after(() => h.close());
 
@@ -148,7 +153,19 @@ test('однословный подгузник записывается мат�
   assert.deepEqual(events.map((e) => e.subtype).sort(), ['dirty', 'wet']);
 
   for (const u of listUtterances(h.db)) {
-    assert.equal(u.status, 'skipped', 'однословный подгузник модель не требует');
+    assert.equal(u.status, 'pending', 'при политике по умолчанию фразу разбирает модель');
+  }
+});
+
+test('политика smart однословный подгузник модели не отдаёт', async (t) => {
+  const h = await makeTestApp({ LLM_QUEUE_POLICY: 'smart' });
+  t.after(() => h.close());
+
+  await h.app.inject({ method: 'POST', url: `/alice/${TEST_SECRET}`, payload: aliceBody('пописал') });
+
+  assert.equal(queryEvents(h.db, { type: 'diaper' }).length, 1, 'запись матчера на месте');
+  for (const u of listUtterances(h.db)) {
+    assert.equal(u.status, 'skipped', 'экономный режим модель не зовёт');
   }
 });
 

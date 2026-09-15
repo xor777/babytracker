@@ -134,7 +134,7 @@ export function loadConfig(
     problems.push(`WORKER_ENABLED="${workerRaw}" — ожидается true/false`);
   }
 
-  const policyRaw = str(env, 'LLM_QUEUE_POLICY', 'smart').toLowerCase();
+  const policyRaw = str(env, 'LLM_QUEUE_POLICY', 'all').toLowerCase();
   if (!LLM_QUEUE_POLICIES.includes(policyRaw as LlmQueuePolicy)) {
     problems.push(
       `LLM_QUEUE_POLICY="${policyRaw}" — ожидается ${LLM_QUEUE_POLICIES.join(' | ')}`,
