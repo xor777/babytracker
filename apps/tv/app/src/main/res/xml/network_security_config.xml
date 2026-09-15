@@ -14,4 +14,15 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+
+    <!--
+      Публичный домен — только HTTPS, никакого cleartext. Формат конфигурации
+      не умеет диапазоны адресов, поэтому «разрешить http только в локалке»
+      одним правилом не выразить: cleartext остаётся в base-config ради
+      http://192.168.x.x:8787, а downgrade внешнего домена закрывается точечно.
+      Домен сменится — поправить здесь.
+    -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">adbgw.ru</domain>
+    </domain-config>
 </network-security-config>

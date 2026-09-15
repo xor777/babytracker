@@ -22,6 +22,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -73,6 +74,15 @@ class MainActivity : Activity() {
     /** В истории WebView остался наш служебный about:blank — вычистить после успеха. */
     private var historyDirty = false
 
+    /** Учётные данные уже отданы в рамках текущей загрузки. */
+    private var authOffered = false
+
+    /** Сервер не принял логин/пароль — отдельное состояние, не «нет связи». */
+    private var authRejected = false
+
+    /** Учётные данные в сборке есть, но отдавать их этому адресу нельзя. */
+    private var authWithheld = false
+
     /** Момент (elapsedRealtime), когда надо повторить загрузку. */
     private var retryAt = 0L
 
@@ -87,8 +97,13 @@ class MainActivity : Activity() {
                 load()
                 return
             }
-            val sec = ((left + 999L) / 1000L).toInt()
-            overlayStatus.text = getString(R.string.retry_in, sec, attempt)
+            overlayStatus.text = if (authRejected) {
+                // Пароль неверен — долбить сервер незачем, но и сдаваться нельзя:
+                // если пароль поправят на сервере, телевизор вернётся сам.
+                getString(R.string.auth_retry_in, ((left + 59_999L) / 60_000L).toInt())
+            } else {
+                getString(R.string.retry_in, ((left + 999L) / 1000L).toInt(), attempt)
+            }
             handler.postDelayed(this, 500L)
         }
     }
@@ -135,6 +150,9 @@ class MainActivity : Activity() {
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase()?.trim().orEmpty()
         if (host.isEmpty()) return false
+        // Открытый HTTP — только для локальной сети. Публичный домен по http
+        // не открываем никогда: это ровно то, как выглядит downgrade-атака.
+        if (scheme == "http" && !isLanHost(host)) return false
         val allowed = BuildConfig.DASHBOARD_URL_HOSTS
             .split(',')
             .map { it.trim().lowercase() }
@@ -317,7 +335,28 @@ class MainActivity : Activity() {
             ) {
                 if (request?.isForMainFrame != true) return
                 val code = errorResponse?.statusCode ?: return
-                fail(getString(R.string.err_http, code))
+                val reason = when {
+                    code != HTTP_UNAUTHORIZED -> getString(R.string.err_http, code)
+                    authWithheld -> getString(R.string.err_http_401_withheld)
+                    BuildConfig.DASHBOARD_USER.isEmpty() ||
+                        BuildConfig.DASHBOARD_PASSWORD.isEmpty() ->
+                        getString(R.string.err_http_401_missing)
+                    else -> getString(R.string.err_http_401)
+                }
+                fail(reason)
+            }
+
+            override fun onReceivedHttpAuthRequest(
+                view: WebView?,
+                authHandler: HttpAuthHandler?,
+                host: String?,
+                realm: String?,
+            ) {
+                if (authHandler == null) {
+                    super.onReceivedHttpAuthRequest(view, authHandler, host, realm)
+                    return
+                }
+                handleAuthRequest(authHandler, host)
             }
 
             /**
@@ -340,7 +379,7 @@ class MainActivity : Activity() {
         web.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
                 if (message != null) {
-                    Log.d(TAG, "web: ${message.message()} @${message.lineNumber()}")
+                    Log.d(TAG, "web: ${safe(message.message().orEmpty())} @${message.lineNumber()}")
                 }
                 // false — пусть движок пишет своё в logcat: в релизе это
                 // единственный способ понять, почему дашборд показал белый экран.
@@ -356,9 +395,65 @@ class MainActivity : Activity() {
         if (url.startsWith(BLANK)) return false
         val host = uri.host?.lowercase()
         val target = runCatching { Uri.parse(targetUrl).host?.lowercase() }.getOrNull()
-        if (host != null && host == target) return false
-        Log.w(TAG, "навигация наружу заблокирована: $url")
+        // Тот же хост И разрешённая схема: редирект https -> http на публичный
+        // домен тоже должен упереться, а не проехать «это же наш хост».
+        if (host != null && host == target && isAllowedUrl(url)) return false
+        Log.w(TAG, "навигация наружу заблокирована: ${safe(url)}")
         return true
+    }
+
+    // ------------------------------------------------------ Аутентификация
+
+    /**
+     * Дашборд закрыт HTTP Basic на Caddy, а у телевизора есть пульт и нет клавиатуры —
+     * пароль вводить некому. Отдаём его сами.
+     *
+     * Условия жёсткие: только на хост из DASHBOARD_URL, только по HTTPS и только один
+     * раз за загрузку. Второй запрос на ту же загрузку означает, что сервер пару
+     * отверг, — уходим в отдельное состояние, а не в цикл 401 → proceed → 401.
+     */
+    private fun handleAuthRequest(authHandler: HttpAuthHandler, host: String?) {
+        val user = BuildConfig.DASHBOARD_USER
+        val password = BuildConfig.DASHBOARD_PASSWORD
+
+        if (user.isEmpty() || password.isEmpty()) {
+            // Сборка без учётных данных: ведём себя как раньше. Сервер вернёт 401,
+            // его подхватит onReceivedHttpError и покажет внятную причину.
+            Log.w(TAG, "сервер требует аутентификацию, а в сборке учётных данных нет")
+            authHandler.cancel()
+            return
+        }
+        if (!mayAuthenticate(host)) {
+            authWithheld = true
+            Log.w(
+                TAG,
+                "учётные данные НЕ отправлены: запрос от host=$host, " +
+                    "целевой ${displayUrl(targetUrl)}",
+            )
+            authHandler.cancel()
+            return
+        }
+        if (authOffered) {
+            Log.w(TAG, "сервер не принял логин и пароль")
+            authHandler.cancel()
+            failAuth()
+            return
+        }
+        authOffered = true
+        authHandler.proceed(user, password)
+    }
+
+    /** Пароль уходит только своему хосту и только по HTTPS. */
+    private fun mayAuthenticate(host: String?): Boolean {
+        val challenge = host?.lowercase()?.trim().orEmpty()
+        if (challenge.isEmpty()) return false
+        val target = runCatching { Uri.parse(targetUrl) }.getOrNull() ?: return false
+        if (!"https".equals(target.scheme, ignoreCase = true)) return false
+        if (!isAllowedUrl(targetUrl)) return false
+        val targetHost = target.host?.lowercase().orEmpty()
+        if (targetHost.isEmpty()) return false
+        val withPort = if (target.port > 0) "$targetHost:${target.port}" else targetHost
+        return challenge == targetHost || challenge == withPort
     }
 
     /**
@@ -397,6 +492,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(loadTimeout)
 
         failed = false
+        authOffered = false
+        authRejected = false
+        authWithheld = false
         targetUrl = currentUrl()
 
         showConnecting()
@@ -410,17 +508,41 @@ class MainActivity : Activity() {
         failed = true
         handler.removeCallbacks(loadTimeout)
 
-        Log.w(TAG, "load failed: $targetUrl — $reason")
+        Log.w(TAG, "load failed: ${safe(displayUrl(targetUrl))} — ${safe(reason)}")
 
-        // Стереть встроенную страницу ошибки движка: пользователь её видеть не должен.
+        clearEngineErrorPage()
+        showError(reason)
+        scheduleRetry()
+    }
+
+    /**
+     * Сервер отверг логин и пароль. Повторять сразу бессмысленно — пара от этого
+     * верной не станет, — но и бросать телевизор нельзя: пароль могут поправить
+     * на сервере. Поэтому отдельный экран и редкая проверка.
+     */
+    private fun failAuth() {
+        if (failed) return
+        failed = true
+        authRejected = true
+        handler.removeCallbacks(loadTimeout)
+
+        Log.w(TAG, "аутентификация отклонена сервером: ${safe(displayUrl(targetUrl))}")
+
+        clearEngineErrorPage()
+        showAuthError()
+
+        retryAt = SystemClock.elapsedRealtime() + AUTH_RETRY_MS
+        handler.removeCallbacks(countdown)
+        handler.post(countdown)
+    }
+
+    /** Стереть встроенную страницу ошибки движка: пользователь её видеть не должен. */
+    private fun clearEngineErrorPage() {
         historyDirty = true
         handler.post {
             web.stopLoading()
             web.loadUrl(BLANK)
         }
-
-        showError(reason)
-        scheduleRetry()
     }
 
     private fun scheduleRetry() {
@@ -456,7 +578,7 @@ class MainActivity : Activity() {
         overlayTitle.setText(R.string.connecting_title)
         overlayTitle.setTextColor(getColorCompat(R.color.bt_cyan))
         overlayDetail.setText(R.string.connecting_detail)
-        overlayUrl.text = targetUrl
+        overlayUrl.text = displayUrl(targetUrl)
         overlayStatus.setText(R.string.connecting_status)
         overlayHint.visibility = View.GONE
     }
@@ -466,10 +588,28 @@ class MainActivity : Activity() {
         overlay.visibility = View.VISIBLE
         overlayTitle.setText(R.string.error_title)
         overlayTitle.setTextColor(getColorCompat(R.color.bt_magenta))
-        overlayDetail.text = reason
-        overlayUrl.text = targetUrl
+        overlayDetail.text = safe(reason)
+        overlayUrl.text = displayUrl(targetUrl)
         overlayHint.visibility = View.VISIBLE
     }
+
+    private fun showAuthError() {
+        web.visibility = View.INVISIBLE
+        overlay.visibility = View.VISIBLE
+        overlayTitle.setText(R.string.auth_error_title)
+        overlayTitle.setTextColor(getColorCompat(R.color.bt_magenta))
+        overlayDetail.setText(R.string.auth_error_detail)
+        overlayUrl.text = displayUrl(targetUrl)
+        overlayHint.visibility = View.VISIBLE
+    }
+
+    /** Ничего секретного на экран и в логи: ни пароля, ни `user:pass@` из URL. */
+    private fun safe(text: String): String {
+        val password = BuildConfig.DASHBOARD_PASSWORD
+        return if (password.isEmpty()) text else text.replace(password, "***")
+    }
+
+    private fun displayUrl(url: String): String = safe(url.replace(USER_INFO, "//"))
 
     @Suppress("DEPRECATION")
     private fun getColorCompat(id: Int): Int =
@@ -633,6 +773,14 @@ class MainActivity : Activity() {
 
         /** 172.16.0.0/12 — вторая приватная сеть. */
         val PRIVATE_172 = Regex("^172\\.(1[6-9]|2\\d|3[01])\\.")
+
+        /** `//user:pass@` в URL — вырезаем перед показом и логированием. */
+        val USER_INFO = Regex("//[^/@]*@")
+
+        const val HTTP_UNAUTHORIZED = 401
+
+        /** Пауза между проверками, когда сервер отверг пару логин/пароль. */
+        const val AUTH_RETRY_MS = 5 * 60_000L
 
         /** Сколько ждём ответа, прежде чем считать загрузку провалившейся. */
         const val LOAD_TIMEOUT_MS = 20_000L

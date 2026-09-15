@@ -12,7 +12,14 @@
 
     <string name="err_timeout">Сервер не ответил за %1$d с</string>
     <string name="err_http">Сервер ответил кодом %1$d</string>
+    <string name="err_http_401">Сервер требует логин и пароль (401)</string>
+    <string name="err_http_401_missing">Сервер требует логин и пароль (401), а в сборке их нет</string>
+    <string name="err_http_401_withheld">Логин и пароль не отправлены: этот адрес не HTTPS</string>
     <string name="err_unknown">Страница не загрузилась</string>
+
+    <string name="auth_error_title">СЕРВЕР НЕ ПРИНЯЛ ЛОГИН И ПАРОЛЬ</string>
+    <string name="auth_error_detail">Пересоберите APK с верными DASHBOARD_USER и DASHBOARD_PASSWORD</string>
+    <string name="auth_retry_in">Проверю ещё раз через %1$d мин</string>
 
     <string name="exit_confirm">Ещё раз НАЗАД — выйти из приложения</string>
     <string name="reloading">Перезагружаю дашборд…</string>

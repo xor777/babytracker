@@ -25,6 +25,26 @@ val dashboardHosts: String =
     (project.findProperty("DASHBOARD_URL_HOSTS") as String?)?.trim()?.takeIf { it.isNotEmpty() }
         ?: runCatching { URI(dashboardUrl).host }.getOrNull().orEmpty()
 
+/**
+ * HTTP Basic для закрытого Caddy. Приоритет тот же, что у DASHBOARD_URL.
+ * Пусто (дефолт) = аутентификации нет, приложение работает как раньше.
+ *
+ * Настоящий пароль в gradle.properties проекта не кладём: только `-PDASHBOARD_PASSWORD=...`
+ * или ~/.gradle/gradle.properties. Логин с паролем ниже нигде не логируются.
+ */
+val dashboardUser: String =
+    (project.findProperty("DASHBOARD_USER") as String?)?.trim().orEmpty()
+
+val dashboardPassword: String =
+    (project.findProperty("DASHBOARD_PASSWORD") as String?).orEmpty()
+
+/** Пароль может содержать кавычки и слеши — экранируем, иначе BuildConfig не скомпилируется. */
+fun javaStringLiteral(value: String): String = "\"" + value
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\n", "\\n")
+    .replace("\r", "\\r") + "\""
+
 android {
     namespace = "com.nuanu.babytracker.tv"
     compileSdk = 35
@@ -36,8 +56,10 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        buildConfigField("String", "DASHBOARD_URL", "\"$dashboardUrl\"")
-        buildConfigField("String", "DASHBOARD_URL_HOSTS", "\"$dashboardHosts\"")
+        buildConfigField("String", "DASHBOARD_URL", javaStringLiteral(dashboardUrl))
+        buildConfigField("String", "DASHBOARD_URL_HOSTS", javaStringLiteral(dashboardHosts))
+        buildConfigField("String", "DASHBOARD_USER", javaStringLiteral(dashboardUser))
+        buildConfigField("String", "DASHBOARD_PASSWORD", javaStringLiteral(dashboardPassword))
     }
 
     buildFeatures {
@@ -96,7 +118,16 @@ dependencies {
 }
 
 // Напоминание в логе сборки: с каким адресом собрали APK.
+// Пароль не печатаем — только факт, что он задан.
 tasks.register("printDashboardUrl") {
     val url = dashboardUrl
-    doLast { println("DASHBOARD_URL = $url") }
+    val hosts = dashboardHosts
+    val user = dashboardUser
+    val hasPassword = dashboardPassword.isNotEmpty()
+    doLast {
+        println("DASHBOARD_URL       = $url")
+        println("DASHBOARD_URL_HOSTS = $hosts")
+        println("DASHBOARD_USER      = ${user.ifEmpty { "(не задан — аутентификации не будет)" }}")
+        println("DASHBOARD_PASSWORD  = ${if (hasPassword) "(задан)" else "(не задан)"}")
+    }
 }
