@@ -381,8 +381,10 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   /* -------------------------------------------------------------- */
   /** §3.6 SSE. Сразу после подключения шлём снимок состояния — дашборд не ждёт. */
-  app.get('/api/stream', async (_request, reply) => {
-    const id = sse.attach(reply);
+  app.get('/api/stream', async (request, reply) => {
+    // Поток привязываем к сессии: отзыв устройства обязан оборвать его
+    // немедленно, а не когда клиенту надоест держать сокет (§11).
+    const id = sse.attach(reply, request.deviceSession?.id ?? null);
     try {
       sse.sendTo(id, 'state', getState(db, cfg));
     } catch (err) {

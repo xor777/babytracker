@@ -16,6 +16,9 @@ import type { AppContext, WorkerStatus } from './context.ts';
 import { SseHub } from './sse.ts';
 import { registerApiRoutes } from './api.ts';
 import { registerAliceRoutes, neutralReply } from './alice.ts';
+import { registerAuthGuard } from './auth-guard.ts';
+import { registerAuthRoutes } from './auth-routes.ts';
+import { RateLimiter } from './device-auth.ts';
 
 /**
  * Секрет вебхука — часть пути. В логи он попасть НЕ ДОЛЖЕН, поэтому маскируем
@@ -85,12 +88,16 @@ export interface CreateAppOptions {
   logger?: boolean | Record<string, unknown>;
   /** Отключить раздачу статики (тесты). */
   serveStatic?: boolean;
+  /** Подменяемые часы: тестам нужно проверять истечение кодов и сессий. */
+  now?: () => number;
 }
 
 export interface CreatedApp {
   app: FastifyInstance;
   ctx: AppContext;
   sse: SseHub;
+  /** Ограничитель частоты: тестам нужно его сбрасывать между проверками. */
+  limiter: RateLimiter;
   setWorkerStatus: (fn: () => WorkerStatus) => void;
   setWorkerNotify: (fn: () => void) => void;
 }
@@ -149,20 +156,37 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   };
 
   /* ---------------------------------------------------------------- */
+  /* ДВЕРЬ. Ставится первой и до всего остального — это не стилистика:  */
+  /* хук `onRequest` на корневом инстансе видит и статику, и SPA-       */
+  /* fallback, и обработчик 404, то есть все пути, которыми ответ может */
+  /* уйти мимо маршрута. Любая регистрация выше этой строки означала бы */
+  /* дыру ровно того размера, что она раздаёт.                          */
+  /* ---------------------------------------------------------------- */
+  const limiter = new RateLimiter(options.now);
+  registerAuthGuard(app, ctx, options.now ? { now: options.now } : {});
+
+  /* ---------------------------------------------------------------- */
   /* CORS: нужен в dev-режиме, когда Vite крутится на 5173 отдельно.    */
   /* ---------------------------------------------------------------- */
   const allowedOrigins = cfg.dashboardOrigin;
+  /*
+   * Куку сессии браузер отправит на чужой origin только если сервер явно
+   * разрешил учётные данные. Разрешаем — но исключительно поимённому списку:
+   * `credentials: true` вместе с «отражать любой Origin» открыл бы чтение
+   * истории ребёнка любому сайту, который пользователь откроет в соседней
+   * вкладке. Список из одной звёздочки в этом смысле ничем не лучше пустого.
+   */
+  const namedOrigins = allowedOrigins.length > 0 && !allowedOrigins.includes('*');
   void app.register(cors, {
-    origin:
-      allowedOrigins.length === 0 || allowedOrigins.includes('*')
-        ? true
-        : (origin, cb) => {
-            // Запросы без Origin (curl, TV WebView с того же origin) пропускаем.
-            if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-            else cb(null, false);
-          },
-    methods: ['GET', 'POST', 'OPTIONS'],
-    credentials: false,
+    origin: namedOrigins
+      ? (origin, cb) => {
+          // Запросы без Origin (curl, TV WebView с того же origin) пропускаем.
+          if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+          else cb(null, false);
+        }
+      : true,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: namedOrigins,
   });
 
   /* ---------------------------------------------------------------- */
@@ -259,6 +283,7 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   }
 
   /* ---------------------------------------------------------------- */
+  registerAuthRoutes(app, ctx, options.now ? { limiter, now: options.now } : { limiter });
   registerApiRoutes(app, ctx);
   registerAliceRoutes(app, ctx);
 
@@ -305,6 +330,7 @@ export function createApp(options: CreateAppOptions): CreatedApp {
     app,
     ctx,
     sse,
+    limiter,
     setWorkerStatus: (fn) => {
       workerStatusFn = fn;
     },

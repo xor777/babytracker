@@ -37,6 +37,22 @@ export interface Config {
   adminDist: string;
   llmQueuePolicy: LlmQueuePolicy;
   llmConfidenceThreshold: number;
+
+  /* --- §11: авторизация устройств по коду --------------------------- */
+  /**
+   * Ставить ли на куку сессии флаг Secure. По умолчанию да, и менять это
+   * в бою нельзя: без Secure кука уходит по http в открытом виде.
+   * Выключается только для локальной разработки без TLS, и сервер об этом
+   * предупреждает в лог при каждом старте.
+   */
+  authCookieSecure: boolean;
+  /** Срок жизни короткого кода сопряжения, секунды (RFC 8628 §5.4). */
+  pairCodeTtlSec: number;
+  /**
+   * Скользящий срок сессии телефона в днях. Сессия телевизора бессрочна
+   * независимо от этого значения — см. `sessionExpiry` в device-auth.ts.
+   */
+  sessionTtlDays: number;
 }
 
 /** §9.4: когда вообще звать модель. */
@@ -147,6 +163,20 @@ export function loadConfig(
     problems.push(`LLM_CONFIDENCE_THRESHOLD="${thresholdRaw}" — ожидается число от 0 до 1`);
   }
 
+  const codeTtlRaw = str(env, 'PAIR_CODE_TTL_SEC', '600');
+  const codeTtl = Number.parseInt(codeTtlRaw, 10);
+  // Нижняя граница не придирка: за минуту человек не успеет дойти до телефона,
+  // и сопряжение превратится в бесконечную смену кодов на экране.
+  if (!Number.isInteger(codeTtl) || codeTtl < 60 || codeTtl > 3600) {
+    problems.push(`PAIR_CODE_TTL_SEC="${codeTtlRaw}" — ожидается целое число секунд 60..3600`);
+  }
+
+  const sessionTtlRaw = str(env, 'SESSION_TTL_DAYS', '90');
+  const sessionTtl = Number.parseInt(sessionTtlRaw, 10);
+  if (!Number.isInteger(sessionTtl) || sessionTtl < 1 || sessionTtl > 3650) {
+    problems.push(`SESSION_TTL_DAYS="${sessionTtlRaw}" — ожидается целое число дней 1..3650`);
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const dbPathRaw = str(env, 'DB_PATH', './data/babytracker.db');
@@ -184,5 +214,10 @@ export function loadConfig(
     adminDist: path.isAbsolute(adminDistRaw) ? adminDistRaw : path.resolve(cwd, adminDistRaw),
     llmQueuePolicy: policyRaw as LlmQueuePolicy,
     llmConfidenceThreshold: threshold,
+    // Небезопасное значение приходится задавать явным словом: случайная опечатка
+    // в переменной не должна тихо снять Secure с куки сессии.
+    authCookieSecure: str(env, 'AUTH_COOKIE_SECURE', 'true').toLowerCase() !== 'false',
+    pairCodeTtlSec: codeTtl,
+    sessionTtlDays: sessionTtl,
   };
 }

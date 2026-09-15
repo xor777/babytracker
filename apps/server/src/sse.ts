@@ -19,6 +19,13 @@ export interface SseEventPayload {
 
 interface Client {
   id: number;
+  /**
+   * Чья это сессия. Нужна ровно для одного: отзыв устройства обязан оборвать
+   * уже открытый поток. Без этого отозванный телевизор продолжал бы получать
+   * события ребёнка часами — проверка на входе его больше не касается,
+   * соединение-то уже установлено.
+   */
+  sessionId: string | null;
   write: (chunk: string) => void;
   close: () => void;
 }
@@ -45,7 +52,7 @@ export class SseHub {
   }
 
   /** Подключает reply как SSE-поток. Возвращает id клиента. */
-  attach(reply: FastifyReply): number {
+  attach(reply: FastifyReply, sessionId: string | null = null): number {
     const id = this.#nextId++;
     const raw = reply.raw;
 
@@ -61,6 +68,7 @@ export class SseHub {
 
     const client: Client = {
       id,
+      sessionId,
       write: (chunk) => {
         raw.write(chunk);
       },
@@ -121,6 +129,27 @@ export class SseHub {
       this.#clients.delete(id);
       this.#onError(err);
     }
+  }
+
+  /**
+   * Оборвать все потоки отозванной сессии. Возвращает, сколько оборвали.
+   *
+   * Это вторая половина отзыва устройства: первая — пометка в БД, после
+   * которой ни один НОВЫЙ запрос не пройдёт дверь. Но SSE-соединение живёт
+   * часами и двери больше не показывается, поэтому его закрывают явно.
+   * Потерянный телефон должен замолчать в ту же секунду, а не когда ему
+   * надоест держать сокет.
+   */
+  closeSession(sessionId: string): number {
+    let closed = 0;
+    for (const [id, client] of [...this.#clients]) {
+      if (client.sessionId !== sessionId) continue;
+      this.#clients.delete(id);
+      client.close();
+      closed += 1;
+    }
+    this.#maybeStopHeartbeat();
+    return closed;
   }
 
   close(): void {

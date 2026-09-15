@@ -77,9 +77,20 @@ export async function main(): Promise<void> {
       worker: cfg.workerEnabled,
       // секрет НЕ логируем — только форму URL
       webhook: `/alice/<ALICE_WEBHOOK_SECRET>`,
+      pairing: '/pair',
     },
     'BabyTracker server готов',
   );
+
+  // Кука сессии без Secure уходит по http в открытом виде. В бою это дыра,
+  // поэтому предупреждение громкое и на каждом старте: тихая небезопасная
+  // настройка — это настройка, про которую забывают.
+  if (!cfg.authCookieSecure) {
+    app.log.warn(
+      'AUTH_COOKIE_SECURE=false — кука сессии отдаётся БЕЗ флага Secure. ' +
+        'Допустимо только для локальной разработки без TLS.',
+    );
+  }
 }
 
 const invokedDirectly =

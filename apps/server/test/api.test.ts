@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TEST_SECRET, aliceBody, makeTestApp, testConfig, testDb } from './helpers.ts';
+import { TEST_SECRET, aliceBody, authorize, makeTestApp, testConfig, testDb } from './helpers.ts';
 import { createApp } from '../src/app.ts';
 import { insertEvent, softDeleteEvent } from '../src/events.ts';
 import { insertUtterance } from '../src/utterances.ts';
@@ -560,6 +560,9 @@ test('раздача /dash не перехватывает api, alice и healthz
   const db = testDb();
   const { app, sse } = createApp({ cfg, db, logger: false });
   await app.ready();
+  // Всё, кроме /alice и /healthz, теперь за дверью (§11): тест проверяет
+  // раздачу статики, а не авторизацию, поэтому ходит с сессией.
+  authorize(app, db);
   t.after(async () => {
     sse.close();
     await app.close();
@@ -653,6 +656,7 @@ async function makePwaApp(files: Record<string, string>): Promise<PwaFixture> {
   const db = testDb();
   const { app, sse } = createApp({ cfg, db, logger: false });
   await app.ready();
+  authorize(app, db);
 
   return {
     dir,
