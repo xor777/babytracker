@@ -65,8 +65,8 @@ android {
         applicationId = "com.nuanu.babytracker.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
 
         buildConfigField("String", "DASHBOARD_URL", javaStringLiteral(dashboardUrl))
         buildConfigField("String", "DASHBOARD_URL_HOSTS", javaStringLiteral(dashboardHosts))
