@@ -7,8 +7,6 @@ interface Props {
   onChoose: (mode: ThemeMode) => void;
   cachedAt: string | null;
   online: boolean;
-  /** Сколько устройств ждёт одобрения — чтобы показать это прямо на кнопке. */
-  pendingDevices: number;
   onDevices: () => void;
   onClose: () => void;
 }
@@ -28,7 +26,6 @@ export function SettingsSheet({
   onChoose,
   cachedAt,
   online,
-  pendingDevices,
   onDevices,
   onClose,
 }: Props) {
@@ -92,6 +89,13 @@ export function SettingsSheet({
 
           <div className="field">
             <span className="field__label">Устройства</span>
+            {/*
+              Кнопка намеренно молчит о том, ждёт ли кто-то одобрения.
+              Значок «ждут: 2» был здесь и убран вместе с баннером на главной:
+              число заявок на обычном экране — то же приглашение пойти и
+              нажать, только мельче. Кто ждёт — видно на самом экране
+              устройств, куда идут осознанно.
+            */}
             <button
               type="button"
               className="btn"
@@ -99,13 +103,11 @@ export function SettingsSheet({
               onClick={onDevices}
             >
               Одобрить и отозвать
-              {pendingDevices > 0 ? (
-                <span className="devrow__badge">ждут: {pendingDevices}</span>
-              ) : null}
             </button>
             <p className="field__hint">
-              Кто подключён к дневнику и кто просится. Потерянный телефон отзывается
-              здесь одним нажатием.
+              Кто подключён к дневнику и кто просится. Чтобы впустить новое устройство,
+              нужно набрать код с его экрана. Потерянный телефон отзывается здесь одним
+              нажатием.
             </p>
           </div>
 

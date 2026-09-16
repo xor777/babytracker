@@ -25,6 +25,7 @@ import {
   LIMITS,
   MAX_PENDING_CODES,
   RateLimiter,
+  USER_CODE_LENGTH,
   approveCode,
   buildSessionCookie,
   clearSessionCookies,
@@ -305,6 +306,10 @@ export function registerAuthRoutes(
    * Один запрос на весь экран: и кто ждёт одобрения, и кто уже подключён.
    * Экран показывает их вместе, разделять их на два запроса значило бы
    * два состояния загрузки там, где смысл один.
+   *
+   * В `pending` НЕТ кодов — см. `PendingDto`. Список отвечает только на
+   * вопрос «заявка дошла?»; одобряют не отсюда, а набрав код с экрана
+   * устройства.
    */
   app.get('/api/devices', async (request) => {
     const current = request.deviceSession?.id ?? null;
@@ -316,27 +321,31 @@ export function registerAuthRoutes(
     };
   });
 
-  /** Одобрение из списка: человек видит код на экране телевизора и сверяет глазами. */
-  app.post(
-    '/api/devices/pending/:id/approve',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
-      const id = parseRowId(request.params.id);
-      if (id === null) return reply.code(400).send({ error: 'bad_request', message: ROW_ID_HINT });
-
-      const row = approveCode(db, id, request.deviceSession?.id ?? 'unknown', now());
-      if (!row) {
-        // Заявки нет, она истекла или её уже разобрали. Разница для человека
-        // одна и та же: одобрять нечего.
-        return reply.code(404).send({ error: 'not_found', message: 'Заявка уже недоступна.' });
-      }
-
-      ctx.log.info(
-        { codeId: id, by: request.deviceSession?.id },
-        'сопряжение: заявка одобрена из админки',
-      );
-      return { ok: true, approved: toPendingDto(row, now()) };
-    },
-  );
+  /*
+   * Одобрения по id заявки здесь НЕТ, и это не упущение.
+   *
+   * Оно было: `POST /api/devices/pending/:id/approve`. Экран показывал список
+   * ждущих с кнопкой «Одобрить» у каждого, и одно нажатие впускало устройство.
+   * Ушло по двум причинам сразу, и вторая тяжелее первой.
+   *
+   * ПЕРВАЯ, прикладная. Заказчик: «чтобы на главной не всплывало и жена
+   * случайно не одобрила никому». Кнопка, которую видно, рано или поздно
+   * нажимают — особенно когда рядом с ней написано «устройство просит доступ»,
+   * а человек только осваивает приложение. Спрятать кнопку поглубже не лечит:
+   * спрятанная кнопка остаётся кнопкой. Лечит только то, что одобрение стало
+   * требовать знания, которого у случайного нажатия нет, — кода с экрана.
+   *
+   * ВТОРАЯ, дырка. `id` — это `INTEGER PRIMARY KEY AUTOINCREMENT`, то есть
+   * маленькое последовательное число, а ограничителя на этом эндпоинте не было
+   * вовсе. Рядом стоит `/api/devices/approve`, где перебор кода аккуратно
+   * ограничен пятью попытками на 15 минут (RFC 8628 §5.1) — и вся эта
+   * аккуратность не стоила ничего, пока соседняя ручка одобряла ту же заявку
+   * перебором `id` от единицы без всякого счёта попыток.
+   *
+   * Осталась ровно одна дорога к одобрению — по набранному коду, ниже.
+   * Отклонение по id (следом) сохранено намеренно: ошибочный отказ безвреден,
+   * устройство просто попросит заново.
+   */
 
   app.post(
     '/api/devices/pending/:id/deny',
@@ -371,6 +380,24 @@ export function registerAuthRoutes(
       return reply.code(400).send({ error: 'bad_request', issues: parsed.error.issues });
     }
 
+    const code = normalizeUserCode(parsed.data.user_code);
+
+    /*
+     * Недобранный код — это опечатка, а не попытка угадать, и окно за него не
+     * тратится. Подбору это не помогает ничем: код неверной длины не совпадёт
+     * ни с одной заявкой в принципе, так что перебирающему такие попытки и не
+     * нужны — ему нужны восьмисимвольные, а они считаются все до одной.
+     * Зато человек, у которого палец соскочил на седьмом символе, не теряет
+     * из-за этого одну из пяти попыток.
+     *
+     * Длина кода и так не тайна: она в контракте и на странице сопряжения.
+     */
+    if (!isWellFormedUserCode(code)) {
+      return reply
+        .code(400)
+        .send({ error: 'bad_code', message: `В коде ${USER_CODE_LENGTH} букв. Проверьте набранное.` });
+    }
+
     const key = `guess:${sessionKey(request)}`;
     if (!limiter.take(key, LIMITS.guess.limit, LIMITS.guess.windowMs)) {
       ctx.log.warn(
@@ -384,8 +411,14 @@ export function registerAuthRoutes(
       );
     }
 
-    const code = normalizeUserCode(parsed.data.user_code);
-    const found = isWellFormedUserCode(code) ? findPendingByUserCode(db, code, now()) : null;
+    /*
+     * Несуществующий, чужой, уже разобранный и протухший код отвечают ОДНИМ И
+     * ТЕМ ЖЕ 404 с одним и тем же текстом. Различать их полезно ровно одному
+     * человеку — тому, кто подбирает: «истёк» означало бы «такой код был»,
+     * то есть подтверждение попадания. Ср. `pollForSession`, где по той же
+     * причине несуществующий и протухший `device_code` отвечают одинаково.
+     */
+    const found = findPendingByUserCode(db, code, now());
     if (!found) {
       return reply.code(404).send({ error: 'not_found', message: 'Такой код не ждёт одобрения.' });
     }

@@ -1737,9 +1737,14 @@ textarea.input {
 /* ============================================================
    Устройства (§11): экран одобрения и отзыва.
 
-   Код — самое крупное, что есть на экране, и это не украшение:
-   его сверяют с экраном телевизора, стоя посреди комнаты с телефоном
-   в руке. Всё остальное здесь подпись к нему.
+   Поле ввода кода — самое крупное, что есть на экране, и это не
+   украшение: набранное сверяют с экраном телевизора, стоя посреди
+   комнаты с телефоном в руке. Всё остальное здесь подпись к нему.
+
+   Раньше на этом месте крупно показывался сам код заявки, рядом с
+   кнопкой «Одобрить». Теперь код не показывается вовсе — его набирают,
+   глядя на экран устройства, и только это доказывает, что одобряющий
+   устройство видел.
    ============================================================ */
 
 .devsec {
@@ -1763,19 +1768,6 @@ textarea.input {
   border-radius: var(--radius);
 }
 
-/* Заявка — единственное на экране, что требует действия прямо сейчас. */
-.devcard--pending {
-  border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px var(--accent-ring);
-}
-
-.devcard__head {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.devcard__icon,
 .devrow__icon {
   display: inline-flex;
   flex: none;
@@ -1788,51 +1780,35 @@ textarea.input {
   color: var(--cyan);
 }
 
-.devcard__name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.devcard__meta {
+/* Поле ввода кода — самое крупное на экране, и по той же причине, по какой
+   раньше крупным был показанный код: его сверяют с экраном телевизора, стоя
+   посреди комнаты с телефоном в руке. Моноширинный шрифт и разрядка нужны,
+   чтобы при сверке не сбиться на восьми одинаково узких буквах. */
+.devcode-input {
+  min-height: 58px;
   margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-.devcard__hint {
-  margin: 8px 0 0;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-.devcode {
-  margin: 14px 0 0;
-  padding: 12px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
   font-family: var(--mono);
-  /* Уменьшается на узких экранах, но не мельче читаемого с вытянутой руки. */
-  font-size: clamp(28px, 11vw, 42px);
+  font-size: clamp(22px, 8vw, 30px);
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   text-align: center;
+  text-transform: uppercase;
   color: var(--cyan);
-  /* Тире не должно переносить половину кода на другую строку. */
-  white-space: nowrap;
-  overflow-x: auto;
 }
 
-.devcard__actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
+.devcode-input::placeholder {
+  color: var(--text-3);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  /* Подсказка не должна выглядеть набранным кодом. */
+  opacity: 0.55;
 }
 
-.devcard__actions .btn {
-  flex: 1;
+.devcard__submit {
+  width: 100%;
+  margin-top: 10px;
 }
+
 
 .devrow {
   display: flex;

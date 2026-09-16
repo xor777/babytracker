@@ -142,6 +142,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * То же, что `request`, но при отказе показывает текст САМОГО СЕРВЕРА.
+ *
+ * Обычный `request` переводит код ответа в общую фразу — и это правильно для
+ * экранов, где человеку всё равно нечего предпринять. Но у одобрения по коду
+ * отказы разные по смыслу и по тому, что делать дальше: «такой код не ждёт
+ * одобрения» (набрать заново, глядя на экран), «в коде 8 букв» (дописать),
+ * «слишком много попыток» (ждать). Свести их к «сервер не принял запрос»
+ * значило бы отправить человека гадать.
+ *
+ * Если тела нет или оно без `message` — возвращаемся к общей фразе, чтобы
+ * молчаливый прокси или обрыв не оставили пустой экран.
+ */
+async function requestWithServerMessage<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url(path), {
+      ...init,
+      headers: {
+        accept: 'application/json',
+        ...(init?.body ? { 'content-type': 'application/json' } : null),
+        ...init?.headers,
+      },
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+  } catch (cause) {
+    if ((cause as Error)?.name === 'AbortError') throw cause;
+    throw new ApiError(0, 'Нет связи с сервером.');
+  }
+
+  if (!res.ok) {
+    let message: string | null = null;
+    try {
+      const body = (await res.json()) as { message?: unknown };
+      if (typeof body?.message === 'string' && body.message.trim()) message = body.message.trim();
+    } catch {
+      // Ответ без JSON — не повод молчать, ниже подставится общая фраза.
+    }
+    throw new ApiError(res.status, message ?? describe(res.status, path));
+  }
+
+  noteFreshness(res);
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 /** Контракт фиксирует обёртку {events}/{days}, но голый массив тоже переживём. */
 function pickArray<T>(payload: unknown, ...keys: string[]): T[] {
   if (Array.isArray(payload)) return payload as T[];
@@ -319,10 +366,16 @@ export async function fetchStats(days = 7, signal?: AbortSignal): Promise<StatsR
  * Устройства (§11): кто ждёт одобрения и кто уже подключён.
  * ------------------------------------------------------------------ */
 
+/**
+ * Ждущая заявка. Кода в ней НЕТ — и это намеренно, а не забытое поле.
+ *
+ * Одобряют, набрав код с экрана самого устройства (§11.9). Смысл ровно в
+ * том, чтобы одобряющий это устройство видел; код, показанный в списке,
+ * позволил бы списать его отсюда и впустить чужого вслепую. Сервер его и
+ * не отдаёт — см. `PendingDto` в apps/server/src/device-auth.ts.
+ */
 export interface PendingDevice {
   id: number;
-  /** Код в том виде, в каком он написан на экране устройства: XXXX-XXXX. */
-  userCode: string;
   kind: string;
   label: string | null;
   requestedAt: string;
@@ -357,8 +410,23 @@ export async function fetchDevices(signal?: AbortSignal): Promise<DevicesRespons
   };
 }
 
-export async function approvePending(id: number): Promise<void> {
-  await request(`/api/devices/pending/${id}/approve`, { method: 'POST' });
+/**
+ * Одобрить устройство по коду, набранному с его экрана.
+ *
+ * Единственная дорога к одобрению. Ручка «одобрить заявку номер такой-то»
+ * была и убрана: её `id` — маленькое последовательное число, перебор которого
+ * впускал устройство, не зная кода вовсе.
+ *
+ * Сообщение берём у сервера, а не выдумываем по коду ответа: здесь разница
+ * между «такого кода никто не ждёт» и «слишком много попыток, подождите»
+ * определяет, что человеку делать дальше, а общее `describe()` превратило бы
+ * и то и другое в «сервер не принял запрос».
+ */
+export async function approveByCode(userCode: string): Promise<void> {
+  await requestWithServerMessage('/api/devices/approve', {
+    method: 'POST',
+    body: JSON.stringify({ user_code: userCode }),
+  });
 }
 
 export async function denyPending(id: number): Promise<void> {

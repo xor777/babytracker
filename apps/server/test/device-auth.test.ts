@@ -503,6 +503,220 @@ test('верная догадка возвращает ровно одну по�
 });
 
 /* ================================================================== */
+/* Одобрить можно ТОЛЬКО набрав код                                    */
+/* ================================================================== */
+
+/**
+ * Дыра, которую здесь закрыли, была настоящей и стоила всей аккуратности
+ * с ограничителем выше.
+ *
+ * Рядом с `/api/devices/approve` (пять попыток на 15 минут, ключ — сессия)
+ * жил `POST /api/devices/pending/:id/approve`, который одобрял ту же заявку
+ * по `id`. А `id` — это `INTEGER PRIMARY KEY AUTOINCREMENT`, то есть
+ * маленькое последовательное число, и никакого счёта попыток на том
+ * эндпоинте не было вовсе.
+ *
+ * Иными словами: перебирать 20^8 было незачем — хватало перебрать 1, 2, 3.
+ */
+test('одобрения по id заявки не существует: перебор маленьких чисел ничего не впускает', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  const victim = await startCode(h, 'tv');
+
+  // Полный перебор всех правдоподобных id — с запасом, ибо счётчик начинается
+  // с единицы и заявка в базе на этот момент одна.
+  for (let id = 1; id <= 50; id++) {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/devices/pending/${id}/approve`,
+      payload: {},
+    });
+    assert.ok(
+      res.statusCode === 404 || res.statusCode === 405,
+      `id=${id}: такого эндпоинта быть не должно, а он ответил ${res.statusCode}`,
+    );
+  }
+
+  // И устройство по-прежнему НЕ впущено: ни одна из полусотни попыток
+  // не превратилась в сессию.
+  const still = await poll(h, victim.deviceCode);
+  assert.equal(still.statusCode, 400);
+  assert.equal(
+    (still.json() as { error: string }).error,
+    'authorization_pending',
+    'заявка как ждала одобрения, так и ждёт',
+  );
+
+  // Единственная дорога осталась одна — и она работает.
+  assert.equal((await approveByCode(h, victim.display)).statusCode, 200);
+});
+
+/**
+ * Главный тест всей затеи, сформулированный как страх заказчика:
+ * «чтобы жена случайно не одобрила никому».
+ *
+ * Утверждается не «эндпоинт отвечает 200», а сильное свойство:
+ * ИМЕЯ ПОЛНЫЙ ДОСТУП К АДМИНКЕ, но НЕ ЗНАЯ кода с экрана устройства,
+ * впустить это устройство нельзя ничем.
+ *
+ * Поэтому перебираются все мыслимые дороги, а не одна: снятая ручка
+ * одобрения по id, отказ, отзыв, одобрение чужим кодом и кодом соседней
+ * заявки. Пока ни одна из них не выдаёт сессию, случайное нажатие остаётся
+ * невозможным — нажимать просто не на что.
+ */
+test('НЕ ЗНАЯ кода, впустить устройство нельзя ничем — даже из полностью открытой админки', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  // Заявка, кода которой «мы не видели»: её экран в другой комнате.
+  const victim = await startCode(h, 'tv');
+  // И вторая, своя — её код мы знаем. Ровно тот случай, которого боится
+  // заказчик: чужая заявка приходит в ту же минуту, когда одобряешь свою.
+  const mine = await startCode(h, 'phone');
+
+  const id = (
+    await h.app.inject({ method: 'GET', url: '/api/devices' })
+  ).json() as { pending: Array<{ id: number }> };
+  const ids = id.pending.map((p) => p.id);
+  assert.equal(ids.length, 2);
+
+  // 1. Снятая ручка «одобрить заявку номер N» — по каждому реальному id.
+  for (const rowId of ids) {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/devices/pending/${rowId}/approve`,
+      payload: {},
+    });
+    assert.ok(res.statusCode === 404 || res.statusCode === 405, `id=${rowId}: ${res.statusCode}`);
+  }
+
+  // 2. Одобрение кодом СОСЕДНЕЙ заявки не одобряет чужую: код относится
+  //    ровно к одному устройству.
+  assert.equal((await approveByCode(h, mine.display)).statusCode, 200);
+
+  // 3. Чужая заявка по-прежнему ждёт — хотя рядом только что одобрили другую.
+  clock.advance(6000);
+  const victimPoll = await poll(h, victim.deviceCode);
+  assert.equal(victimPoll.statusCode, 400);
+  assert.equal(
+    (victimPoll.json() as { error: string }).error,
+    'authorization_pending',
+    'одобрение своего устройства не должно задевать чужую заявку',
+  );
+
+  // 4. И сессию получило ровно то устройство, чей код набрали.
+  clock.advance(6000);
+  assert.equal((await poll(h, mine.deviceCode)).statusCode, 200);
+});
+
+test('код ждущей заявки нельзя добыть из API: его неоткуда списать, не глядя на экран', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  /*
+   * Проверка ровно того, ради чего код убран из списка.
+   *
+   * Набор кода защищает лишь пока код НЕЛЬЗЯ ПОЛУЧИТЬ ИНАЧЕ, чем посмотрев
+   * на экран устройства. Утечка кода в любой ответ, доступный вошедшему,
+   * превращает «наберите код» обратно в кнопку «Одобрить»: списал из ответа,
+   * вставил, впустил — не видя ни устройства, ни его экрана.
+   *
+   * Поэтому сканируются все ответы, которые вошедший может получить, —
+   * целиком, как текст, в обоих написаниях кода.
+   */
+  const victim = await startCode(h, 'tv');
+  const mine = await startCode(h, 'phone');
+
+  const responses = [
+    await h.app.inject({ method: 'GET', url: '/api/devices' }),
+    await h.app.inject({ method: 'GET', url: '/api/auth/session' }),
+    // Ответ на УСПЕШНОЕ одобрение своей заявки — он тоже описывает заявку.
+    await approveByCode(h, mine.display),
+  ];
+
+  for (const res of responses) {
+    assert.equal(
+      res.body.includes(victim.userCode),
+      false,
+      `код чужой заявки утёк в ответ ${res.statusCode}: ${res.body}`,
+    );
+    assert.equal(res.body.includes(victim.display), false, 'и в написании с тире тоже');
+  }
+});
+
+test('отклонить по id по-прежнему можно: ошибочный отказ безвреден, в отличие от одобрения', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const code = await startCode(h, 'tv');
+  const list = await h.app.inject({ method: 'GET', url: '/api/devices' });
+  const id = (list.json() as { pending: Array<{ id: number }> }).pending[0]?.id;
+  assert.ok(typeof id === 'number');
+
+  assert.equal(
+    (await h.app.inject({ method: 'POST', url: `/api/devices/pending/${id}/deny`, payload: {} }))
+      .statusCode,
+    200,
+    'отказ остаётся в одно нажатие — устройство просто попросит заново',
+  );
+
+  const after = await poll(h, code.deviceCode);
+  assert.equal((after.json() as { error: string }).error, 'access_denied');
+});
+
+test('недобранный код — опечатка, а не попытка: окно за неё не тратится', async (t) => {
+  const h = await makeTestApp();
+  t.after(() => h.close());
+
+  const code = await startCode(h, 'tv');
+
+  /*
+   * Десять обрывков подряд — вдвое больше, чем всё окно подбора. Если бы они
+   * тратили попытки, верный код ниже упёрся бы в 429.
+   *
+   * Подбору эта поблажка не даёт ничего: код неверной длины не совпадает ни
+   * с одной заявкой в принципе, так что перебирающему такие попытки не нужны,
+   * а все восьмисимвольные по-прежнему считаются до единой (тест выше).
+   */
+  for (let i = 0; i < 10; i++) {
+    const res = await approveByCode(h, 'BCD');
+    assert.equal(res.statusCode, 400, 'слишком короткий код — не «не найдено», а «проверьте ввод»');
+    assert.equal((res.json() as { error: string }).error, 'bad_code');
+  }
+
+  assert.equal(
+    (await approveByCode(h, code.display)).statusCode,
+    200,
+    'опечатки не должны съедать право набрать верный код',
+  );
+});
+
+test('«не найден» и «истёк» отвечают одинаково — иначе подбор получает подсказку', async (t) => {
+  const clock = makeClock();
+  const h = await makeTestApp({}, { now: clock.now });
+  t.after(() => h.close());
+
+  // Заявка, которая протухнет: такой код БЫЛ.
+  const expired = await startCode(h, 'tv');
+  clock.advance(11 * 60_000);
+
+  const onExpired = await approveByCode(h, expired.display);
+  // Код, которого не было никогда.
+  const onUnknown = await approveByCode(h, newUserCode());
+
+  assert.equal(onExpired.statusCode, 404);
+  assert.equal(onUnknown.statusCode, 404);
+  assert.deepEqual(
+    onExpired.json(),
+    onUnknown.json(),
+    'ответы обязаны совпадать дословно: «истёк» означало бы «такой код был»',
+  );
+});
+
+/* ================================================================== */
 /* Сам код: алфавит и нормализация (RFC 8628 §6.1)                     */
 /* ================================================================== */
 
@@ -880,7 +1094,7 @@ test('мёртвый код отвечает «истёк», а не «поме�
 /* Экран одобрения                                                     */
 /* ================================================================== */
 
-test('экран одобрения показывает тип, время и код — и ничего лишнего', async (t) => {
+test('список ждущих показывает тип и время — но НЕ код: иначе одобрять можно не глядя', async (t) => {
   const clock = makeClock();
   const h = await makeTestApp({}, { now: clock.now });
   t.after(() => h.close());
@@ -896,10 +1110,25 @@ test('экран одобрения показывает тип, время и �
   assert.equal(body.pending.length, 1);
   const item = body.pending[0] as Record<string, unknown>;
 
-  assert.equal(item.userCode, code.display, 'код виден — его сверяют с экраном');
+  // Заявка видна: человек, стоящий перед телевизором, должен понимать, что
+  // она дошла. Этого достаточно — одобряют не отсюда.
   assert.equal(item.kind, 'tv');
   assert.ok(typeof item.requestedAt === 'string', 'время запроса');
   assert.ok(typeof item.secondsLeft === 'number');
+
+  /*
+   * ГЛАВНОЕ. Кода нет ни под каким именем и ни в каком написании.
+   *
+   * Одобрение требует набрать код с экрана устройства, и весь смысл этого
+   * требования в том, что одобряющий обязан был этот экран ВИДЕТЬ. Код,
+   * отданный в списке, разрушает свойство целиком: его списывают отсюда и
+   * одобряют чужое устройство вслепую. Проверяем и поле, и подстроку —
+   * с тире и без, потому что утечь оно может в любом виде.
+   */
+  const pendingDump = JSON.stringify(body.pending);
+  assert.equal(item.userCode, undefined, 'поля userCode в ответе нет');
+  assert.equal(pendingDump.includes(code.display), false, 'кода нет и подстрокой (XXXX-XXXX)');
+  assert.equal(pendingDump.includes(code.userCode), false, 'кода нет и без тире');
 
   // Длинного секрета в ответе нет ни под каким именем.
   assert.equal(JSON.stringify(body).includes(code.deviceCode), false);

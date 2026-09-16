@@ -922,10 +922,24 @@ export function toSessionDto(row: SessionRow, currentId: string | null): Session
   };
 }
 
-/** Ждущая заявка глазами одобряющего: тип, время и код — больше ничего не нужно. */
+/**
+ * Ждущая заявка глазами одобряющего: тип, время и сколько ей осталось.
+ *
+ * Кода здесь НЕТ, и это главное свойство этой структуры, а не экономия полей.
+ *
+ * Одобрение требует набрать код с экрана устройства (RFC 8628 §3.3: сервер
+ * «prompts the end user to identify the device authorization session by
+ * entering the user_code»). Смысл у этого ровно один: чтобы одобрить, надо
+ * было ФИЗИЧЕСКИ ВИДЕТЬ экран того, кого одобряешь. Стоит отдать код в этом
+ * ответе — и свойство исчезает: код можно списать из списка и одобрить чужое
+ * устройство, ни разу на него не взглянув. Тогда набор кода превращается в
+ * ту же кнопку «Одобрить», только в три движения вместо одного.
+ *
+ * Поэтому список отвечает на единственный вопрос, который у ждущего человека
+ * есть: «заявка вообще дошла?» — и молчит о том, какой у неё код.
+ */
 export interface PendingDto {
   id: number;
-  userCode: string;
   kind: string;
   label: string | null;
   requestedAt: string;
@@ -937,7 +951,6 @@ export function toPendingDto(row: DeviceCodeRow, now: number = Date.now()): Pend
   const expires = ms(row.expires_at) ?? now;
   return {
     id: row.id,
-    userCode: formatUserCode(row.user_code),
     kind: row.kind,
     label: row.label,
     requestedAt: row.created_at,

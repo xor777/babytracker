@@ -1,17 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DevicesData } from '../hooks/useDevices';
 import { goToPairing, logout } from '../api';
 import { formatWhen } from '../lib/format';
+import {
+  USER_CODE_LENGTH,
+  charsLeft,
+  formatUserCode,
+  isCompleteUserCode,
+  normalizeUserCode,
+} from '../lib/usercode';
 import type { DeviceSession, PendingDevice } from '../api';
 
 /**
- * Экран устройств: кто просится и кто уже внутри.
+ * Экран устройств: кто просится, кто уже внутри, и поле для одобрения.
  *
- * Про экран одобрения заказчик высказался прямо: «проблемы отличать нет, я
- * просто знаю всех по именам, так как это семья». Поэтому здесь нет ни
- * отпечатков браузера, ни геолокации, ни «войти подтвердил с IP такого-то» —
- * только то, что нужно, чтобы сверить заявку с тем, что видно на экране:
- * тип устройства, время запроса и сам код. Крупно, чтобы читать не щурясь.
+ * Живёт на собственном маршруте `#/devices` и никуда сам не всплывает.
+ * Заказчик про это сказал прямо: «чтобы на главной не всплывало и жена
+ * случайно не одобрила никому». Баннер «N устройств просят доступ», который
+ * раньше появлялся поверх любого экрана и уводил в одобрение одним нажатием,
+ * убран отсюда вместе с породившим его фоновым опросом.
+ *
+ * Но главное не в том, что экран спрятан. Спрятанная кнопка остаётся кнопкой:
+ * рано или поздно её найдут и нажмут. Поэтому изменилось само действие —
+ * одобрение требует НАБРАТЬ код с экрана устройства (RFC 8628 §3.3, где
+ * сервер именно «prompts the end user to identify the device authorization
+ * session by entering the user_code»). Случайно набрать восемь букв нельзя,
+ * а список с кнопками у каждой заявки нажимается одним движением.
+ *
+ * Побочно закрывается и неприятный случай: чужая заявка приходит ровно в ту
+ * минуту, когда человек одобряет свой телевизор, и в списке оказываются две.
+ * Набранный код относится к одному устройству и ни к какому другому.
+ *
+ * Про опознание устройства заказчик высказался отдельно: «проблемы отличать
+ * нет, я просто знаю всех по именам, так как это семья». Поэтому здесь нет
+ * ни отпечатков браузера, ни геолокации — только тип, время и обратный счёт.
  */
 
 const KIND_TITLE: Record<string, string> = {
@@ -41,52 +63,180 @@ function KindIcon({ kind }: { kind: string }) {
   );
 }
 
-/** «через 8 мин» — сколько код ещё живёт. */
+/** «8 мин» — сколько код ещё живёт. */
 function leftText(seconds: number): string {
   if (seconds <= 0) return 'код истёк';
   if (seconds < 60) return `${seconds} с`;
   return `${Math.ceil(seconds / 60)} мин`;
 }
 
-function PendingCard({
-  item,
+/**
+ * Ввод кода — единственная дорога к одобрению.
+ *
+ * Поле держит нормализованный код, а показывает его так же, как он написан
+ * на экране устройства: `WDJB-MJHT`. Тире подставляется само — набирать его
+ * человек не обязан, а если наберёт, оно всё равно отбросится.
+ */
+function ApproveByCode({
   busy,
   onApprove,
+  onType,
+}: {
+  busy: boolean;
+  onApprove: (code: string) => Promise<boolean>;
+  onType: () => void;
+}) {
+  const [code, setCode] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const complete = isCompleteUserCode(code);
+  const left = charsLeft(code);
+  const shown = formatUserCode(code);
+
+  /*
+   * Каретка всегда в конце — иначе поле переставляет буквы местами.
+   *
+   * Поле показывает код с тире, а хранит без него, и на пятом символе
+   * показанная строка становится длиннее набранной на один знак: было
+   * `GXWKZ`, стало `GXWK-Z`. React возвращает каретку на прежнее смещение —
+   * пятое, — а оно теперь приходится на позицию ПЕРЕД `Z`. Следующая буква
+   * встаёт не в конец, а в середину, и код тихо собирается неверным.
+   *
+   * Поймано вживую: клик в середину поля, `GXWK-ZZFL` и одна буква сверху
+   * дали `GXWK-ZZZF`, то есть совсем другой код. Выглядит это как «сервер
+   * не принимает верный код», а стоит одной из пяти попыток за окно.
+   *
+   * Восьмизначный код набирают одним заходом слева направо, править его
+   * посреди строки незачем: ошибся — стёр и набрал заново.
+   */
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el || document.activeElement !== el) return;
+    const end = shown.length;
+    if (el.selectionStart !== end || el.selectionEnd !== end) el.setSelectionRange(end, end);
+  }, [shown]);
+
+  /**
+   * То же самое, но для каретки, поставленной ПАЛЬЦЕМ.
+   *
+   * Одного эффекта выше мало: он срабатывает на изменение строки, а тык в
+   * середину поля строку не меняет — каретка просто встаёт туда, куда попали,
+   * и следующая буква уходит в середину. Проверено вживую: тык в начало поля
+   * и три буквы превратили `GXWKZ` в `ZFLG-XWKZ`.
+   *
+   * Выделение не трогаем: человек, выделивший всё тройным щелчком, собрался
+   * стереть набранное и начать заново — это ему мешать не надо.
+   */
+  const caretToEnd = () => {
+    const el = inputRef.current;
+    if (!el || el.selectionStart !== el.selectionEnd) return;
+    const end = el.value.length;
+    if (el.selectionStart !== end) el.setSelectionRange(end, end);
+  };
+
+  const submit = async () => {
+    if (!complete || busy) return;
+    const ok = await onApprove(code);
+    // Поле чистим только при успехе: после отказа человек чаще всего ошибся
+    // в одной букве, и стирать всё набранное значило бы заставить его читать
+    // код с экрана заново целиком.
+    if (ok) setCode('');
+  };
+
+  return (
+    <section className="devsec">
+      <h2 className="devsec__title">Одобрить устройство</h2>
+
+      <div className="devcard">
+        <label className="field__label" htmlFor="usercode">
+          Код с экрана устройства
+        </label>
+        <input
+          id="usercode"
+          ref={inputRef}
+          className="input devcode-input"
+          value={shown}
+          onChange={(e) => {
+            setCode(normalizeUserCode(e.target.value));
+            onType();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit();
+          }}
+          onFocus={caretToEnd}
+          onClick={caretToEnd}
+          placeholder="XXXX-XXXX"
+          /*
+           * Код — из букв без гласных, и ни одна клавиатурная «помощь» ему не
+           * нужна: автозамена превращает набранное в слова, автодополнение
+           * подставляет прошлые коды (уже недействительные), а заглавная
+           * раскладка избавляет от лишнего переключения.
+           */
+          autoCapitalize="characters"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck={false}
+          inputMode="text"
+          enterKeyHint="done"
+          aria-describedby="usercode-hint"
+          disabled={busy}
+        />
+
+        <button
+          type="button"
+          className="btn btn--primary devcard__submit"
+          disabled={!complete || busy}
+          onClick={() => void submit()}
+        >
+          Одобрить
+        </button>
+
+        <p className="field__hint" id="usercode-hint">
+          {complete
+            ? 'Проверьте, что этот код сейчас написан на экране того устройства, которое вы впускаете.'
+            : code.length === 0
+              ? `Откройте дневник на новом устройстве — оно покажет код из ${USER_CODE_LENGTH} букв. Наберите его здесь.`
+              : `Осталось набрать ${left}. В коде ${USER_CODE_LENGTH} букв, цифр и гласных в нём не бывает.`}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Ждущая заявка — без кода и без кнопки «Одобрить».
+ *
+ * Показывается затем, чтобы человек, стоящий перед телевизором, видел: заявка
+ * дошла, сервер о ней знает, набирать код есть смысл. Кода здесь нет
+ * намеренно — иначе его можно было бы списать отсюда и одобрить чужое
+ * устройство, ни разу на него не взглянув, а весь смысл набора именно в том,
+ * что одобряющий этот экран видел.
+ *
+ * «Отклонить» осталось одним нажатием: ошибочный отказ безвреден — устройство
+ * просто попросит заново. Опасно ровно обратное действие.
+ */
+function PendingRow({
+  item,
+  busy,
   onDeny,
 }: {
   item: PendingDevice;
   busy: boolean;
-  onApprove: () => void;
   onDeny: () => void;
 }) {
   return (
-    <div className="devcard devcard--pending">
-      <div className="devcard__head">
-        <span className="devcard__icon" aria-hidden="true">
-          <KindIcon kind={item.kind} />
-        </span>
-        <div>
-          <div className="devcard__name">{kindTitle(item.kind, item.label)}</div>
-          <div className="devcard__meta">
-            Запросил доступ {formatWhen(item.requestedAt)} · осталось {leftText(item.secondsLeft)}
-          </div>
+    <div className="devrow">
+      <span className="devrow__icon" aria-hidden="true">
+        <KindIcon kind={item.kind} />
+      </span>
+      <div className="devrow__body">
+        <div className="devrow__name">{kindTitle(item.kind, item.label)}</div>
+        <div className="devrow__meta">
+          Просит доступ {formatWhen(item.requestedAt)} · код живёт ещё {leftText(item.secondsLeft)}
         </div>
       </div>
-
-      {/* Главное на экране: код. Его сверяют глазами с тем, что на устройстве. */}
-      <div className="devcode" aria-label={`Код ${item.userCode}`}>
-        {item.userCode}
-      </div>
-      <p className="devcard__hint">Этот же код должен быть написан на экране устройства.</p>
-
-      <div className="devcard__actions">
-        <button type="button" className="btn btn--primary" disabled={busy} onClick={onApprove}>
-          Одобрить
-        </button>
-        <button type="button" className="btn" disabled={busy} onClick={onDeny}>
-          Отклонить
-        </button>
-      </div>
+      <button type="button" className="btn btn--sm" disabled={busy} onClick={onDeny}>
+        Отклонить
+      </button>
     </div>
   );
 }
@@ -154,10 +304,8 @@ function SessionRow({
 }
 
 /**
- * Данные приходят сверху, а не заводятся здесь своим хуком: тот же список
- * нужен App для баннера «устройство просит доступ», и два независимых опроса
- * означали бы два запроса на каждый тик и экран, который спорит сам с собой
- * о том, есть заявка или уже нет.
+ * Данные приходят сверху, а не заводятся здесь своим хуком: так App держит
+ * один опрос на весь экран и гасит его, когда экран закрыт.
  */
 export function DevicesScreen({ devices }: { devices: DevicesData }) {
   const [leaving, setLeaving] = useState(false);
@@ -179,27 +327,42 @@ export function DevicesScreen({ devices }: { devices: DevicesData }) {
         </div>
       ) : null}
 
-      <section className="devsec">
-        <h2 className="devsec__title">Ждут одобрения</h2>
-        {devices.pending.length === 0 ? (
-          <div className="empty empty--inline">
-            <p className="field__hint" style={{ marginTop: 0 }}>
-              Никто не просится. Откройте дневник на новом устройстве — оно покажет код,
-              и заявка появится здесь.
-            </p>
+      {devices.notice ? (
+        <div className="banner banner--quiet" role="status">
+          {devices.notice}
+        </div>
+      ) : null}
+
+      <ApproveByCode
+        busy={devices.busy}
+        onApprove={devices.approve}
+        onType={devices.clearMessages}
+      />
+
+      {/*
+        Раздел появляется только когда кто-то действительно ждёт. Пустой
+        «Никто не просится» здесь был бы приглашением заглядывать сюда
+        «на всякий случай» — ровно то, от чего уходим.
+      */}
+      {devices.pending.length > 0 ? (
+        <section className="devsec">
+          <h2 className="devsec__title">Сейчас ждут одобрения</h2>
+          <div className="group">
+            {devices.pending.map((item) => (
+              <PendingRow
+                key={item.id}
+                item={item}
+                busy={devices.busy}
+                onDeny={() => void devices.deny(item.id)}
+              />
+            ))}
           </div>
-        ) : (
-          devices.pending.map((item) => (
-            <PendingCard
-              key={item.id}
-              item={item}
-              busy={devices.busy}
-              onApprove={() => void devices.approve(item.id)}
-              onDeny={() => void devices.deny(item.id)}
-            />
-          ))
-        )}
-      </section>
+          <p className="field__hint">
+            Код заявки здесь не показан специально: одобрить устройство можно, только набрав
+            код с его экрана. Если вы этого экрана не видите — не одобряйте.
+          </p>
+        </section>
+      ) : null}
 
       <section className="devsec">
         <h2 className="devsec__title">Подключённые устройства</h2>
