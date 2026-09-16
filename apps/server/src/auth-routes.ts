@@ -80,7 +80,16 @@ const approveSchema = z.object({
 export function describeUserAgent(ua: string | undefined): string | null {
   if (!ua) return null;
   const s = ua.toLowerCase();
-  if (/android\s*tv|googletv|smarttv|smart-tv|bravia|aft[a-z]|web0s|webos|tizen|crkey/.test(s)) {
+  /*
+   * `chromecast` в списке не для красоты. Приставка Google TV приходит с
+   * User-Agent вида `Linux; Android 14; Chromecast Build/UTTC…; wv`, где нет
+   * ни `android tv`, ни `crkey`, — и до этой строки она опознавалась как
+   * «Телефон Android». Цена ошибки не косметическая: у `tv` сессия бессрочна,
+   * у `phone` — скользящие 90 дней (§11.5), то есть телевизор на стене однажды
+   * утром показал бы код сопряжения вместо дневника. Ровно то, чего §11.5
+   * старается избежать.
+   */
+  if (/android\s*tv|googletv|smarttv|smart-tv|bravia|aft[a-z]|web0s|webos|tizen|crkey|chromecast/.test(s)) {
     return 'Телевизор';
   }
   if (/ipad/.test(s)) return 'iPad';
