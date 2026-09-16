@@ -12,6 +12,7 @@ import type { JournalContext } from './journal.ts';
 import { journaledChange } from './journal.ts';
 import type { Config } from './config.ts';
 import { STATE_SUBTYPES, normsForAge, type AgeNorms } from './taxonomy.ts';
+import { isTemperatureReading } from '../../../shared/taxonomy.ts';
 // Маркер допущения — общий контракт для записей матчера и модели: по нему
 // одинаково видно «в этой записи есть то, чего родитель не говорил».
 import { ASSUMPTION_MARK } from './prompt.ts';
@@ -733,9 +734,47 @@ export interface DailyStatsDto {
   feeds: { total: number; breast: number; bottle: number; solid: number; volumeMl: number | null };
   diapers: { wet: number; dirty: number; both: number; total: number };
   sleep: { totalMin: number; sessions: number; longestMin: number };
-  /** Последнее за сутки измерение; null — в этот день не измеряли. */
+  /**
+   * Замеры суток; null — в этот день не измеряли.
+   *
+   * Рост, вес и голова — ПОСЛЕДНЕЕ за сутки значение, температура — ХУДШЕЕ:
+   * врачу важен пик жара, а не то, чем закончился день.
+   */
   measures: { weightG: number | null; heightCm: number | null; headCm: number | null; tempMaxC: number | null };
   norms: AgeNorms;
+}
+
+/**
+ * Худшая температура за сутки — из ОБОИХ мест, где она может лежать.
+ *
+ * Таксономия разрешает градусы и `measure/temp`, и `symptom/fever` (единица `c`
+ * есть у обоих типов), а читалось отсюда только первое. Значит, «тридцать
+ * восемь и четыре», записанное моделью как симптом, в сводку не попадало
+ * ВООБЩЕ: не «показывалось неточно», а не показывалось. Врач узнавал о жаре
+ * только если случайно листал ленту.
+ *
+ * Чинится это с двух сторон, и обе нужны:
+ *
+ *   1. ЗДЕСЬ, ПРИ ЧТЕНИИ — потому что в базе уже лежат записи обоих видов.
+ *      Физического удаления в `events` нет (§9), переписывать боевые данные
+ *      ради красоты нельзя, да и не надо: записанный факт верен, неверен был
+ *      только запрос. Сводить источники при чтении — единственный способ
+ *      не потерять уже записанное.
+ *   2. В ПОДСКАЗКЕ ПРОМПТА — чтобы новые записи копились в одном месте:
+ *      `measure/temp` для градусов, `symptom/fever` для жара без числа.
+ *      Одна договорённость вместо двух равноправных путей.
+ *
+ * Только п.2 был бы чище, но он молча похоронил бы всё, что уже записано;
+ * только п.1 — оставил бы два равноправных места навсегда.
+ *
+ * Сам список мест и правило «что считать градусами» живут в
+ * `shared/taxonomy.ts`: это знание таксономии, и оно нужно ещё и админке,
+ * которая строит карточку температуры по сырым событиям.
+ */
+function maxTempC(rows: EventRow[]): number | null {
+  const degrees = rows.filter((e) => isTemperatureReading(e));
+  if (degrees.length === 0) return null;
+  return degrees.reduce<number>((max, e) => Math.max(max, e.value_num ?? 0), -Infinity);
 }
 
 /** Последнее за день измерение нужного подтипа, приведённое к базовой единице. */
@@ -817,10 +856,8 @@ export function dailyStats(
         weightG: lastMeasure(rows, 'weight', (v, u) => (u === 'kg' ? Math.round(v * 1000) : v)),
         heightCm: lastMeasure(rows, 'height', (v) => v),
         headCm: lastMeasure(rows, 'head', (v) => v),
-        tempMaxC:
-          rows
-            .filter((e) => e.type === 'measure' && e.subtype === 'temp' && e.value_num !== null)
-            .reduce<number | null>((max, e) => Math.max(max ?? -Infinity, e.value_num ?? 0), null),
+        // Оба источника градусов, а не один: см. `maxTempC`.
+        tempMaxC: maxTempC(rows),
       },
       norms: normsForAge(Math.max(0, daysBetween(cfg.childBirthDate, date))),
     });

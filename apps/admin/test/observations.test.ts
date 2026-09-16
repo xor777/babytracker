@@ -233,3 +233,59 @@ test('подпись склоняется: «отмечали желтизну �
   // У подтипа без винительного падежа откат на именительный, но не на пустоту.
   assert.equal(subtypeAccusative('symptom', 'colic'), 'колики');
 });
+
+/* ================================================================== *
+ * 6. Сыпь — такое же состояние, как желтизна
+ * ================================================================== */
+
+test('сыпь числится состоянием и попадает в карточку наблюдений', () => {
+  // Карточка строится по `stateSubtypes()`, а тот — по общему списку
+  // из `shared/taxonomy.ts`. Пропал бы оттуда подтип — строка на экране
+  // молча исчезла бы, поэтому проверяем именно состав.
+  assert.ok(SKIN.includes('rash'), 'сыпь обязана быть среди состояний');
+  assert.ok(SKIN.includes('skin_yellow'));
+  assert.ok(SKIN.includes('eyes_yellow'));
+  // Колики и плач состояниями НЕ стали: закрывающей фразы у них нет,
+  // и открытая запись висела бы вечно.
+  assert.ok(!SKIN.includes('colic'));
+  assert.ok(!SKIN.includes('crying'));
+  assert.ok(!SKIN.includes('fever'), 'жар меряют числом, а числа живут в measure/temp');
+});
+
+test('сыпь читается врачу так же, как желтизна: «с 5-го по 9-й день»', () => {
+  const events = [obs('rash', local(2026, 9, 6, 9, 0), local(2026, 9, 10, 12, 0))];
+  assert.equal(
+    phrase(events, 'rash'),
+    'Родители отмечали сыпь с 5-го по 9-й день.',
+    'винительный падеж у «сыпь» совпадает с именительным — отдельная форма не нужна',
+  );
+});
+
+test('незакрытая сыпь читается как продолжающаяся, а не как забытая', () => {
+  const events = [obs('rash', local(2026, 9, 12, 9, 0))];
+  assert.equal(phrase(events, 'rash'), 'Родители отмечают сыпь с 11-го дня, продолжается.');
+});
+
+test('сыпь и желтизна считаются раздельно и не смешиваются', () => {
+  const events = [
+    obs('rash', local(2026, 9, 6, 9, 0), local(2026, 9, 8, 12, 0)),
+    obs('skin_yellow', local(2026, 9, 10, 9, 0)),
+  ];
+  const all = facts(events);
+
+  const rash = all.find((f) => f.subtype === 'rash');
+  const skin = all.find((f) => f.subtype === 'skin_yellow');
+  assert.ok(rash && skin, 'оба наблюдения на месте');
+  assert.equal(rash.ongoing, false, 'сыпь прошла');
+  assert.equal(skin.ongoing, true, 'желтизна держится');
+  assert.equal(rash.spans.length, 1);
+  assert.equal(skin.spans.length, 1);
+});
+
+test('подпись сыпи говорит о том, что видно, а не о причине', () => {
+  const label = subtypeLabel('symptom', 'rash');
+  assert.equal(label, 'сыпь');
+  for (const diagnosis of ['аллерг', 'потниц', 'диатез', 'дерматит']) {
+    assert.ok(!String(label).includes(diagnosis), `подпись не ставит диагноз «${diagnosis}»`);
+  }
+});

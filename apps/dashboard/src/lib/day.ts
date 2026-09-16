@@ -1,4 +1,5 @@
 import type { TrackerEvent } from '../types';
+import type { SubtypeOf, TypeId } from '../../../../shared/taxonomy';
 import { parseTs } from './format';
 import { zonedDateString } from './tz';
 
@@ -11,8 +12,20 @@ export function isAlive(ev: TrackerEvent): boolean {
   return !ev.deleted_at;
 }
 
-/** Человеческое название события. Служебные значения сюда не попадают — см. §10.2. */
-const SUBTYPE_LABEL: Record<string, Record<string, string>> = {
+/**
+ * Человеческое название события. Служебные значения сюда не попадают — см. §10.2.
+ *
+ * Тип таблицы держит её в согласии с общим списком подтипов
+ * (`shared/taxonomy.ts`): тип целиком можно не подписывать вовсе — на
+ * телевизоре `pump`, `meds` и `note` показываются названием типа, — но если
+ * тип здесь ЕСТЬ, подписаны должны быть все его подтипы. Иначе выходило
+ * тихое исчезновение: сервер пишет подтип, телевизор не находит подписи
+ * и рисует общее слово, а то и ничего. Забытая подпись теперь роняет
+ * `pnpm typecheck`, а не ленту суток.
+ */
+type SubtypeLabels = { [T in TypeId]?: { [S in SubtypeOf<T>]: string } };
+
+const SUBTYPE_LABEL: SubtypeLabels = {
   sleep: { night: 'ночной сон', nap: 'дневной сон' },
   feed: { breast: 'грудь', bottle: 'бутылочка', solid: 'прикорм' },
   diaper: { wet: 'мокрый', dirty: 'грязный', both: 'мокрый и грязный' },
@@ -24,14 +37,16 @@ const SUBTYPE_LABEL: Record<string, Record<string, string>> = {
     rash: 'сыпь',
     colic: 'колики',
     crying: 'плач',
-    fever: 'температура',
+    // Именно «жар», а не «температура»: названные градусы пишутся
+    // в measure/temp, здесь остаётся жар без числа.
+    fever: 'жар',
     // Наблюдение, а не диагноз (§10.2): на экране — то, что увидел родитель.
     skin_yellow: 'желтизна кожи',
     eyes_yellow: 'желтизна белков глаз',
   },
 };
 
-const TYPE_LABEL: Record<string, string> = {
+const TYPE_LABEL: Record<TypeId, string> = {
   sleep: 'сон',
   feed: 'кормление',
   pump: 'сцеживание',
@@ -43,16 +58,26 @@ const TYPE_LABEL: Record<string, string> = {
   note: 'заметка',
 };
 
+/**
+ * Читаем таблицы подписей строкой, а не литералом: с сервера может прийти
+ * что угодно, включая тип, которого этот экран ещё не знает (§10.2 — незнакомое
+ * не повод терять событие). Проверка полноты при этом остаётся на объявлении
+ * таблиц выше, где она и полезна.
+ */
+const SUBTYPE_LABEL_ANY: Readonly<Record<string, Readonly<Record<string, string>> | undefined>> =
+  SUBTYPE_LABEL;
+const TYPE_LABEL_ANY: Readonly<Record<string, string | undefined>> = TYPE_LABEL;
+
 export function eventLabel(ev: TrackerEvent): string | null {
-  const byType = SUBTYPE_LABEL[ev.type];
+  const byType = SUBTYPE_LABEL_ANY[ev.type];
   if (byType && ev.subtype && byType[ev.subtype]) return byType[ev.subtype];
-  return TYPE_LABEL[ev.type] ?? null;
+  return TYPE_LABEL_ANY[ev.type] ?? null;
 }
 
 /** Чем кормили: «бутылочка 120 мл», «грудь 15 мин». */
 export function feedLabel(ev: TrackerEvent | null): string | null {
   if (!ev) return null;
-  const what = (ev.subtype && SUBTYPE_LABEL.feed[ev.subtype]) || 'кормление';
+  const what = (ev.subtype && SUBTYPE_LABEL_ANY.feed?.[ev.subtype]) || 'кормление';
   const n = ev.value_num;
   // Округление до нуля («0 мин», «0 мл») на весь экран кричит о том, чего не было:
   // это не «покормили нулём», а «значения по сути нет». Тогда называем только чем.

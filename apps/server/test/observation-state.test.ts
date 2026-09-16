@@ -32,6 +32,12 @@ import { buildPrompt, isDurative, isStaleOpen, maxOpenMin } from '../src/prompt.
 import { STATE_SUBTYPES, TAXONOMY, isStateSubtype } from '../src/taxonomy.ts';
 
 const URL_OK = `/alice/${TEST_SECRET}`;
+
+/**
+ * Заголовок ситуативной карточки. Одна карточка на все наблюдения-состояния:
+ * правила у желтизны и сыпи буквально общие, различается только строка «куда».
+ */
+const CARD_TITLE = /ТВОЙ СЛУЧАЙ: родитель говорит про то, что ДЕРЖИТСЯ/;
 const NOW = new Date('2026-03-15T12:00:00Z');
 
 /** Фразы, которыми родитель на самом деле про это говорит. */
@@ -241,7 +247,7 @@ function promptFor(rawText: string, openStates: ReturnType<typeof openStateEvent
 test('фраза про цвет поднимает разбор наблюдения с прямым запретом на диагноз', () => {
   for (const phrase of ['он какой-то желтенький', 'белки глаз жёлтые', 'желтизна почти сошла']) {
     const p = promptFor(phrase);
-    assert.match(p, /ТВОЙ СЛУЧАЙ: родитель говорит про ЦВЕТ/, `«${phrase}» поднимает карточку`);
+    assert.match(p, CARD_TITLE, `«${phrase}» поднимает карточку`);
     assert.match(p, /ДИАГНОЗ СТАВИТЬ ЗАПРЕЩЕНО/);
     assert.match(p, /skin_yellow/);
     assert.match(p, /eyes_yellow/);
@@ -250,7 +256,7 @@ test('фраза про цвет поднимает разбор наблюде�
 
 test('на постороннюю фразу карточка наблюдения не показывается', () => {
   const p = promptFor('андрей заснул');
-  assert.doesNotMatch(p, /ТВОЙ СЛУЧАЙ: родитель говорит про ЦВЕТ/);
+  assert.doesNotMatch(p, CARD_TITLE);
 });
 
 test('открытое состояние видно модели, даже когда оно старое', () => {
@@ -295,7 +301,7 @@ test('ни таксономия, ни промпт не произносят д�
   assert.equal(mentions.length, 1, `«желтуха» встречается ${mentions.length} раз(а), а не один`);
   assert.match(
     p,
-    /Ни слова «желтуха»/,
+    /ДИАГНОЗ СТАВИТЬ ЗАПРЕЩЕНО\. Ни «желтуха»/,
     'единственное упоминание — прямой запрет, а не разрешение так писать',
   );
   assert.doesNotMatch(p, /jaundice|icterus/i);

@@ -7,6 +7,7 @@ import {
   observationFacts,
   observationPhrase,
   sleepFacts,
+  temperatureFacts,
   weekStats,
 } from '../lib/summary';
 import type { Avg, DayCell, ObservationFacts } from '../lib/summary';
@@ -84,6 +85,14 @@ export function StatsScreen() {
         stateSubtypes().map((x) => x.subtype),
         { birthMs: child.birthMs, windowStartMs: s.windowStart },
       ),
+    [s.events, child.birthMs, s.windowStart],
+  );
+  // Температура (§10.2): градусы лежат в двух местах сразу — measure/temp
+  // и symptom/fever, — и читать надо оба, иначе записанный жар до врача
+  // не доезжает. Считаем по сырым событиям: суточный максимум с сервера
+  // не помнит ни времени, ни того, сколько раз мерили.
+  const temp = useMemo(
+    () => temperatureFacts(s.events, { birthMs: child.birthMs, windowStartMs: s.windowStart }),
     [s.events, child.birthMs, s.windowStart],
   );
   const byWeek = useMemo(() => weekStats(s.weeks, s.weight), [s.weeks, s.weight]);
@@ -407,6 +416,60 @@ export function StatsScreen() {
               Это записано со слов родителей: что увидели и когда. Ни причины, ни
               оценки здесь нет и быть не может — их определяет врач. «Продолжается»
               означает только то, что о завершении пока не говорили.
+            </p>
+          </section>
+        ) : null}
+
+        {/* --- температура: факт и только факт ---
+            Карточки нет, пока градусов не записывали: пустая читалась бы как
+            «температуры не было», а дневник знает только «не записали».
+
+            Ни слова оценки и ни одного цвета — как и на всей странице. 37.2
+            у новорождённого значит разное в зависимости от того, чем мерили,
+            во что одет и когда ел; решает это врач, а наше дело — показать,
+            что записали и когда. Тон карточке не задан намеренно: `--t-symptom`
+            розово-красный, и он превратил бы число в тревогу. */}
+        {temp.days.length > 0 ? (
+          <section className="card card--wide">
+            <div className="card__head">
+              <h2 className="card__title">Температура</h2>
+              <span className="card__aside">со слов родителей</span>
+            </div>
+
+            {temp.peak ? (
+              <p className="obs__line">
+                Самое высокое записанное значение за период — {formatNumber(temp.peak.c, 1)} °C
+                {temp.peak.day == null ? '' : `, ${temp.peak.day}-й день жизни`},{' '}
+                {formatDayShort(temp.peak.atMs)} в {formatTime(temp.peak.atMs)}.
+              </p>
+            ) : null}
+
+            <ul className="obs" style={{ marginTop: 11 }}>
+              {temp.days.map((d) => (
+                <li className="obs__row" key={d.startMs}>
+                  <p className="obs__line">
+                    {formatDayShort(d.startMs)}
+                    {d.day == null ? '' : `, ${d.day}-й день`} — {formatNumber(d.maxC, 1)} °C
+                  </p>
+                  <p className="obs__hint">
+                    {[
+                      `${d.records} ${plural(d.records, 'запись', 'записи', 'записей')} за сутки`,
+                      d.records > 1 ? 'показано самое высокое' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+
+            <p className="card__note">
+              Всего записей с градусами за период: {temp.records}. Считаются оба способа
+              записи — и замер, и жар, названный симптомом.
+              {temp.atWindowEdge
+                ? ' Период начинается с этих суток: что было раньше, в него не попало.'
+                : ''}{' '}
+              Чем и как измеряли, дневник не знает: значения показаны как записаны.
             </p>
           </section>
         ) : null}

@@ -3,6 +3,7 @@
  * лента, редактор и сводка берут названия отсюда, чтобы не разъезжались.
  */
 import type { EventType } from '../types';
+import { SUBTYPES, stateSubtypePairs, type SubtypeOf } from '../../../../shared/taxonomy';
 
 export interface SubtypeDef {
   id: string;
@@ -11,17 +12,30 @@ export interface SubtypeDef {
    * Винительный падеж подписи — «отмечали желтизну кожи».
    *
    * Нужен там, где подпись уходит не в ярлык, а внутрь фразы. Тот же повод,
-   * что и у `Gender` выше: «отмечали желтизна кожи» читается как поломка.
-   * Не задан — значит подпись во фразы не попадает.
+   * что и у `Gender` ниже: «отмечали желтизна кожи» читается как поломка.
+   * Не задан — значит подпись во фразы не попадает (для «сыпь» и не нужен:
+   * винительный совпадает с именительным).
    */
   accusative?: string;
-  /**
-   * Подтип-СОСТОЯНИЕ: держится днями, а не случается в момент (§10.2).
-   *
-   * У таких событий осмысленны `started_at` и `ended_at`, и врача интересует
-   * именно протяжённость: с какого дня появилось и прошло ли.
-   */
-  state?: boolean;
+}
+
+/**
+ * Подписи к подтипам одного типа — ключом по подтипу, а не списком.
+ *
+ * Ключи проверяются типом: `SubtypeOf<T>` перечисляет подтипы из
+ * `shared/taxonomy.ts`, и объект обязан покрыть их ВСЕ. Добавили подтип в общий
+ * список и забыли подпись здесь — падает `pnpm typecheck`, то есть и CI.
+ * Раньше на этом месте был массив, и забытая подпись означала подтип, который
+ * сервер пишет, а админка молча не показывает.
+ *
+ * Порядок показа берётся из общего списка, а не из порядка ключей: он один
+ * для сервера, админки и телевизора.
+ */
+function subtypesOf<T extends EventType>(
+  type: T,
+  labels: { [S in SubtypeOf<T>]: Omit<SubtypeDef, 'id'> },
+): SubtypeDef[] {
+  return (SUBTYPES[type] as readonly SubtypeOf<T>[]).map((id) => ({ id, ...labels[id] }));
 }
 
 /**
@@ -61,10 +75,10 @@ export const TYPES: TypeDef[] = [
     icon: '☾',
     gender: 'm',
     tone: 'sleep',
-    subtypes: [
-      { id: 'night', label: 'ночной' },
-      { id: 'nap', label: 'дневной' },
-    ],
+    subtypes: subtypesOf('sleep', {
+      night: { label: 'ночной' },
+      nap: { label: 'дневной' },
+    }),
     units: [],
     ranged: true,
     openable: true,
@@ -76,11 +90,11 @@ export const TYPES: TypeDef[] = [
     icon: '◗',
     gender: 'n',
     tone: 'feed',
-    subtypes: [
-      { id: 'breast', label: 'грудь' },
-      { id: 'bottle', label: 'бутылочка' },
-      { id: 'solid', label: 'прикорм' },
-    ],
+    subtypes: subtypesOf('feed', {
+      breast: { label: 'грудь' },
+      bottle: { label: 'бутылочка' },
+      solid: { label: 'прикорм' },
+    }),
     units: ['ml', 'min'],
     ranged: true,
     openable: false,
@@ -92,7 +106,7 @@ export const TYPES: TypeDef[] = [
     icon: '⤓',
     gender: 'n',
     tone: 'feed',
-    subtypes: [],
+    subtypes: subtypesOf('pump', {}),
     units: ['ml'],
     ranged: false,
     openable: false,
@@ -104,11 +118,11 @@ export const TYPES: TypeDef[] = [
     icon: '◇',
     gender: 'm',
     tone: 'diaper',
-    subtypes: [
-      { id: 'wet', label: 'мокрый' },
-      { id: 'dirty', label: 'грязный' },
-      { id: 'both', label: 'и то, и то' },
-    ],
+    subtypes: subtypesOf('diaper', {
+      wet: { label: 'мокрый' },
+      dirty: { label: 'грязный' },
+      both: { label: 'и то, и то' },
+    }),
     units: [],
     ranged: false,
     openable: false,
@@ -120,12 +134,12 @@ export const TYPES: TypeDef[] = [
     icon: '▲',
     gender: 'n',
     tone: 'measure',
-    subtypes: [
-      { id: 'weight', label: 'вес' },
-      { id: 'height', label: 'рост' },
-      { id: 'head', label: 'окр. головы' },
-      { id: 'temp', label: 'температура' },
-    ],
+    subtypes: subtypesOf('measure', {
+      weight: { label: 'вес' },
+      height: { label: 'рост' },
+      head: { label: 'окр. головы' },
+      temp: { label: 'температура' },
+    }),
     units: ['g', 'kg', 'cm', 'c'],
     ranged: false,
     openable: false,
@@ -137,7 +151,7 @@ export const TYPES: TypeDef[] = [
     icon: '✚',
     gender: 'n',
     tone: 'meds',
-    subtypes: [],
+    subtypes: subtypesOf('meds', {}),
     units: ['ml', 'mg'],
     ranged: false,
     openable: false,
@@ -149,25 +163,25 @@ export const TYPES: TypeDef[] = [
     icon: '◐',
     gender: 'm',
     tone: 'symptom',
-    subtypes: [
-      { id: 'spit_up', label: 'срыгивание' },
-      { id: 'vomit', label: 'рвота' },
-      { id: 'rash', label: 'сыпь' },
-      { id: 'colic', label: 'колики' },
-      { id: 'crying', label: 'плач' },
-      { id: 'fever', label: 'температура' },
+    subtypes: subtypesOf('symptom', {
+      spit_up: { label: 'срыгивание' },
+      vomit: { label: 'рвота' },
+      // Сыпь — состояние (см. STATE_SUBTYPES): держится днями, и врач
+      // спрашивает про неё протяжённостью. Винительный падеж совпадает
+      // с именительным, поэтому отдельная форма не нужна.
+      rash: { label: 'сыпь' },
+      colic: { label: 'колики' },
+      crying: { label: 'плач' },
+      // Жар без числа. Названные градусы живут в measure/temp — иначе
+      // температура не доходит до сводки.
+      fever: { label: 'жар' },
       // Наблюдение, а не диагноз: родитель видит цвет, а не болезнь.
       // Название в интерфейсе читается как то, что увидели, — и только.
       // Кожа и белки глаз разведены намеренно: для врача это разные
       // наблюдения, ровно как мокрый и грязный подгузник.
-      { id: 'skin_yellow', label: 'желтизна кожи', accusative: 'желтизну кожи', state: true },
-      {
-        id: 'eyes_yellow',
-        label: 'желтизна белков глаз',
-        accusative: 'желтизну белков глаз',
-        state: true,
-      },
-    ],
+      skin_yellow: { label: 'желтизна кожи', accusative: 'желтизну кожи' },
+      eyes_yellow: { label: 'желтизна белков глаз', accusative: 'желтизну белков глаз' },
+    }),
     units: ['c'],
     ranged: true,
     openable: true,
@@ -179,11 +193,11 @@ export const TYPES: TypeDef[] = [
     icon: '◉',
     gender: 'f',
     tone: 'activity',
-    subtypes: [
-      { id: 'bath', label: 'купание' },
-      { id: 'walk', label: 'прогулка' },
-      { id: 'tummy_time', label: 'на животе' },
-    ],
+    subtypes: subtypesOf('activity', {
+      bath: { label: 'купание' },
+      walk: { label: 'прогулка' },
+      tummy_time: { label: 'на животе' },
+    }),
     units: ['min'],
     ranged: true,
     openable: true,
@@ -195,7 +209,7 @@ export const TYPES: TypeDef[] = [
     icon: '✎',
     gender: 'f',
     tone: 'note',
-    subtypes: [],
+    subtypes: subtypesOf('note', {}),
     units: [],
     ranged: false,
     openable: false,
@@ -223,15 +237,15 @@ export function typeDef(type: string | null | undefined): TypeDef {
   };
 }
 
-/** Пары «тип/подтип», которые являются состояниями (§10.2). Порядок — как в TYPES. */
+/**
+ * Пары «тип/подтип», которые являются состояниями (§10.2).
+ *
+ * Список не дублируется здесь флажками у подписей: он один на репозиторий
+ * и лежит в `shared/taxonomy.ts` рядом с самими подтипами. Админка спрашивает
+ * его, а не помнит.
+ */
 export function stateSubtypes(): Array<{ type: EventType; subtype: string }> {
-  const out: Array<{ type: EventType; subtype: string }> = [];
-  for (const t of TYPES) {
-    for (const s of t.subtypes) {
-      if (s.state) out.push({ type: t.id, subtype: s.id });
-    }
-  }
-  return out;
+  return stateSubtypePairs();
 }
 
 /** Подпись в винительном падеже; не задана — отдаём именительную, она хоть читается. */

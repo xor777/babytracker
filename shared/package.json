@@ -1,0 +1,7 @@
+{
+  "//": "Не пакет рабочего пространства (в pnpm-workspace.yaml его нет) и зависимостей не имеет. Файл нужен ровно за одним: объявить каталог ES-модулями. Без него ближайшим package.json оказывается корневой, в нём нет \"type\": \"module\" — и taxonomy.ts считается CommonJS и у tsc (moduleResolution NodeNext), и у node при запуске сервера.",
+  "name": "@babytracker/shared",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module"
+}

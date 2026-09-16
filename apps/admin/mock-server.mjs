@@ -588,6 +588,81 @@ function seedInteresting() {
       utterance: ue,
     });
   }
+
+  /*
+   * Сыпь — такое же состояние: держится днями, и врач спрашивает про неё
+   * то же самое. Здесь закрытый отрезок: появилась и прошла.
+   * Место («на щеках») лежит в note — отдельных подтипов по месту нет.
+   */
+  const rashFrom = at(7, 20, 10);
+  const rashTo = at(4, 9, 0);
+  if (past(rashFrom)) {
+    const ur = say('у него сыпь на щеках', rashFrom);
+    add({
+      type: 'symptom',
+      subtype: 'rash',
+      started_at: rashFrom,
+      ended_at: past(rashTo) ? rashTo : null,
+      note: 'сыпь на щеках',
+      source: 'alice-llm',
+      confidence: 0.85,
+      utterance: ur,
+    });
+  }
+
+  /*
+   * Температура — из ОБОИХ мест, где она может лежать: замером и жаром,
+   * записанным симптомом. Ровно эта пара и показывает починку: раньше
+   * сводка читала только `measure/temp`, и вторая запись пропадала.
+   */
+  const tempAt = at(5, 21, 30);
+  if (past(tempAt)) {
+    const ut = say('померили температуру, тридцать семь и две', tempAt);
+    add({
+      type: 'measure',
+      subtype: 'temp',
+      started_at: tempAt,
+      ended_at: tempAt,
+      value_num: 37.2,
+      value_unit: 'c',
+      source: 'alice-llm',
+      confidence: 0.95,
+      utterance: ut,
+    });
+  }
+
+  const feverAt = at(5, 23, 50);
+  if (past(feverAt)) {
+    const uf = say('ночью было тридцать восемь и четыре', feverAt);
+    add({
+      type: 'symptom',
+      subtype: 'fever',
+      started_at: feverAt,
+      ended_at: feverAt,
+      value_num: 38.4,
+      value_unit: 'c',
+      note: 'ночью',
+      source: 'alice-llm',
+      confidence: 0.85,
+      utterance: uf,
+    });
+  }
+
+  const tempBack = at(4, 8, 20);
+  if (past(tempBack)) {
+    const ub = say('утром тридцать шесть и восемь', tempBack);
+    add({
+      type: 'measure',
+      subtype: 'temp',
+      started_at: tempBack,
+      ended_at: tempBack,
+      value_num: 36.8,
+      value_unit: 'c',
+      source: 'alice-llm',
+      confidence: 0.95,
+      utterance: ub,
+    });
+  }
 }
 
 // Вес при рождении — точка отсчёта для графика веса. Берётся как самое раннее
@@ -744,7 +819,19 @@ function buildStats(days) {
         weightG: lastOf('weight', (v, u) => (u === 'kg' ? Math.round(v * 1000) : v)),
         heightCm: lastOf('height'),
         headCm: lastOf('head'),
-        tempMaxC: null,
+        // Как на сервере (`maxTempC`): ХУДШЕЕ за сутки и из ОБОИХ мест —
+        // measure/temp и symptom/fever. Мок, который читает одно место,
+        // перестаёт быть заменой сервера ровно там, где чинили поломку.
+        tempMaxC: (() => {
+          const degrees = dayEvents.filter(
+            (e) =>
+              e.value_num != null &&
+              (e.value_unit === 'c' || e.value_unit == null) &&
+              ((e.type === 'measure' && e.subtype === 'temp') ||
+                (e.type === 'symptom' && e.subtype === 'fever')),
+          );
+          return degrees.length === 0 ? null : Math.max(...degrees.map((e) => e.value_num));
+        })(),
       },
       norms: normsForAge(age),
     });

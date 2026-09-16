@@ -18,6 +18,7 @@
  */
 import type { DailyStats, GrowthPoint, TrackerEvent } from '../types';
 import { DAY, MINUTE, formatDayShort, localDateKey, parseTs, plural, startOfLocalDay } from './format';
+import { isTemperatureReading } from '../../../../shared/taxonomy';
 
 /* ------------------------------------------------------------------ *
  * Границы «ночи»
@@ -765,6 +766,107 @@ function joinRu(parts: string[]): string {
   if (parts.length === 0) return '';
   if (parts.length === 1) return parts[0];
   return `${parts.slice(0, -1).join(', ')} и ${parts[parts.length - 1]}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Температура
+ * ------------------------------------------------------------------ */
+
+export interface TempDay {
+  /** Полночь этих суток, мс. */
+  startMs: number;
+  /** День жизни, 1-based. */
+  day: number | null;
+  /** Худшее за сутки значение: врача интересует пик, а не последний замер. */
+  maxC: number;
+  /** Сколько раз за эти сутки записывали градусы. */
+  records: number;
+}
+
+export interface TemperatureFacts {
+  /** Сутки с записанной температурой, от старых к новым. Пустых суток тут нет. */
+  days: TempDay[];
+  /** Всего записей с градусами в окне. */
+  records: number;
+  /** Пик за окно: сколько и когда. */
+  peak: { c: number; atMs: number; day: number | null } | null;
+  /**
+   * Самая ранняя запись пришлась на первые сутки окна.
+   *
+   * Значит, раньше мы просто не смотрели, а не «раньше не было». Та же
+   * разница, что у наблюдений, и молчать о ней так же нельзя.
+   */
+  atWindowEdge: boolean;
+}
+
+/**
+ * Температура за окно — фактами, без единой оценки.
+ *
+ * Ни «норма», ни «высокая», ни цвета: 37.2 у новорождённого значит разное
+ * в зависимости от того, как и чем мерили, во что был одет и когда ел, —
+ * и решает это врач. Страница отвечает только на «записывали ли, сколько
+ * и когда».
+ *
+ * Источников ДВА, и оба обязательны: `measure/temp` и `symptom/fever`
+ * (см. `isTemperatureReading` в `shared/taxonomy.ts`). Читать одно место —
+ * ровно та поломка, из-за которой записанный жар до врача не доезжал.
+ *
+ * Сутки без единой записи в список не попадают вовсе. Ноль здесь означал бы
+ * «температуры не было», а дневник знает только «не записали».
+ */
+export function temperatureFacts(
+  events: TrackerEvent[],
+  opts: { birthMs?: number | null; windowStartMs?: number | null } = {},
+): TemperatureFacts {
+  const byDay = new Map<string, { startMs: number; maxC: number; records: number }>();
+  let peak: TemperatureFacts['peak'] = null;
+  let records = 0;
+  let earliest: number | null = null;
+
+  for (const e of events) {
+    if (e.deleted_at) continue;
+    if (!isTemperatureReading(e)) continue;
+    const at = parseTs(e.started_at);
+    const c = e.value_num;
+    if (at == null || c == null) continue;
+
+    records += 1;
+    earliest = earliest == null ? at : Math.min(earliest, at);
+
+    const key = localDateKey(at);
+    const day = byDay.get(key);
+    if (day === undefined) {
+      byDay.set(key, { startMs: startOfLocalDay(at), maxC: c, records: 1 });
+    } else {
+      day.maxC = Math.max(day.maxC, c);
+      day.records += 1;
+    }
+
+    // Строго «больше»: при равных значениях остаётся первое по времени —
+    // так «максимум был тогда-то» не переезжает от повторного замера.
+    if (peak === null || c > peak.c) {
+      peak = { c, atMs: at, day: dayOfLife(opts.birthMs, at) };
+    }
+  }
+
+  const days = [...byDay.values()]
+    .sort((a, b) => a.startMs - b.startMs)
+    .map((d) => ({
+      startMs: d.startMs,
+      day: dayOfLife(opts.birthMs, d.startMs),
+      maxC: d.maxC,
+      records: d.records,
+    }));
+
+  return {
+    days,
+    records,
+    peak,
+    atWindowEdge:
+      earliest != null &&
+      opts.windowStartMs != null &&
+      earliest < startOfLocalDay(opts.windowStartMs) + DAY,
+  };
 }
 
 /** Все сутки, которые задевает промежуток, записаны. */

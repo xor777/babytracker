@@ -9,85 +9,88 @@
  */
 
 import type { EventType, ValueUnit } from './types.ts';
+import { SUBTYPES, TYPE_IDS } from '../../../shared/taxonomy.ts';
 
-export const EVENT_TYPES: readonly EventType[] = [
-  'sleep',
-  'feed',
-  'pump',
-  'diaper',
-  'measure',
-  'meds',
-  'symptom',
-  'activity',
-  'note',
-];
+/**
+ * Список подтипов сюда не переписывается, а импортируется: три независимые
+ * копии уже расходились молча (см. шапку `shared/taxonomy.ts`).
+ *
+ * Присваивание ниже — заодно и проверка, что `EventType` и `TypeId` описывают
+ * один и тот же набор типов: лишний тип в `TypeId` не пройдёт сюда, лишний
+ * в `EventType` — не получит строки в `TAXONOMY`.
+ */
+export const EVENT_TYPES: readonly EventType[] = TYPE_IDS;
 
 export const VALUE_UNITS: readonly ValueUnit[] = ['ml', 'g', 'kg', 'c', 'cm', 'min', 'mg'];
 
-export interface TypeSpec {
-  /** Известные подтипы. Пустой список = подтип произвольный (meds) или не нужен. */
-  subtypes: readonly string[];
+export interface TypeSpec<T extends EventType = EventType> {
+  /**
+   * Известные подтипы. Пустой список = подтип произвольный (meds) или не нужен.
+   *
+   * Тип нарочно узкий — ровно кортеж из `SUBTYPES`, — чтобы сюда нельзя было
+   * вписать список руками: единственное, что подходит, это `SUBTYPES[<тип>]`.
+   */
+  subtypes: (typeof SUBTYPES)[T];
   /** Свободный ли подтип: у meds это название препарата. */
   freeSubtype?: boolean;
   units: readonly ValueUnit[];
   hint: string;
 }
 
-export const TAXONOMY: Readonly<Record<EventType, TypeSpec>> = {
+export const TAXONOMY: Readonly<{ [T in EventType]: TypeSpec<T> }> = {
   sleep: {
-    subtypes: ['night', 'nap'],
+    subtypes: SUBTYPES.sleep,
     units: [],
     hint: 'открытое событие до пробуждения: ended_at = NULL, пока спит',
   },
   feed: {
-    subtypes: ['breast', 'bottle', 'solid'],
+    subtypes: SUBTYPES.feed,
     units: ['ml', 'min', 'g'],
     hint:
       'бутылочка — объём в ml; грудь — длительность в min, сторона в note (left/right/both); ' +
       'объём НЕ обязателен, не названо — NULL',
   },
-  pump: { subtypes: [], units: ['ml'], hint: 'сцеживание, объём в ml' },
+  pump: { subtypes: SUBTYPES.pump, units: ['ml'], hint: 'сцеживание, объём в ml' },
   diaper: {
-    subtypes: ['wet', 'dirty', 'both'],
+    subtypes: SUBTYPES.diaper,
     units: [],
     hint: 'считаем количество за сутки, значение не нужно',
   },
   measure: {
-    subtypes: ['weight', 'height', 'head', 'temp'],
+    subtypes: SUBTYPES.measure,
     units: ['g', 'kg', 'cm', 'c'],
+    // Про то, что градусы пишутся СЮДА, сказано в подсказке symptom — там, где
+    // модель и ошибается. Дублировать здесь не стали: справочник читается при
+    // каждом разборе, и каждая лишняя строка в нём стоит следования инструкциям.
     hint: 'weight — g или kg; height и head (окружность головы) — cm; temp — c',
   },
   meds: {
-    subtypes: [],
+    subtypes: SUBTYPES.meds,
     freeSubtype: true,
     units: ['ml', 'mg'],
     hint: 'subtype — название препарата свободным текстом (витамин D, нурофен)',
   },
   symptom: {
-    subtypes: [
-      'spit_up',
-      'vomit',
-      'rash',
-      'colic',
-      'crying',
-      'fever',
-      'skin_yellow',
-      'eyes_yellow',
-    ],
+    subtypes: SUBTYPES.symptom,
+    // `c` оставлено намеренно: в базе уже лежат symptom/fever с градусами,
+    // и запрещать единицу значило бы сделать существующие записи невалидными.
     units: ['c'],
     // Подробности про состояния и запрет на диагноз живут в ситуативной
     // карточке промпта, а не здесь: справочник читается при КАЖДОМ разборе,
     // и каждая лишняя строка в нём стоит следования инструкциям.
+    // Про то, что rash и *_yellow длящиеся, сказано в «правилах данных» рядом
+    // с самим ended_at — и сказано СПИСКОМ ИЗ КОДА (`stateSubtypesList`),
+    // поэтому здесь это не повторяется: разъехаться прозе с кодом проще всего.
     hint:
-      'срыгивание, рвота, сыпь, колики, плач, температура; ' +
-      '*_yellow — желтизна кожи и белков глаз, НАБЛЮДЕНИЕ не диагноз',
+      'срыгивание, рвота, сыпь, колики, плач; fever — жар БЕЗ числа, градусы → measure/temp; ' +
+      '*_yellow — желтизна, НАБЛЮДЕНИЕ не диагноз',
   },
   activity: {
-    subtypes: ['bath', 'walk', 'tummy_time'],
+    subtypes: SUBTYPES.activity,
     units: ['min'],
     hint: 'купание, прогулка, выкладывание на живот',
   },
-  note: { subtypes: [], units: [], hint: 'всё, что не разложилось; текст в note' },
+  note: { subtypes: SUBTYPES.note, units: [], hint: 'всё, что не разложилось; текст в note' },
 };
 
 export function isEventType(value: unknown): value is EventType {
@@ -99,38 +102,13 @@ export function isEventType(value: unknown): value is EventType {
 /* ------------------------------------------------------------------ */
 
 /**
- * Подтипы, которые ДЕРЖАТСЯ, а не случаются.
- *
- * Симптом обычно — точка: срыгнул, вырвало, заплакал. Но желтизна кожи или
- * белков глаз держится днями, и врача интересует ровно её протяжённость:
- * с какого дня появилась и прошла ли. Точками этого не записать — вышел бы
- * рассыпанный по ленте пунктир, из которого «с 5-го по 9-й день» уже не
- * собрать: между двумя упоминаниями нельзя отличить «держалось» от
- * «прошло и вернулось».
- *
- * Поэтому у них та же механика, что у сна: `started_at` — когда заметили,
- * `ended_at = NULL` — держится до сих пор, `ended_at` — когда сошло.
- *
- * ГРАНИЦА, которая здесь не обсуждается: это НАБЛЮДЕНИЕ, а не диагноз.
- * Родитель видит не болезнь, а цвет. Что этот цвет означает — физиология или
- * нет, — решает врач; приложение, записавшее вывод вместо факта, начинает
- * лечить вместо него. Отсюда и имена подтипов: `skin_yellow`, а не `jaundice`.
- *
- * Почему кожа и белки глаз — РАЗНЫЕ подтипы, а не один с уточнением в note:
- * для врача это разные наблюдения, а `note` — свободный текст, по которому
- * сводку не построить. Ровно так же на этой же странице разведены мокрые и
- * грязные подгузники: один подгузник, но два признака, и смотрят на них
- * по отдельности.
+ * Состояния (сыпь, желтизна кожи и белков глаз) живут в `shared/taxonomy.ts`
+ * вместе с самим списком подтипов: разрешение быть длящимся выдаётся паре
+ * (тип, подтип), и отрывать его от списка подтипов значило бы завести
+ * четвёртую копию того же знания. Здесь — только реэкспорт, чтобы серверный
+ * код по-прежнему импортировал таксономию из одного места.
  */
-export const STATE_SUBTYPES: Readonly<Record<string, readonly string[]>> = {
-  symptom: ['skin_yellow', 'eyes_yellow'],
-};
-
-/** Подтип-состояние: у него осмысленны `ended_at = NULL` и протяжённость. */
-export function isStateSubtype(type: string, subtype: string | null | undefined): boolean {
-  if (subtype === null || subtype === undefined || subtype === '') return false;
-  return (STATE_SUBTYPES[type] ?? []).includes(subtype);
-}
+export { STATE_SUBTYPES, isStateSubtype } from '../../../shared/taxonomy.ts';
 
 /**
  * Подходит ли подтип типу. Неизвестный подтип НЕ повод терять событие (§10.2):
@@ -138,9 +116,11 @@ export function isStateSubtype(type: string, subtype: string | null | undefined)
  */
 export function isKnownSubtype(type: EventType, subtype: string | null | undefined): boolean {
   if (subtype === null || subtype === undefined || subtype === '') return true;
-  const spec = TAXONOMY[type];
+  const spec: TypeSpec = TAXONOMY[type];
   if (spec.freeSubtype) return true;
-  return spec.subtypes.includes(subtype);
+  // Расширение до строк намеренное: сюда приходит что угодно из API и от модели,
+  // и спрашивать «а вдруг это один из наших литералов» — ровно смысл функции.
+  return (spec.subtypes as readonly string[]).includes(subtype);
 }
 
 /* ------------------------------------------------------------------ */
