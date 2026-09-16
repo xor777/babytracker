@@ -28,8 +28,8 @@
 import type { Config } from './config.ts';
 import type { EventRow, FastResult, StateDto, UtteranceRow } from './types.ts';
 import type { ChangeSetDto } from './journal.ts';
-import { EVENT_TYPES, TAXONOMY } from './taxonomy.ts';
-import { formatDurationRu, formatTimeLocal } from './ru.ts';
+import { EVENT_TYPES, STATE_SUBTYPES, TAXONOMY, isStateSubtype } from './taxonomy.ts';
+import { formatDateTimeLocal, formatDurationRu, formatTimeLocal, withUnit } from './ru.ts';
 import { zonedParts, pad2 } from './time.ts';
 
 /**
@@ -108,8 +108,31 @@ export function repeatWindowMin(type: string): number {
  * Типы, у которых событие может ИДТИ: `ended_at = null` для них осмысленно.
  * Для всех прочих (diaper, measure, meds, symptom, note) пустой `ended_at` —
  * всегда ошибка: они точечные.
+ *
+ * Исключение не на уровне типа, а на уровне подтипа — см. `isDurative` ниже:
+ * симптом в целом точечный (срыгнул, вырвало), но наблюдения-состояния
+ * (`STATE_SUBTYPES`: желтизна кожи, желтизна белков глаз) держатся днями.
  */
 export const DURATIVE_TYPES: readonly string[] = ['sleep', 'feed', 'pump', 'activity'];
+
+/**
+ * Может ли ЭТО событие числиться идущим.
+ *
+ * Разрешение даётся парой (тип, подтип), а не одним типом: расширить
+ * `DURATIVE_TYPES` до целого `symptom` значило бы разрешить висеть открытыми
+ * коликам и плачу, у которых нет ни закрывающей фразы, ни предела
+ * правдоподобия — ровно та беда, от которой написан `MAX_OPEN_MIN`.
+ */
+export function isDurative(type: string, subtype?: string | null): boolean {
+  return DURATIVE_TYPES.includes(type) || isStateSubtype(type, subtype);
+}
+
+/** «symptom/skin_yellow, symptom/eyes_yellow» — для справочной части промпта. */
+export function stateSubtypesList(): string {
+  return Object.entries(STATE_SUBTYPES)
+    .flatMap(([type, subtypes]) => subtypes.map((s) => `${type}/${s}`))
+    .join(', ');
+}
 
 /**
  * Сколько минут открытое событие ещё может быть правдой.
@@ -175,6 +198,14 @@ export interface BuildPromptInput {
   changeSets?: ChangeSetDto[];
   /** Последние события — чтобы модель видела, что уже записано, и не дублировала. */
   recentEvents?: EventRow[];
+  /**
+   * Наблюдения-состояния, открытые прямо сейчас (`openStateEvents`).
+   *
+   * Отдельно от `recentEvents` намеренно: состояние держится сутками и за край
+   * списка последних событий уезжает через несколько часов, а закрыть его
+   * модель должна уметь и на пятый день.
+   */
+  openStates?: EventRow[];
   /**
    * Последние фразы родителя. Без них не отличить «сказал дважды» от
    * «случилось дважды»: по одним событиям видно, что записано, но не видно,
@@ -339,6 +370,31 @@ function describeRecentEvents(events: EventRow[], tz: string): string {
 }
 
 /**
+ * Наблюдения-состояния, открытые прямо сейчас.
+ *
+ * Отдельный блок, а не «найдётся в последних событиях»: желтизна держится
+ * сутками, а последних событий модель видит два десятка — за четыре дня их
+ * набегает втрое больше. Открытое состояние просто уехало бы за край списка,
+ * и на «желтизна прошла» модель завела бы ВТОРУЮ запись вместо закрытия
+ * первой. Состояний этих единицы, поэтому блок дешёвый и точный.
+ */
+function describeOpenStates(events: EventRow[], tz: string, now: Date): string {
+  if (events.length === 0) return 'Открытых наблюдений-состояний нет.';
+  return events
+    .map((e) => {
+      const days = Math.max(0, Math.floor(minutesBetween(e.started_at, now) / (60 * 24)));
+      const since = formatDateTimeLocal(e.started_at, tz);
+      const note = e.note ? ` «${e.note}»` : '';
+      return (
+        `- id=${e.id} ${e.type}/${e.subtype ?? '-'} держится с ${since}` +
+        `${days > 0 ? ` — это ${withUnit(days, ['день', 'дня', 'дней'])}` : ''}` +
+        `${note} (started_at=${e.started_at})`
+      );
+    })
+    .join('\n');
+}
+
+/**
  * Последние фразы. Нужны ровно для одного вопроса, на который события ответа
  * не дают: «это случилось дважды или про это сказали дважды?»
  */
@@ -367,6 +423,8 @@ interface CaseInput {
   rawText: string;
   recentEvents: EventRow[];
   recentUtterances: UtteranceRow[];
+  /** Открытые наблюдения-состояния — их не видно в «последних событиях». */
+  openStates: EventRow[];
   utteranceId: number | null;
   /**
    * Точка отсчёта для всех «сколько прошло» — МОМЕНТ ФРАЗЫ, а не момент
@@ -691,7 +749,68 @@ function cardNearDuplicateEvent(input: CaseInput): CaseCard | null {
   };
 }
 
+/**
+ * Слова, по которым видно, что родитель говорит про ЦВЕТ.
+ *
+ * Нарочно широко и по корню: «желтенький», «жёлтые», «желтизна», «желтит» —
+ * одно и то же наблюдение, и родитель выбирает слово не думая. Ложное
+ * срабатывание стоит одной лишней карточки в промпте, пропуск — потерянного
+ * из сводки наблюдения, которого врач ждал.
+ */
+const COLOR_WORDS = /желт|жёлт|белки глаз|цвет кожи|цвет лица/u;
+
+/**
+ * Карточка: родитель заметил желтизну — кожи или белков глаз.
+ *
+ * Зачем вообще карточка. Без неё «он какой-то желтенький» ложится в общую
+ * заметку: тип не опознан, подтипа нет, в сводку не попадает — а это ровно то
+ * наблюдение, ради которого врач и спрашивает. И вторая беда: модель, увидев
+ * желтизну у двухнедельного, охотно допишет «физиологическая желтуха
+ * новорождённых, это норма». Это диагноз, поставленный приложением, и его
+ * здесь быть не должно ни в каком виде.
+ */
+function cardObservationState(input: CaseInput): CaseCard | null {
+  const { rawText, openStates, cfg, now } = input;
+  const mentioned = COLOR_WORDS.test(lower(rawText));
+  if (!mentioned) return null;
+
+  return {
+    key: 'observation_state',
+    text: `## ТВОЙ СЛУЧАЙ: родитель говорит про ЦВЕТ кожи или белков глаз
+
+${describeOpenStates(openStates, cfg.tz, now)}
+
+Родитель увидел ЦВЕТ. Это НАБЛЮДЕНИЕ, и записывается оно как наблюдение.
+
+  - ДИАГНОЗ СТАВИТЬ ЗАПРЕЩЕНО. Ни слова «желтуха» — ни в note, ни в ответе;
+    ни «физиологическая», ни «патологическая», ни билирубина, ни «это норма
+    для новорождённого», ни «стоит показаться врачу». Ты не врач и причины
+    не знаешь. Твоё дело — записать, ЧТО РОДИТЕЛЬ УВИДЕЛ, его словами.
+    Выводы сделает врач — по фактам, а не по твоей догадке. Приложение,
+    записавшее вывод вместо факта, начинает лечить вместо врача;
+  - КУДА: кожа → symptom/skin_yellow, белки глаз → symptom/eyes_yellow.
+    Сказали и про то, и про другое — ДВА события: для врача это два разных
+    наблюдения. Не названо, что именно («желтенький», «желтит») — это про
+    КОЖУ: про глаза говорят отдельно и прямо («белки», «глаза жёлтые»);
+  - ЭТО СОСТОЯНИЕ, А НЕ ТОЧКА. started_at — когда заметили, ended_at = null,
+    пока держится. Такое событие висит открытым СУТКАМИ, и это норма:
+    закрывать его «чтобы не висело» НЕЛЬЗЯ. Правило про провисевшее открытое
+    событие (кормление, прогулка) сюда НЕ относится;
+  - ВТОРОЕ такое же, когда одно уже открыто, НЕ ЗАВОДИ. «Стало желтее»,
+    «желтит сильнее», «почти сошла» — наблюдения ПОВЕРХ открытого состояния:
+    отдельная запись того же подтипа ТОЧКОЙ (ended_at = started_at), слова
+    родителя в note. Открытую запись при этом не трогай: «стало желтее»
+    не отменяет того, что желтизна была и вчера, и позавчера;
+  - ЗАКРЫВАЕТ состояние только явное «прошла», «сошла», «больше нет»,
+    «уже не жёлтый»: update_event открытому событию, ended_at = момент фразы.
+    «ПОЧТИ сошла» НЕ закрывает — почти это ещё не прошло;
+  - note — словами родителя, коротко: «желтенький», «белки глаз жёлтые».
+    Слово, которого родитель не говорил, не подбирай.`,
+  };
+}
+
 const CARD_BUILDERS: ReadonlyArray<(input: CaseInput) => CaseCard | null> = [
+  cardObservationState,
   cardOpenSleepRepeat,
   cardOpenDurative,
   cardCorrection,
@@ -739,6 +858,7 @@ export function buildPrompt(input: BuildPromptInput): string {
   const changeSets = input.changeSets ?? [];
   const recentEvents = input.recentEvents ?? [];
   const recentUtterances = input.recentUtterances ?? [];
+  const openStates = input.openStates ?? [];
 
   const cards = selectCaseCards({
     cfg,
@@ -748,6 +868,7 @@ export function buildPrompt(input: BuildPromptInput): string {
     rawText,
     recentEvents,
     recentUtterances,
+    openStates,
     utteranceId,
     // Карточки рассуждают о ситуации НА МОМЕНТ ФРАЗЫ.
     now: saidAt,
@@ -917,6 +1038,20 @@ ${
 
 ${describeRecentUtterances(recentUtterances, cfg.tz, utteranceId)}
 
+${
+  openStates.length === 0
+    ? ''
+    : `
+# ОТКРЫТЫЕ НАБЛЮДЕНИЯ-СОСТОЯНИЯ
+
+Держатся сутками — это НОРМА, закрывать их «чтобы не висело» нельзя. Закрывает
+только явное слово родителя о том, что это прошло; тогда ended_at открытому
+событию, а не новая запись. Про них ниже в «последних событиях» может не быть
+ничего: список короткий, а состояние старое.
+
+${describeOpenStates(openStates, cfg.tz, saidAt)}
+`
+}
 # ПОСЛЕДНИЕ СОБЫТИЯ В БАЗЕ
 
 ${describeRecentEvents(recentEvents, cfg.tz)}
@@ -936,8 +1071,8 @@ ${describeChangeSets(changeSets, cfg.tz)}
   значение это NULL, а не ноль: ноль означает «покормили нулём миллилитров».
 - Неизвестный subtype — не повод терять событие: пиши type, детали в note.
 - ended_at = null означает «ИДЁТ ПРЯМО СЕЙЧАС», а не «конец неизвестен».
-  Длительность бывает только у sleep, feed, pump, activity; diaper, measure,
-  meds, symptom и note создавай с ended_at = started_at всегда.
+  Длительность бывает только у sleep, feed, pump, activity и symptom/*_yellow;
+  прочее (diaper, measure, meds, note, другие symptom) — ended_at = started_at.
   Форма глагола решает: «покормила», «поел», «искупали», «погуляли» —
   законченный факт, ended_at = started_at. «Начал кушать», «кормлю»,
   «приложила», «купаемся» — идёт, ended_at пустой.

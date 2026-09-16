@@ -48,7 +48,7 @@ import {
   setChangeSetSummary,
   getChangeSet,
 } from './journal.ts';
-import { queryEvents } from './events.ts';
+import { openStateEvents, queryEvents } from './events.ts';
 
 export const TICK_MS = 1_000;
 /**
@@ -606,6 +606,9 @@ export function createWorker(ctx: AppContext, options: WorkerOptions = {}): Work
       reparseCount: utterance.reparse_count,
       changeSets: listChangeSets(db, 5),
       recentEvents: queryEvents(db, { limit: 20 }),
+      // Состояния держатся сутками и в двадцатку последних событий не влезают:
+      // без отдельного запроса модель не смогла бы закрыть желтизну на пятый день.
+      openStates: openStateEvents(db),
       // Без истории фраз не отличить «случилось дважды» от «сказали дважды».
       recentUtterances: listUtterances(db, PROMPT_UTTERANCES),
     });

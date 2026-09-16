@@ -11,7 +11,7 @@ import { all, get, run, count, p, EVENT_COLUMNS, getEventById } from './db.ts';
 import type { JournalContext } from './journal.ts';
 import { journaledChange } from './journal.ts';
 import type { Config } from './config.ts';
-import { normsForAge, type AgeNorms } from './taxonomy.ts';
+import { STATE_SUBTYPES, normsForAge, type AgeNorms } from './taxonomy.ts';
 // Маркер допущения — общий контракт для записей матчера и модели: по нему
 // одинаково видно «в этой записи есть то, чего родитель не говорил».
 import { ASSUMPTION_MARK } from './prompt.ts';
@@ -507,6 +507,39 @@ export function queryEvents(db: Db, params: QueryEventsParams = {}): EventRow[] 
     db,
     `SELECT ${EVENT_COLUMNS} FROM events WHERE ${where.length > 0 ? where.join(' AND ') : '1=1'}
       ORDER BY started_at DESC, id DESC LIMIT ?`,
+    sql,
+  );
+}
+
+/**
+ * Наблюдения-состояния, открытые прямо сейчас (`ended_at IS NULL`).
+ *
+ * Нужны промпту отдельным блоком. Через `queryEvents` их не достать: тот
+ * отдаёт последние N событий, а состояние держится сутками и уезжает за край
+ * списка уже к вечеру — модель перестала бы его видеть и на «желтизна прошла»
+ * завела бы вторую запись вместо закрытия первой.
+ *
+ * Пар (тип, подтип) здесь единицы, и все они перечислены в `STATE_SUBTYPES`,
+ * поэтому фильтр строится по ним, а не по «всем открытым симптомам»: открытый
+ * симптом другого подтипа — это ошибка разбора, и чинить её надо как ошибку,
+ * а не показывать модели как состояние.
+ */
+export function openStateEvents(db: Db): EventRow[] {
+  const pairs: Array<[string, string]> = [];
+  for (const [type, subtypes] of Object.entries(STATE_SUBTYPES)) {
+    for (const subtype of subtypes) pairs.push([type, subtype]);
+  }
+  if (pairs.length === 0) return [];
+
+  const clause = pairs.map(() => '(type = ? AND subtype = ?)').join(' OR ');
+  const sql: SqlParam[] = [];
+  for (const [type, subtype] of pairs) sql.push(p(type), p(subtype));
+
+  return all<EventRow>(
+    db,
+    `SELECT ${EVENT_COLUMNS} FROM events
+      WHERE deleted_at IS NULL AND ended_at IS NULL AND (${clause})
+      ORDER BY started_at ASC, id ASC`,
     sql,
   );
 }

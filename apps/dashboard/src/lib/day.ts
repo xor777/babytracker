@@ -25,6 +25,9 @@ const SUBTYPE_LABEL: Record<string, Record<string, string>> = {
     colic: 'колики',
     crying: 'плач',
     fever: 'температура',
+    // Наблюдение, а не диагноз (§10.2): на экране — то, что увидел родитель.
+    skin_yellow: 'желтизна кожи',
+    eyes_yellow: 'желтизна белков глаз',
   },
 };
 

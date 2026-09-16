@@ -4,10 +4,13 @@ import { periodsForAge, useChild, useStats } from '../hooks/useStats';
 import {
   averagePerDay,
   feedGapFacts,
+  observationFacts,
+  observationPhrase,
   sleepFacts,
   weekStats,
 } from '../lib/summary';
-import type { Avg, DayCell } from '../lib/summary';
+import type { Avg, DayCell, ObservationFacts } from '../lib/summary';
+import { stateSubtypes, subtypeAccusative } from '../lib/taxonomy';
 import {
   formatDay,
   formatDayShort,
@@ -71,6 +74,18 @@ export function StatsScreen() {
     [s.events, s.windowStart],
   );
   const gap = useMemo(() => feedGapFacts(s.events, cells), [s.events, cells]);
+
+  // Наблюдения-состояния (§10.2): желтизна кожи и белков глаз. Врачу нужна
+  // не частота, а протяжённость — с какого дня и прошло ли.
+  const observations = useMemo(
+    () =>
+      observationFacts(
+        s.events,
+        stateSubtypes().map((x) => x.subtype),
+        { birthMs: child.birthMs, windowStartMs: s.windowStart },
+      ),
+    [s.events, child.birthMs, s.windowStart],
+  );
   const byWeek = useMemo(() => weekStats(s.weeks, s.weight), [s.weeks, s.weight]);
   const w = s.weightFacts;
 
@@ -350,6 +365,52 @@ export function StatsScreen() {
           )}
         </section>
 
+        {/* --- наблюдения: то, что родители УВИДЕЛИ, и когда ---
+            Карточки нет, пока нечего показать. Пустая карточка «наблюдений не
+            записано» читалась бы как «ничего не было», а это разные вещи:
+            дневник молчит и о том, чего не случилось, и о том, что не
+            записали. Утверждать второе мы не заработали.
+
+            Тона у карточки нет намеренно: `--t-symptom` розово-красный, и он
+            превратил бы наблюдение в предупреждение — страница начала бы
+            оценивать раньше врача. Нейтрально, как «По неделям жизни». */}
+        {observations.length > 0 ? (
+          <section className="card card--wide">
+            <div className="card__head">
+              <h2 className="card__title">Наблюдения</h2>
+              <span className="card__aside">со слов родителей</span>
+            </div>
+
+            <ul className="obs">
+              {observations.map((o) => (
+                <li className="obs__row" key={o.subtype}>
+                  <p className="obs__line">
+                    {observationPhrase(o, subtypeAccusative('symptom', o.subtype))}
+                  </p>
+                  <p className="obs__hint">
+                    {[
+                      o.spans.length > 0 ? spanDates(o) : null,
+                      `${o.records} ${plural(o.records, 'запись', 'записи', 'записей')}`,
+                      o.marks.length > 0
+                        ? `из них ${o.marks.length} ${plural(o.marks.length, 'отметка', 'отметки', 'отметок')} поверх`
+                        : null,
+                      o.atWindowEdge ? 'период начинается с этих суток — что было раньше, в него не попало' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+
+            <p className="card__note">
+              Это записано со слов родителей: что увидели и когда. Ни причины, ни
+              оценки здесь нет и быть не может — их определяет врач. «Продолжается»
+              означает только то, что о завершении пока не говорили.
+            </p>
+          </section>
+        ) : null}
+
         {/* --- тренд: врач смотрит не день, а неделю --- */}
         {byWeek.length > 0 ? (
           <section className="card card--wide">
@@ -460,6 +521,18 @@ function rangeOf(cells: DayCell[]): string {
   const from = formatDayShort(cells[0].startMs);
   const to = formatDayShort(cells[cells.length - 1].startMs);
   return from === to ? from : `${from} — ${to}`;
+}
+
+/** Даты отрезков подписью: дни жизни отвечают врачу, даты — сверке с записями. */
+function spanDates(o: ObservationFacts): string {
+  return o.spans
+    .map((s) => {
+      const from = formatDayShort(s.fromMs);
+      if (s.toMs == null) return `${from} — по сейчас`;
+      const to = formatDayShort(s.toMs);
+      return from === to ? from : `${from} — ${to}`;
+    })
+    .join(', ');
 }
 
 function age(ageDays: number | null): string {

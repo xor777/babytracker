@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.ts';
 import { openDb, all } from '../src/db.ts';
 import { createApp } from '../src/app.ts';
-import { insertEvent, getState, queryEvents } from '../src/events.ts';
+import { insertEvent, getState, openStateEvents, queryEvents } from '../src/events.ts';
 import { buildPrompt } from '../src/prompt.ts';
 import { listChangeSets, newChangeSetId } from '../src/journal.ts';
 import { listUtterances, insertUtterance } from '../src/utterances.ts';
@@ -293,6 +293,7 @@ async function runScenario(sc: Scenario): Promise<Record<string, unknown>> {
     utteranceId: current.id,
     changeSets: listChangeSets(db, 5),
     recentEvents: queryEvents(db, { limit: 20 }),
+    openStates: openStateEvents(db),
     recentUtterances: listUtterances(db, 8),
   });
   fs.writeFileSync(path.join(dir, 'prompt.txt'), prompt, 'utf8');

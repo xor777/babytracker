@@ -17,7 +17,7 @@
  * написали «в среднем 0 в сутки». Врач читает «0» как обезвоживание.
  */
 import type { DailyStats, GrowthPoint, TrackerEvent } from '../types';
-import { DAY, MINUTE, localDateKey, parseTs, startOfLocalDay } from './format';
+import { DAY, MINUTE, formatDayShort, localDateKey, parseTs, plural, startOfLocalDay } from './format';
 
 /* ------------------------------------------------------------------ *
  * Границы «ночи»
@@ -583,6 +583,188 @@ export function feedGapFacts(events: TrackerEvent[], cells: DayCell[]): FeedGapF
   }
 
   return best ? { ...best, count } : null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Наблюдения-состояния
+ * ------------------------------------------------------------------ */
+
+export interface ObservationSpan {
+  /** Когда заметили, мс. */
+  fromMs: number;
+  /** Когда сошло, мс. `null` — держится до сих пор. */
+  toMs: number | null;
+  /** День жизни, с которого отмечали (1-based: день рождения — 1-й день). */
+  fromDay: number | null;
+  /** День жизни, по который отмечали. `null` — ещё держится. */
+  toDay: number | null;
+}
+
+export interface ObservationFacts {
+  subtype: string;
+  /** Отрезки, когда наблюдение ДЕРЖАЛОСЬ, от старых к новым, пересечения слиты. */
+  spans: ObservationSpan[];
+  /** Отметки поверх состояния («стало желтее») — моменты, мс. */
+  marks: number[];
+  /** Всего записей этого рода в окне: и отрезки, и отметки. */
+  records: number;
+  /** Держится прямо сейчас. */
+  ongoing: boolean;
+  /**
+   * Самая ранняя запись пришлась на первые сутки окна.
+   *
+   * Значит, «с такого-то дня» — это начало ОКНА, а не обязательно начало
+   * наблюдения: что было раньше, в выборку не попало. Разница та же, что
+   * между «не было» и «не записали», и молчать о ней нельзя.
+   */
+  atWindowEdge: boolean;
+}
+
+/**
+ * День жизни, 1-based: сутки рождения — «1-й день».
+ *
+ * Именно так считает врач и так же считает `normsForAge` на сервере
+ * («возраст 0 дней = первые сутки»). Возраст в сутках (0-based) и день жизни
+ * различаются на единицу, и перепутать их — значит сдвинуть всю картину на
+ * день, чего никто не заметит.
+ */
+export function dayOfLife(birthMs: number | null | undefined, ms: number): number | null {
+  const age = ageOn(birthMs, ms);
+  return age == null ? null : age + 1;
+}
+
+/**
+ * Протяжённость наблюдений-состояний — то, ради чего у них есть `ended_at`.
+ *
+ * Врача интересует не «сколько раз сказали», а «с какого дня и прошло ли».
+ * Поэтому события одного подтипа делятся надвое:
+ *
+ * - ОТРЕЗОК — запись с протяжённостью: либо открытая (`ended_at` пустой,
+ *   держится), либо закрытая (`ended_at` позже начала). Из них и собирается
+ *   «с 5-го по 9-й день»;
+ * - ОТМЕТКА — запись-точка (`ended_at` равен `started_at`): «стало желтее»,
+ *   «почти сошла». Это наблюдение ПОВЕРХ состояния, и границ оно не двигает:
+ *   иначе одна реплика «почти сошла» удлинила бы отрезок до дня, когда
+ *   желтизна уже проходила.
+ *
+ * Пересекающиеся отрезки сливаются: два открытых состояния подряд — это сбой
+ * разбора, а не два эпизода, и показывать их врачу как два не надо.
+ */
+export function observationFacts(
+  events: TrackerEvent[],
+  subtypes: string[],
+  opts: { birthMs?: number | null; windowStartMs?: number | null } = {},
+): ObservationFacts[] {
+  const out: ObservationFacts[] = [];
+
+  for (const subtype of subtypes) {
+    const raw = events.filter(
+      (e) => !e.deleted_at && e.type === 'symptom' && e.subtype === subtype,
+    );
+
+    const spansRaw: Array<{ from: number; to: number | null }> = [];
+    const marks: number[] = [];
+    let earliest: number | null = null;
+
+    for (const e of raw) {
+      const from = parseTs(e.started_at);
+      if (from == null) continue;
+      earliest = earliest == null ? from : Math.min(earliest, from);
+
+      const to = parseTs(e.ended_at);
+      // Точка: конец совпал с началом — это отметка, а не отрезок.
+      if (to != null && to <= from) {
+        marks.push(from);
+        continue;
+      }
+      spansRaw.push({ from, to });
+    }
+
+    if (spansRaw.length === 0 && marks.length === 0) continue;
+
+    spansRaw.sort((a, b) => a.from - b.from);
+
+    // Слияние пересекающихся. Открытый отрезок поглощает всё, что после него.
+    const merged: Array<{ from: number; to: number | null }> = [];
+    for (const s of spansRaw) {
+      const last = merged[merged.length - 1];
+      if (last && (last.to === null || last.to >= s.from)) {
+        if (last.to !== null) last.to = s.to === null ? null : Math.max(last.to, s.to);
+        continue;
+      }
+      merged.push({ ...s });
+    }
+
+    const ongoing = merged.some((s) => s.to === null);
+
+    out.push({
+      subtype,
+      spans: merged.map((s) => ({
+        fromMs: s.from,
+        toMs: s.to,
+        fromDay: dayOfLife(opts.birthMs, s.from),
+        toDay: s.to === null ? null : dayOfLife(opts.birthMs, s.to),
+      })),
+      marks: marks.sort((a, b) => a - b),
+      records: raw.length,
+      ongoing,
+      atWindowEdge:
+        earliest != null &&
+        opts.windowStartMs != null &&
+        earliest < startOfLocalDay(opts.windowStartMs) + DAY,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Наблюдение одной фразой — так, как его читает врач.
+ *
+ * «Родители отмечали желтизну кожи с 5-го по 9-й день» / «отмечают с 5-го дня,
+ * продолжается». Здесь нет и не может быть ни оценки, ни причины, ни
+ * медицинского названия: страница сообщает, ЧТО РОДИТЕЛИ ВИДЕЛИ И КОГДА.
+ * Что это значит — вопрос к врачу, и отвечать на него за него мы не будем.
+ *
+ * Время сказано днями жизни, а не датами: врач думает «на пятый день», и
+ * пересчитывать даты в возраст у него на осмотре — лишняя работа и лишний
+ * шанс ошибиться. Даты идут отдельной строкой, подписью.
+ */
+export function observationPhrase(f: ObservationFacts, accusative: string): string {
+  const verb = f.ongoing ? 'отмечают' : 'отмечали';
+  const head = `Родители ${verb} ${accusative}`;
+
+  if (f.spans.length === 0) {
+    // Протяжённости не записали — сказать «с такого-то по такой-то» не из чего.
+    // Соблазн растянуть отрезок от первой отметки до последней здесь и живёт:
+    // между двумя отметками наблюдения могло не быть вовсе, и нарисованный
+    // отрезок был бы выводом, а не записью.
+    const n = f.marks.length;
+    return `${head} — ${n} ${plural(n, 'запись', 'записи', 'записей')}, протяжённость не записана.`;
+  }
+
+  const parts = f.spans.map((s) => spanLabel(s));
+  return `${head} ${joinRu(parts)}${f.ongoing ? ', продолжается' : ''}.`;
+}
+
+/** «с 5-го по 9-й день» / «с 5-го дня» (ещё держится) / по датам без даты рождения. */
+function spanLabel(s: ObservationSpan): string {
+  if (s.fromDay == null) {
+    const from = formatDayShort(s.fromMs);
+    if (s.toMs == null) return `с ${from}`;
+    const to = formatDayShort(s.toMs);
+    return from === to ? `${from}` : `с ${from} по ${to}`;
+  }
+  if (s.toDay == null) return `с ${s.fromDay}-го дня`;
+  if (s.toDay === s.fromDay) return `на ${s.fromDay}-й день`;
+  return `с ${s.fromDay}-го по ${s.toDay}-й день`;
+}
+
+/** «a, b и c» — перечисление по-русски. */
+function joinRu(parts: string[]): string {
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(', ')} и ${parts[parts.length - 1]}`;
 }
 
 /** Все сутки, которые задевает промежуток, записаны. */

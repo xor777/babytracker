@@ -531,6 +531,63 @@ function seedInteresting() {
     confidence: 0.6,
     utterance: u12,
   });
+
+  /*
+   * 13. Наблюдения-состояния (§10.2): желтизна кожи и белков глаз.
+   *
+   * Держатся сутками, поэтому у них есть `ended_at`, и «Сводка» показывает
+   * не частоту, а протяжённость. Здесь намеренно обе формы сразу: кожа уже
+   * прошла (закрытый отрезок), белки ещё нет (открытый) — на экране это
+   * «с 5-го по 9-й день» и «с 6-го дня, продолжается».
+   *
+   * Отметка «стало желтее» лежит ПОВЕРХ открытого состояния точкой: она
+   * не закрывает его и не двигает границ.
+   */
+  const yellowFrom = at(10, 9, 30); // 5-е сутки жизни
+  const yellowTo = at(6, 12, 0); // 9-е сутки
+  if (past(yellowFrom)) {
+    const uy = say('он какой-то желтенький', yellowFrom);
+    add({
+      type: 'symptom',
+      subtype: 'skin_yellow',
+      started_at: yellowFrom,
+      ended_at: past(yellowTo) ? yellowTo : null,
+      note: 'желтенький',
+      source: 'alice-llm',
+      confidence: 0.85,
+      utterance: uy,
+    });
+  }
+
+  const yellowMore = at(8, 18, 40);
+  if (past(yellowMore)) {
+    const um = say('кажется стало желтее', yellowMore);
+    add({
+      type: 'symptom',
+      subtype: 'skin_yellow',
+      started_at: yellowMore,
+      ended_at: yellowMore,
+      note: 'стало желтее',
+      source: 'alice-llm',
+      confidence: 0.7,
+      utterance: um,
+    });
+  }
+
+  const eyesFrom = at(9, 11, 15); // 6-е сутки, до сих пор держится
+  if (past(eyesFrom)) {
+    const ue = say('у него белки глаз жёлтые', eyesFrom);
+    add({
+      type: 'symptom',
+      subtype: 'eyes_yellow',
+      started_at: eyesFrom,
+      ended_at: null,
+      note: 'белки глаз жёлтые',
+      source: 'alice-llm',
+      confidence: 0.9,
+      utterance: ue,
+    });
+  }
 }
 
 // Вес при рождении — точка отсчёта для графика веса. Берётся как самое раннее

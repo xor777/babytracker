@@ -7,6 +7,21 @@ import type { EventType } from '../types';
 export interface SubtypeDef {
   id: string;
   label: string;
+  /**
+   * Винительный падеж подписи — «отмечали желтизну кожи».
+   *
+   * Нужен там, где подпись уходит не в ярлык, а внутрь фразы. Тот же повод,
+   * что и у `Gender` выше: «отмечали желтизна кожи» читается как поломка.
+   * Не задан — значит подпись во фразы не попадает.
+   */
+  accusative?: string;
+  /**
+   * Подтип-СОСТОЯНИЕ: держится днями, а не случается в момент (§10.2).
+   *
+   * У таких событий осмысленны `started_at` и `ended_at`, и врача интересует
+   * именно протяжённость: с какого дня появилось и прошло ли.
+   */
+  state?: boolean;
 }
 
 /**
@@ -141,6 +156,17 @@ export const TYPES: TypeDef[] = [
       { id: 'colic', label: 'колики' },
       { id: 'crying', label: 'плач' },
       { id: 'fever', label: 'температура' },
+      // Наблюдение, а не диагноз: родитель видит цвет, а не болезнь.
+      // Название в интерфейсе читается как то, что увидели, — и только.
+      // Кожа и белки глаз разведены намеренно: для врача это разные
+      // наблюдения, ровно как мокрый и грязный подгузник.
+      { id: 'skin_yellow', label: 'желтизна кожи', accusative: 'желтизну кожи', state: true },
+      {
+        id: 'eyes_yellow',
+        label: 'желтизна белков глаз',
+        accusative: 'желтизну белков глаз',
+        state: true,
+      },
     ],
     units: ['c'],
     ranged: true,
@@ -195,6 +221,27 @@ export function typeDef(type: string | null | undefined): TypeDef {
     ranged: false,
     openable: false,
   };
+}
+
+/** Пары «тип/подтип», которые являются состояниями (§10.2). Порядок — как в TYPES. */
+export function stateSubtypes(): Array<{ type: EventType; subtype: string }> {
+  const out: Array<{ type: EventType; subtype: string }> = [];
+  for (const t of TYPES) {
+    for (const s of t.subtypes) {
+      if (s.state) out.push({ type: t.id, subtype: s.id });
+    }
+  }
+  return out;
+}
+
+/** Подпись в винительном падеже; не задана — отдаём именительную, она хоть читается. */
+export function subtypeAccusative(
+  type: string | null | undefined,
+  subtype: string | null | undefined,
+): string {
+  if (!subtype) return '';
+  const def = typeDef(type).subtypes.find((s) => s.id === subtype);
+  return def?.accusative ?? def?.label ?? subtype;
 }
 
 export function subtypeLabel(type: string | null | undefined, subtype: string | null | undefined) {
