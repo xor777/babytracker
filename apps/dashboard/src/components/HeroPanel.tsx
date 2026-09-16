@@ -55,6 +55,23 @@ function Timer({ ms }: { ms: number }) {
  * не видно. Поэтому у прошедшего крупно стоит **время события**, оно не
  * меняется, а «сколько прошло» — мелко, словами и без секунд.
  */
+/*
+ * Подпись и слово для последнего кормления.
+ *
+ * Вид кормления известен не всегда: родитель говорит «начал есть», модель
+ * честно оставляет грудь/смесь пустыми и пишет в примечании, что не назвали.
+ * Раньше в этом случае подставлялось слово «кормление», и на весь экран
+ * выходило «ПОСЛЕДНИЙ РАЗ ЕЛ · КОРМЛЕНИЕ». Поэтому когда вида нет, меняем не
+ * слово, а подпись: «ПОСЛЕДНЕЕ · КОРМЛЕНИЕ» читается как надо, а время и
+ * «сколько назад» строкой ниже и есть то, ради чего сюда смотрят.
+ */
+function feedHeadline(ev: TrackerEvent | null, known: string, unknown: string) {
+  const what = feedLabel(ev);
+  return what === null
+    ? { label: unknown, word: 'КОРМЛЕНИЕ' }
+    : { label: known, word: what.toUpperCase() };
+}
+
 function Past({ at, now, tail }: { at: number; now: number; tail?: string }) {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
   return (
@@ -190,10 +207,12 @@ function FeedHalf({
       <div className="hero__half hero__half--feed">
         <span className="hero__rule" />
         <div className="hero__stack">
-          <span className="hero__label">{prev && prevAt != null ? 'до этого ел' : ''}</span>
+          <span className="hero__label">
+            {prev && prevAt != null ? feedHeadline(prev, 'до этого ел', 'до этого').label : ''}
+          </span>
           {prev && prevAt != null ? (
             <>
-              <span className="hero__word">{(feedLabel(prev) ?? 'кормление').toUpperCase()}</span>
+              <span className="hero__word">{feedHeadline(prev, 'до этого ел', 'до этого').word}</span>
               <Past
                 at={prevAt}
                 now={now}
@@ -213,6 +232,7 @@ function FeedHalf({
 
   const last = feeds.last;
   const at = parseTs(last?.started_at);
+  const headline = feedHeadline(last, 'последний раз ел', 'последнее');
 
   // Пустое состояние — не исключение, а норма первых недель: кормления голосом
   // могут не записывать вовсе. Показываем подсказку, а не сломанный таймер.
@@ -234,8 +254,8 @@ function FeedHalf({
     <div className="hero__half hero__half--feed">
       <span className="hero__rule" />
       <div className="hero__stack">
-        <span className="hero__label">последний раз ел</span>
-        <span className="hero__word">{(feedLabel(last) ?? 'кормление').toUpperCase()}</span>
+        <span className="hero__label">{headline.label}</span>
+        <span className="hero__word">{headline.word}</span>
         <Past at={at} now={now} tail={feeds.count > 0 ? `${feeds.count}-е за сутки` : undefined} />
       </div>
     </div>
