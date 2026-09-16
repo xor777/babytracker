@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { aliceBody, makeTestApp, TEST_SECRET } from './helpers.ts';
 import { count } from '../src/db.ts';
 import type { Db } from '../src/db.ts';
+import { ACK, aliceReply } from '../src/alice.ts';
 
 type Json = Record<string, any>;
 
@@ -104,7 +105,7 @@ test('чужой пользователь до дневника не доход�
     url: `/alice/${TEST_SECRET}`,
     payload: aliceBody('андрей заснул', { skillId: 'наш-навык', userId: 'папа' }),
   });
-  assert.match(body(allowed).response.text, /Записала/);
+  assert.equal(body(allowed).response.text, ACK);
   assert.equal(count(app.db, 'SELECT COUNT(*) AS n FROM events'), 1);
 });
 
@@ -117,7 +118,7 @@ test('пустой список пользователей — режим нас
     url: `/alice/${TEST_SECRET}`,
     payload: aliceBody('андрей заснул', { userId: 'кто-угодно' }),
   });
-  assert.match(body(res).response.text, /Записала/);
+  assert.equal(body(res).response.text, ACK);
 });
 
 test('user_id берётся и из вложенных полей запроса', async (t) => {
@@ -129,7 +130,7 @@ test('user_id берётся и из вложенных полей запрос�
   payload.session.user = { user_id: 'вложенный' };
 
   const res = await app.app.inject({ method: 'POST', url: `/alice/${TEST_SECRET}`, payload });
-  assert.match(body(res).response.text, /Записала/, 'session.user.user_id тоже опознаётся');
+  assert.equal(body(res).response.text, ACK, 'session.user.user_id тоже опознаётся');
 });
 
 /* ------------------------------------------------------------------ */
@@ -194,7 +195,7 @@ test('command пустой — берём original_utterance', async (t) => {
       version: '1.0',
     },
   });
-  assert.match(body(res).response.text, /Записала/);
+  assert.equal(body(res).response.text, ACK);
   assert.equal(totals(app.db).events, 1);
 });
 
@@ -232,28 +233,41 @@ test('очень длинная фраза: ответ обрезан до 1024 
   assert.equal(totals(app.db).utterances, 1, 'фраза сохранена целиком, как бы длинна ни была');
 });
 
+/*
+ * Время вслух осталось ровно в одном месте — в ответе на ВОПРОС («сколько он
+ * спал»). Запись фразы отвечает одним словом, поэтому проверять обработку
+ * двоеточия надо там, где время вообще звучит.
+ */
 test('tts проговаривает время по частям и не читает кавычки-ёлочки', async (t) => {
   const app = await makeTestApp();
   t.after(app.close);
 
-  const res = await app.app.inject({
+  await app.app.inject({
     method: 'POST',
     url: `/alice/${TEST_SECRET}`,
     payload: aliceBody('андрей заснул'),
   });
-  const reply = body(res).response;
-  const time = /(\d{2}):(\d{2})/.exec(reply.text);
-  assert.ok(time, 'в тексте время с двоеточием');
-  assert.match(reply.tts, new RegExp(`${time[1]} ${time[2]}`), 'в озвучке двоеточие заменено пробелом');
-  assert.doesNotMatch(reply.tts, /\d:\d/, 'цифры через двоеточие Алиса читает плохо');
-
-  const unknown = await app.app.inject({
+  const res = await app.app.inject({
     method: 'POST',
     url: `/alice/${TEST_SECRET}`,
-    payload: aliceBody('абырвалг'),
+    payload: aliceBody('сколько он сегодня спал'),
   });
-  assert.match(body(unknown).response.text, /«.+»/);
-  assert.doesNotMatch(body(unknown).response.tts, /[«»]/);
+  const reply = body(res).response;
+  const time = /(\d{2}):(\d{2})/.exec(reply.text);
+  assert.ok(time, `в тексте время с двоеточием, сказано: «${reply.text}»`);
+  assert.match(reply.tts, new RegExp(`${time[1]} ${time[2]}`), 'в озвучке двоеточие заменено пробелом');
+  assert.doesNotMatch(reply.tts, /\d:\d/, 'цифры через двоеточие Алиса читает плохо');
+});
+
+test('кавычки-ёлочки в озвучку не попадают', async (t) => {
+  const app = await makeTestApp();
+  t.after(app.close);
+
+  // Ёлочки остались в ответе на неопознанное устройство — единственном месте,
+  // где мы ещё цитируем; сам приём фразы теперь отвечает одним словом.
+  const reply = aliceReply('Приняла: «абырвалг»', true).response;
+  assert.match(reply.text, /«.+»/);
+  assert.doesNotMatch(reply.tts, /[«»]/);
 });
 
 test('сессия держится открытой, закрывается только на прощании', async (t) => {
@@ -298,9 +312,9 @@ test('повторное «заснул» отвечает «уже спит» �
   const post = async (command: string): Promise<Json> =>
     body(await app.app.inject({ method: 'POST', url: `/alice/${TEST_SECRET}`, payload: aliceBody(command) }));
 
-  assert.match((await post('андрей заснул')).response.text, /Записала: Андрей заснул в \d{2}:\d{2}/);
+  assert.equal((await post('андрей заснул')).response.text, ACK);
   const second = await post('андрей заснул');
-  assert.match(second.response.text, /уже спит, с \d{2}:\d{2}/);
+  assert.equal(second.response.text, ACK);
 
   const events = count(app.db, `SELECT COUNT(*) AS n FROM events WHERE type = 'sleep'`);
   assert.equal(events, 1, 'второй сон не создан');
@@ -315,7 +329,7 @@ test('«проснулся» без сна отвечает честно и фи
     url: `/alice/${TEST_SECRET}`,
     payload: aliceBody('андрей проснулся'),
   });
-  assert.match(body(res).response.text, /А он и не спал/);
+  assert.equal(body(res).response.text, ACK);
   assert.equal(count(app.db, `SELECT COUNT(*) AS n FROM events WHERE type = 'note'`), 1);
 });
 
@@ -328,7 +342,7 @@ test('непонятая фраза принимается вслух и сох�
     url: `/alice/${TEST_SECRET}`,
     payload: aliceBody('он сегодня какой-то странный'),
   });
-  assert.match(body(res).response.text, /Приняла: «он сегодня какой-то странный»/);
+  assert.equal(body(res).response.text, ACK);
   assert.equal(totals(app.db).utterances, 1, 'фраза не теряется, даже если не разобрана');
 });
 

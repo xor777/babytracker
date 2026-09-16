@@ -21,6 +21,7 @@ import {
 import { decideQueue } from '../src/queue-policy.ts';
 import { TEST_SECRET, aliceBody, makeTestApp } from './helpers.ts';
 import { listUtterances } from '../src/utterances.ts';
+import { ACK } from '../src/alice.ts';
 
 const NOW = new Date('2026-09-15T14:00:00.000Z');
 const match = (command: string) => matchFast(command, undefined, { now: NOW, tz: 'Europe/Moscow' });
@@ -186,13 +187,13 @@ test('СКВОЗНОЕ: составная фраза попадает в оче
     h.app.inject({ method: 'POST', url: `/alice/${TEST_SECRET}`, payload: aliceBody(command) });
 
   const simple = await post('андрей заснул');
-  assert.match((simple.json() as { response: { text: string } }).response.text, /Записала/);
+  assert.equal((simple.json() as { response: { text: string } }).response.text, ACK);
 
   const compound = await post('андрей покушал и уснул');
   // голосовой ответ остаётся мгновенным и по тому, что понял fast-path
   assert.match(
     (compound.json() as { response: { text: string } }).response.text,
-    /уже спит|Записала/,
+    new RegExp(`^${ACK}$`),
     'мама получает нормальный ответ, а не «сейчас разберу»',
   );
 

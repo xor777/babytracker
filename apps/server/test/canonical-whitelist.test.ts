@@ -22,6 +22,7 @@ import type { LlmQueuePolicy } from '../src/config.ts';
 import { TEST_SECRET, aliceBody, makeTestApp } from './helpers.ts';
 import { listUtterances } from '../src/utterances.ts';
 import { queryEvents } from '../src/events.ts';
+import { ACK } from '../src/alice.ts';
 
 const NOW = new Date('2026-09-15T14:00:00.000Z');
 const fastOf = (command: string) => matchFast(command, undefined, { now: NOW, tz: 'Europe/Moscow' });
@@ -143,10 +144,10 @@ test('однословный подгузник записывается мат�
     h.app.inject({ method: 'POST', url: `/alice/${TEST_SECRET}`, payload: aliceBody(command) });
 
   const dirty = await post('покакал');
-  assert.match((dirty.json() as { response: { text: string } }).response.text, /покакал/);
+  assert.equal((dirty.json() as { response: { text: string } }).response.text, ACK);
 
   const wet = await post('пописал');
-  assert.match((wet.json() as { response: { text: string } }).response.text, /пописал/);
+  assert.equal((wet.json() as { response: { text: string } }).response.text, ACK);
 
   const events = queryEvents(h.db, { type: 'diaper' });
   assert.equal(events.length, 2, 'оба подгузника записаны матчером');
@@ -206,7 +207,7 @@ test('СКВОЗНОЕ: фраза третьего инцидента попа�
   });
 
   // голосовой ответ по-прежнему мгновенный и от матчера
-  assert.match((res.json() as { response: { text: string } }).response.text, /Записала|заснул/);
+  assert.equal((res.json() as { response: { text: string } }).response.text, ACK);
 
   const utterance = listUtterances(h.db)[0];
   assert.equal(utterance?.status, 'pending', 'фраза обязана уйти модели, иначе кормление потеряно');

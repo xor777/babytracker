@@ -19,6 +19,7 @@ import type { AliceNlu } from '../src/types.ts';
 import { TEST_SECRET, aliceBody, makeTestApp } from './helpers.ts';
 import { listUtterances } from '../src/utterances.ts';
 import { queryEvents } from '../src/events.ts';
+import { ACK } from '../src/alice.ts';
 
 const TZ = 'Europe/Moscow';
 /** 2026-09-15 17:00 по Москве. */
@@ -221,7 +222,7 @@ test('СКВОЗНОЕ: фраза со временем уходит в оче�
 
   // голос не называет время, которое мы знаем как вероятно неверное
   const text = (res.json() as { response: { text: string } }).response.text;
-  assert.match(text, /Время уточню/, `вслух нельзя называть неверное время, сказано: «${text}»`);
+  assert.equal(text, ACK, `вслух нельзя называть неверное время, сказано: «${text}»`);
   assert.equal(/\d{2}:\d{2}/.test(text), false, 'в ответе не должно быть конкретного времени');
 
   const utterance = listUtterances(h.db)[0];
@@ -254,7 +255,7 @@ test('СКВОЗНОЕ: простая фраза отвечает времен�
   });
 
   const text = (res.json() as { response: { text: string } }).response.text;
-  assert.match(text, /^Записала: Андрей заснул в \d{2}:\d{2}$/, 'обычный ответ со временем');
+  assert.equal(text, ACK, 'вслух — только подтверждение приёма');
   assert.equal(listUtterances(h.db)[0]?.status, 'skipped');
   assert.equal(queryEvents(h.db, { type: 'sleep' })[0]?.confidence, 0.95);
 });
@@ -274,6 +275,9 @@ test('СКВОЗНОЕ: пробуждение с неразобранным в�
   const woke = await post('проснулся в три');
   const text = (woke.json() as { response: { text: string } }).response.text;
 
-  assert.match(text, /Время уточню/);
-  assert.equal(/Спал \d/.test(text), false, 'длительность от неверного момента озвучивать нельзя');
+  // Раньше голос называл время и длительность, и на неразобранном времени это
+  // становилось правдоподобной неправдой. Теперь он не называет чисел вовсе —
+  // проверяем сильное свойство, а не отсутствие одной формулировки.
+  assert.equal(text, ACK);
+  assert.equal(/\d/.test(text), false, 'в ответе не должно быть ни времени, ни длительности');
 });

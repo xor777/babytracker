@@ -52,6 +52,19 @@ const MAX_TEXT = 1024;
 const PROTOCOL_VERSION = '1.0';
 
 /** Нейтральный ответ на неверный секрет: атакующий не должен различать причины. */
+/**
+ * Ответ на записанную фразу — одно слово, и это осознанно.
+ *
+ * Алиса проговаривает ответ вслух, а говорят с ней обычно рядом со спящим
+ * ребёнком. Длинная реплика мешает, а всё, что в ней называлось (время, длина
+ * сна), fast-path знал лишь приблизительно: точную картину всё равно собирает
+ * модель через полминуты, и её видно на дашборде и в журнале. Так что вслух
+ * подтверждаем только сам факт приёма.
+ *
+ * Вопросы («сколько он спал») сюда не попадают — там ответ по данным.
+ */
+export const ACK = 'Приняла';
+
 const NEUTRAL_TEXT = 'Извините, сейчас не могу ответить.';
 
 /**
@@ -441,20 +454,8 @@ export function handleAliceRequest(
         confidence: fast.confidence,
         journal,
       });
-      if (res.status === 'already_open') {
-        // время берётся из уже записанного события, а не из неразобранной фразы,
-        // поэтому здесь оно точное
-        text =
-          `${cfg.childName} уже спит, с ${formatTimeLocal(res.event.started_at, cfg.tz)}. ` +
-          `Это ${formatDurationRu(res.durationMin)}`;
-      } else if (fast.timeUnresolved) {
-        // Время во фразе названо, но не разобрано: называть вслух «в 17:32»
-        // нельзя — это и есть та самая правдоподобная неправда. Момент
-        // поправит модель, фраза уже ушла ей в очередь.
-        text = `Записала: ${cfg.childName} заснул. Время уточню`;
-        scheduleEventBroadcast(ctx, 'created', res.event.id);
-      } else {
-        text = `Записала: ${cfg.childName} заснул в ${formatTimeLocal(res.event.started_at, cfg.tz)}`;
+      text = ACK;
+      if (res.status !== 'already_open') {
         scheduleEventBroadcast(ctx, 'created', res.event.id);
       }
       break;
@@ -468,17 +469,8 @@ export function handleAliceRequest(
         confidence: fast.confidence,
         journal,
       });
-      if (res.status === 'closed' && fast.timeUnresolved) {
-        // длительность посчиталась бы от неверного момента — не озвучиваем
-        text = `Записала, что ${cfg.childName} проснулся. Время уточню`;
-        scheduleEventBroadcast(ctx, 'updated', res.event.id);
-      } else if (res.status === 'closed') {
-        text = `${cfg.childName} проснулся. Спал ${formatDurationRuAcc(res.durationMin)}`;
-        scheduleEventBroadcast(ctx, 'updated', res.event.id);
-      } else {
-        text = 'А он и не спал. Записала, что проснулся';
-        scheduleEventBroadcast(ctx, 'created', res.event.id);
-      }
+      text = ACK;
+      scheduleEventBroadcast(ctx, res.status === 'closed' ? 'updated' : 'created', res.event.id);
       break;
     }
 
@@ -497,7 +489,7 @@ export function handleAliceRequest(
         'close-previous',
         journal,
       );
-      text = fast.subtype === 'dirty' ? 'Записала: покакал' : 'Записала: пописал';
+      text = ACK;
       scheduleEventBroadcast(ctx, 'created', event.id);
       break;
     }
@@ -508,8 +500,7 @@ export function handleAliceRequest(
     }
 
     default: {
-      const quoted = command.length > 120 ? `${command.slice(0, 119)}…` : command;
-      text = `Приняла: «${quoted}». Сейчас разберу`;
+      text = ACK;
       break;
     }
   }

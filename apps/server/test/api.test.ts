@@ -10,6 +10,7 @@ import { createApp } from '../src/app.ts';
 import { insertEvent, softDeleteEvent } from '../src/events.ts';
 import { insertUtterance } from '../src/utterances.ts';
 import { newChangeSetId, type JournalContext } from '../src/journal.ts';
+import { ACK } from '../src/alice.ts';
 
 test('GET /healthz', async (t) => {
   const h = await makeTestApp();
@@ -598,7 +599,7 @@ test('раздача /dash не перехватывает api, alice и healthz
     payload: aliceBody('андрей заснул'),
   });
   assert.equal(alice.statusCode, 200);
-  assert.match((alice.json() as { response: { text: string } }).response.text, /Записала/);
+  assert.equal((alice.json() as { response: { text: string } }).response.text, ACK);
 
   // SPA-fallback телевизора не съедает /dash
   const unknownDash = await get('/dash/чего-нет');

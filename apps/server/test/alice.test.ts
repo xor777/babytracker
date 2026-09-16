@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TEST_SECRET, aliceBody, makeTestApp } from './helpers.ts';
-import { secretsEqual } from '../src/alice.ts';
+import { secretsEqual, ACK } from '../src/alice.ts';
 import { maskUrl } from '../src/app.ts';
 import { queryEvents } from '../src/events.ts';
 import { createApp } from '../src/app.ts';
@@ -95,18 +95,20 @@ test('полный сценарий: заснул -> проснулся -> св�
 
   const started = await post(h.app, URL_OK, aliceBody('андрей заснул'));
   const startedBody = started.json() as { response: { text: string; end_session: boolean } };
-  assert.match(startedBody.response.text, /^Записала: Андрей заснул в \d{2}:\d{2}$/);
+  assert.equal(startedBody.response.text, ACK);
   assert.equal(startedBody.response.end_session, false);
 
   // повторное «заснул» не создаёт второй открытый сон
   const again = await post(h.app, URL_OK, aliceBody('андрей заснул'));
   const againBody = again.json() as { response: { text: string } };
-  assert.match(againBody.response.text, /уже спит, с \d{2}:\d{2}/);
+  // Голос одинаков и на первое «заснул», и на повторное: вслух подтверждаем
+  // только приём. Что второго сна не завелось — видно по базе, не по реплике.
+  assert.equal(againBody.response.text, ACK);
   assert.equal(queryEvents(h.db, { type: 'sleep' }).length, 1);
 
   const woke = await post(h.app, URL_OK, aliceBody('андрей проснулся'));
   const wokeBody = woke.json() as { response: { text: string } };
-  assert.match(wokeBody.response.text, /^Андрей проснулся\. Спал /);
+  assert.equal(wokeBody.response.text, ACK);
 
   const summary = await post(h.app, URL_OK, aliceBody('сколько он сегодня спал'));
   const summaryBody = summary.json() as { response: { text: string } };
@@ -121,7 +123,7 @@ test('«проснулся» без открытого сна отвечает �
   const body = res.json() as { response: { text: string } };
 
   assert.equal(res.statusCode, 200);
-  assert.equal(body.response.text, 'А он и не спал. Записала, что проснулся');
+  assert.equal(body.response.text, ACK);
   assert.equal(queryEvents(h.db, { type: 'sleep' }).length, 0);
   assert.equal(queryEvents(h.db, { type: 'note' }).length, 1);
 });
@@ -133,7 +135,7 @@ test('мусорная фраза принимается и уходит в оч
   const res = await post(h.app, URL_OK, aliceBody('абырвалг колбаса'));
   const body = res.json() as { response: { text: string; end_session: boolean } };
 
-  assert.match(body.response.text, /^Приняла: «абырвалг колбаса»\. Сейчас разберу$/);
+  assert.equal(body.response.text, ACK);
   assert.equal(body.response.end_session, false);
 
   const queue = listUtterances(h.db);
@@ -268,7 +270,7 @@ test('ГЛАВНОЕ: вторая колонка того же аккаунта
 
   // Первая колонка: аккаунт A, устройство 1. Доверенных нет — запоминаем владельца.
   const first = await say(h.app, { accountId: 'account-A', applicationId: 'speaker-1' });
-  assert.match(textOf(first), /Записала/, 'первое обращение становится владельцем');
+  assert.equal(textOf(first), ACK, 'первое обращение становится владельцем');
 
   // Вторая колонка в том же доме: ТОТ ЖЕ аккаунт, ДРУГОЕ устройство и другой
   // устаревший user_id — именно на этом прод и ломался.
@@ -280,7 +282,7 @@ test('ГЛАВНОЕ: вторая колонка того же аккаунта
   });
 
   assert.equal(second.statusCode, 200);
-  assert.match(textOf(second), /проснулся/, 'вторая колонка обязана работать сразу');
+  assert.equal(textOf(second), ACK, 'вторая колонка обязана работать сразу');
   assert.equal(UNKNOWN_RE.test(textOf(second)), false, 'никакой блокировки');
 
   // И третья, и телефон — тоже
