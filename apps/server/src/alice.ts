@@ -671,7 +671,7 @@ export function registerAliceRoutes(app: FastifyInstance, ctx: AppContext): void
 }
 
 /* ------------------------------------------------------------------ */
-/* Управление устройствами из админки (за Basic Auth на уровне Caddy)   */
+/* Управление устройствами Алисы из админки (за дверью, §11)            */
 /* ------------------------------------------------------------------ */
 
 function toIdentityDto(row: ReturnType<typeof listIdentities>[number]): Record<string, unknown> {

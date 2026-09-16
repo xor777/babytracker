@@ -16,6 +16,9 @@ import type { AppContext, WorkerStatus } from './context.ts';
 import { SseHub } from './sse.ts';
 import { registerApiRoutes } from './api.ts';
 import { registerAliceRoutes, neutralReply } from './alice.ts';
+import { registerAuthGuard } from './auth-guard.ts';
+import { registerAuthRoutes } from './auth-routes.ts';
+import { RateLimiter, getSessionById } from './device-auth.ts';
 
 /**
  * Секрет вебхука — часть пути. В логи он попасть НЕ ДОЛЖЕН, поэтому маскируем
@@ -85,12 +88,16 @@ export interface CreateAppOptions {
   logger?: boolean | Record<string, unknown>;
   /** Отключить раздачу статики (тесты). */
   serveStatic?: boolean;
+  /** Подменяемые часы: тестам нужно проверять истечение кодов и сессий. */
+  now?: () => number;
 }
 
 export interface CreatedApp {
   app: FastifyInstance;
   ctx: AppContext;
   sse: SseHub;
+  /** Ограничитель частоты: тестам нужно его сбрасывать между проверками. */
+  limiter: RateLimiter;
   setWorkerStatus: (fn: () => WorkerStatus) => void;
   setWorkerNotify: (fn: () => void) => void;
 }
@@ -135,6 +142,18 @@ export function createApp(options: CreateAppOptions): CreatedApp {
 
   const sse = new SseHub({
     onError: (err) => app.log.debug({ err }, 'sse: клиент отвалился'),
+    /*
+     * Второй рубеж отзыва (§11.5). Основной — явный разрыв в момент отзыва;
+     * этот ловит то, до чего разрыв не дотягивается: истёкшую сессию и отзыв,
+     * сделанный мимо работающего сервера, командой `auth revoke` по ssh.
+     */
+    isSessionLive: (id) => {
+      const row = getSessionById(db, id);
+      if (!row || row.revoked_at) return false;
+      if (!row.expires_at) return true;
+      const until = Date.parse(row.expires_at);
+      return !Number.isFinite(until) || until > Date.now();
+    },
   });
 
   let workerStatusFn: () => WorkerStatus = options.workerStatus ?? (() => IDLE_WORKER);
@@ -150,9 +169,34 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   };
 
   /* ---------------------------------------------------------------- */
+  /* ДВЕРЬ. Ставится первой и до всего остального — это не стилистика:  */
+  /* хук `onRequest` на корневом инстансе видит и статику, и SPA-       */
+  /* fallback, и обработчик 404, то есть все пути, которыми ответ может */
+  /* уйти мимо маршрута. Любая регистрация выше этой строки означала бы */
+  /* дыру ровно того размера, что она раздаёт.                          */
+  /* ---------------------------------------------------------------- */
+  const limiter = new RateLimiter(options.now);
+  registerAuthGuard(app, ctx, options.now ? { now: options.now } : {});
+
+  /* ---------------------------------------------------------------- */
   /* CORS: нужен в dev-режиме, когда Vite крутится на 5173 отдельно.    */
   /* ---------------------------------------------------------------- */
   const allowedOrigins = cfg.dashboardOrigin;
+  /*
+   * `credentials: false` остаётся и после переезда на куки (§11) — это не
+   * недосмотр.
+   *
+   * Соблазн есть: раз сессия теперь в куке, кажется логичным разрешить её
+   * отправку на перечисленные origin. Но она там не нужна ни разу: в dev оба
+   * интерфейса ходят к API через прокси Vite, то есть с того же origin, а в
+   * бою всё отдаётся одним сервером. Зато цена ошибки высокая — `credentials`
+   * вместе с отражением Origin открыл бы чтение истории ребёнка любому сайту
+   * в соседней вкладке.
+   *
+   * Поэтому кросс-доменный запрос сюда просто приходит без куки и получает
+   * честный 401. Если когда-нибудь фронт действительно переедет на отдельный
+   * домен, включать это надо вместе с поимённым списком origin — и осознанно.
+   */
   void app.register(cors, {
     origin:
       allowedOrigins.length === 0 || allowedOrigins.includes('*')
@@ -260,6 +304,7 @@ export function createApp(options: CreateAppOptions): CreatedApp {
   }
 
   /* ---------------------------------------------------------------- */
+  registerAuthRoutes(app, ctx, options.now ? { limiter, now: options.now } : { limiter });
   registerApiRoutes(app, ctx);
   registerAliceRoutes(app, ctx);
 
@@ -306,6 +351,7 @@ export function createApp(options: CreateAppOptions): CreatedApp {
     app,
     ctx,
     sse,
+    limiter,
     setWorkerStatus: (fn) => {
       workerStatusFn = fn;
     },

@@ -153,6 +153,66 @@ ALTER TABLE utterances ADD COLUMN reparse_count INTEGER NOT NULL DEFAULT 0;
 `;
 
 /**
+ * §11 — авторизация устройств по коду вместо basic auth.
+ *
+ * Миграция строго аддитивная: две новые таблицы, ни одного ALTER и ни одного
+ * DROP. Боевая база содержит невосполнимую историю ребёнка, её мигрируют,
+ * а не пересоздают; всё, что делает эта версия, — добавляет рядом пустые
+ * таблицы, и откат к предыдущему коду их просто не замечает.
+ *
+ * Секретов в открытом виде здесь нет:
+ *  - `token_hash` — sha256 от куки. Файл базы, утёкший целиком, войти не даёт;
+ *  - `device_code_hash` — sha256 от секрета опроса, по той же причине;
+ *  - `user_code` лежит как есть, и это осознанно: короткий код показывается
+ *    одобряющему, чтобы он сверил его с экраном телевизора (RFC 8628 §3.3.1).
+ *    Хеш сделал бы экран одобрения невозможным, а защищает этот код не тайна
+ *    хранения, а десять минут жизни и ограничитель попыток.
+ */
+const SCHEMA_V5 = `
+CREATE TABLE IF NOT EXISTS device_sessions (
+  id            TEXT PRIMARY KEY,       -- публичный id для списка и отзыва
+  token_hash    TEXT NOT NULL UNIQUE,   -- sha256 секрета из куки
+  kind          TEXT NOT NULL,          -- 'tv' | 'phone' | 'browser'
+  label         TEXT,
+  user_agent    TEXT,
+  created_at    TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  expires_at    TEXT,                   -- NULL = бессрочно (телевизор)
+  revoked_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_sessions_live
+  ON device_sessions(revoked_at, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS device_codes (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_code_hash  TEXT NOT NULL UNIQUE,
+  user_code         TEXT NOT NULL,
+  kind              TEXT NOT NULL,
+  label             TEXT,
+  user_agent        TEXT,
+  status            TEXT NOT NULL,      -- pending|approved|claimed|denied|expired
+  created_at        TEXT NOT NULL,
+  expires_at        TEXT NOT NULL,
+  approved_at       TEXT,
+  approved_by       TEXT,
+  claimed_at        TEXT,
+  session_id        TEXT,
+  last_polled_at    TEXT,
+  interval_sec      INTEGER NOT NULL DEFAULT 5
+);
+
+-- Два одновременно ждущих устройства с одинаковым коротким кодом означали бы,
+-- что одобрение уходит не тому. Частичный индекс делает это невозможным,
+-- не мешая истории хранить давно погашенные коды.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_codes_pending
+  ON device_codes(user_code) WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_device_codes_status
+  ON device_codes(status, created_at DESC);
+`;
+
+/**
  * Список миграций. Индекс + 1 == user_version после применения.
  * Добавлять только в конец, никогда не переписывать уже вышедшие.
  */
@@ -168,6 +228,9 @@ const MIGRATIONS: ReadonlyArray<(db: Db) => void> = [
   },
   (db) => {
     db.exec(SCHEMA_V4);
+  },
+  (db) => {
+    db.exec(SCHEMA_V5);
   },
 ];
 
@@ -212,7 +275,12 @@ export function migrate(db: Db): void {
     const migration = MIGRATIONS[version];
     if (!migration) continue;
     // node:sqlite не поддерживает параметры в PRAGMA, версия — число из кода, не из ввода.
-    db.exec('BEGIN');
+    //
+    // IMMEDIATE, а не отложенный BEGIN: с отложенным блокировка повышается уже
+    // посреди DDL, и живой второй писатель (воркер, MCP-сервер) способен
+    // уронить апгрейд в SQLITE_BUSY на полпути. Остальной код проекта
+    // (inTransaction ниже) по той же причине берёт блокировку сразу.
+    db.exec('BEGIN IMMEDIATE');
     try {
       migration(db);
       db.exec(`PRAGMA user_version = ${version + 1}`);

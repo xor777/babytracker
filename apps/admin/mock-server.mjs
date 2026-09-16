@@ -24,6 +24,7 @@
  *
  *   node mock-server.mjs              → http://localhost:8787
  *   MOCK_401=1 node mock-server.mjs              → /api отвечает 401
+ *                                                  (проверить уход на /pair)
  *   MOCK_EMPTY=1 node mock-server.mjs            → только вес при рождении:
  *                                                  проверить экраны на пустой базе
  *   MOCK_NO_UTTERANCES=1 node mock-server.mjs    → падает только /api/utterances:
@@ -897,11 +898,53 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (FORCE_401) {
-    res.writeHead(401, {
-      'www-authenticate': 'Basic realm="babytracker"',
-      'content-type': 'application/json; charset=utf-8',
+    // Как отвечает настоящая дверь (§11): без www-authenticate — окна ввода
+    // пароля больше нет, вместо него экран сопряжения.
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ error: 'unauthorized', pair: '/pair' }));
+  }
+
+  // Экран «Устройства» (§11). В моке сопряжение не имитируется целиком: нужны
+  // именно данные для вёрстки — заявка с кодом и пара подключённых устройств.
+  if (pathname === '/api/devices') {
+    return json(res, 200, {
+      pending: [
+        {
+          id: 1,
+          userCode: 'WDJB-MJHT',
+          kind: 'tv',
+          label: 'Телевизор',
+          requestedAt: iso(Date.now() - 40_000),
+          expiresAt: iso(Date.now() + 560_000),
+          secondsLeft: 560,
+        },
+      ],
+      sessions: [
+        {
+          id: 'mock-phone',
+          kind: 'phone',
+          label: 'iPhone',
+          createdAt: iso(Date.now() - 86_400_000 * 9),
+          lastSeenAt: iso(Date.now() - 120_000),
+          expiresAt: iso(Date.now() + 86_400_000 * 90),
+          current: true,
+        },
+        {
+          id: 'mock-tv',
+          kind: 'tv',
+          label: 'Телевизор в детской',
+          createdAt: iso(Date.now() - 86_400_000 * 40),
+          lastSeenAt: iso(Date.now() - 5_000),
+          expiresAt: null,
+          current: false,
+        },
+      ],
+      codeTtlSec: 600,
     });
-    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
+
+  if (/^\/api\/(devices|auth)\//.test(pathname) && req.method === 'POST') {
+    return json(res, 200, { ok: true });
   }
 
   if (pathname === '/api/state') return json(res, 200, buildState());

@@ -198,6 +198,9 @@ export function useTracker(): TrackerData {
 
     const connect = () => {
       if (closed) return;
+      // Куку сессии (§11) EventSource отправляет сам: поток всегда с того же
+      // origin. Это и есть выигрыш по сравнению с basic auth, при котором
+      // EventSource не умел слать Authorization вовсе.
       es = new EventSource(apiUrl('/api/stream'));
 
       es.onopen = () => {

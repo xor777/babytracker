@@ -30,8 +30,16 @@ val dashboardHosts: String =
         ?: runCatching { URI(dashboardUrl).host }.getOrNull().orEmpty()
 
 /**
- * HTTP Basic для закрытого Caddy. Приоритет тот же, что у DASHBOARD_URL.
- * Пусто (дефолт) = аутентификации нет, приложение работает как раньше.
+ * HTTP Basic для закрытого Caddy — УСТАРЕЛО и больше не требуется.
+ *
+ * Вход теперь по коду сопряжения (CONTRACT §11): сервер сам показывает код,
+ * человек одобряет его с телефона, телевизор получает сессию в куке. Пароль
+ * в сборке не нужен — а это ровно тот пароль, из-за которого репозиторий
+ * обязан был быть приватным: он лежал в APK открытым текстом и доставался
+ * оттуда одной командой.
+ *
+ * Параметры оставлены до снятия basic auth на боевом сервере, чтобы APK из
+ * этой ветки работал и со старым сервером. После переезда собирайте БЕЗ них.
  *
  * Настоящий пароль в gradle.properties проекта не кладём: только `-PDASHBOARD_PASSWORD=...`
  * или ~/.gradle/gradle.properties. Логин с паролем ниже нигде не логируются.
@@ -131,7 +139,7 @@ tasks.register("printDashboardUrl") {
     doLast {
         println("DASHBOARD_URL       = $url")
         println("DASHBOARD_URL_HOSTS = $hosts")
-        println("DASHBOARD_USER      = ${user.ifEmpty { "(не задан — аутентификации не будет)" }}")
-        println("DASHBOARD_PASSWORD  = ${if (hasPassword) "(задан)" else "(не задан)"}")
+        println("DASHBOARD_USER      = ${user.ifEmpty { "(не задан — так и надо, вход по коду)" }}")
+        println("DASHBOARD_PASSWORD  = ${if (hasPassword) "(задан — нужен только старому серверу)" else "(не задан — так и надо)"}")
     }
 }

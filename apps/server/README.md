@@ -49,7 +49,10 @@ pnpm start
 | `WORKER_ENABLED` | `true` | Выключает фоновый разбор |
 | `LLM_QUEUE_POLICY` | `smart` | Когда звать модель: `smart` / `all` / `unknown` (§9.4) |
 | `LLM_CONFIDENCE_THRESHOLD` | `0.8` | Ниже этой уверенности fast-path зовём модель |
-| `DASHBOARD_ORIGIN` | пусто | Разрешённые CORS-origin через запятую (для Vite на 5173). Пусто или `*` = разрешать всем |
+| `DASHBOARD_ORIGIN` | пусто | Разрешённые CORS-origin через запятую (для Vite на 5173). Пусто или `*` = разрешать всем. Учётные данные CORS **не разрешает никогда** — см. «Аутентификация» |
+| `AUTH_COOKIE_SECURE` | `true` | Флаг `Secure` на куке сессии. `false` — **только** локальная разработка без TLS; сервер предупреждает при каждом старте |
+| `PAIR_CODE_TTL_SEC` | `600` | Срок жизни короткого кода сопряжения, 60..3600 |
+| `SESSION_TTL_DAYS` | `90` | Скользящий срок сессии телефона от последнего обращения. Сессия телевизора **бессрочна** независимо от этого значения |
 | `DASHBOARD_DIST` | `../dashboard/dist` | Каталог собранного дашборда телевизора, раздаётся по `/` |
 | `ADMIN_DIST` | `../admin/dist` | Каталог собранной админки, раздаётся по `/dash` |
 | `LOG_LEVEL` | `info` | Уровень pino |
@@ -138,19 +141,33 @@ curl -s -X POST "$B/alice/$SECRET" -H 'Content-Type: application/json' -d '{
 curl -s -X POST "$B/alice/ffffffffffffffffffffffffffffffff" -H 'Content-Type: application/json' \
   -d '{"session":{"user_id":"x"},"request":{"command":"андрей заснул"},"version":"1.0"}'
 
-# REST
-curl -s "$B/api/state"
-curl -s "$B/api/events?limit=5"
-curl -s "$B/api/sleep/daily?days=14"
-curl -s "$B/api/utterances?limit=10"
-curl -s "$B/healthz"
+# REST — всё, кроме /healthz, закрыто сессией устройства (§11).
+# Получить её для curl: node src/auth-cli.ts issue --label curl
+C="bt_session=<секрет из auth issue>"
+
+curl -s --cookie "$C" "$B/api/state"
+curl -s --cookie "$C" "$B/api/events?limit=5"
+curl -s --cookie "$C" "$B/api/sleep/daily?days=14"
+curl -s --cookie "$C" "$B/api/utterances?limit=10"
+curl -s "$B/healthz"                      # открыт без куки
+
+# без куки — 401, и это надо проверять регулярно
+curl -s -o /dev/null -w '%{http_code}\n' "$B/api/state"     # 401
+curl -s -o /dev/null -w '%{http_code}\n' "$B/"              # 401
+curl -s -o /dev/null -w '%{http_code}\n' "$B/pair"          # 200
 
 # ручная запись события (отладка)
-curl -s -X POST "$B/api/events" -H 'Content-Type: application/json' \
+curl -s --cookie "$C" -X POST "$B/api/events" -H 'Content-Type: application/json' \
   -d '{"type":"feed","subtype":"bottle","value_num":120,"value_unit":"ml"}'
 
 # SSE: держите открытым в соседнем терминале и шлите события из первого
-curl -sN "$B/api/stream"
+curl -sN --cookie "$C" "$B/api/stream"
+
+# сопряжение целиком, без браузера
+curl -s -X POST "$B/api/device/code" -H 'Content-Type: application/json' -d '{"kind":"tv"}'
+node src/auth-cli.ts approve <КОД-С-ЭКРАНА>
+curl -s -i -X POST "$B/api/device/token" -H 'Content-Type: application/json' \
+  -d '{"device_code":"<длинный код из первого ответа>"}'   # в ответе Set-Cookie
 ```
 
 В потоке SSE должны быть: `retry:`, `event: state` сразу после подключения, затем
@@ -207,8 +224,8 @@ curl -s "$B/api/alice/identities"
 ```
 
 `skill_id` запоминается по первому обращению (`ALICE_SKILL_ID` в env, если задан, остаётся
-жёстким рубежом). Ручки `/api/alice/*` закрыты Basic Auth на уровне Caddy вместе с остальным
-`/api/*`.
+жёстким рубежом). Ручки `/api/alice/*` закрыты сессией устройства (§11) вместе с остальным
+`/api/*`. Сам вебхук `/alice/*` при этом открыт: Алиса не умеет ни кук, ни basic auth.
 
 ### Насколько это вообще нужно
 
@@ -513,21 +530,48 @@ curl -s "$B/api/events?include_deleted=true"   # посмотреть, что б
 Каждая норма отдаётся с пояснением текстом, чтобы дашборд не выдавал ориентир
 за жёсткий порог.
 
-## Аутентификация
+## Аутентификация: устройства по коду (§11)
 
-HTTP Basic Auth навешивается **на уровне Caddy**, в сервере своей аутентификации нет
-и ничто ей не мешает. Закрывать надо `/dash` (включая `/dash/assets/*`) и `/api/*`;
-без аутентификации обязаны остаться ровно два пути:
+Раньше сторожил Caddy, и сторожил всё скопом. Теперь проверка — **дело приложения**,
+и живёт она в одном месте: `src/auth-guard.ts`, хук `onRequest` на корневом инстансе,
+поставленный **до регистрации чего бы то ни было**.
 
-- `/alice/<секрет>` — Алиса не умеет basic auth, её защищает секрет в пути;
-- `/healthz` — нужен мониторингу и скрипту выкатки.
+Порядок регистрации здесь не стилистика. У Fastify несколько способов отдать ответ мимо
+обработчика маршрута — статика, SPA-fallback, обработчик 404 — и забыть любой из них
+значит открыть историю ребёнка молча: ответ будет выглядеть совершенно обычным. Что хук
+видит их все, проверено опытом (`test/device-auth-guard.test.ts`), а не предположением.
 
-Заголовок `Authorization` вырезается из логов (`redact`), как и `Cookie`.
+Открыт **явный перечень**, а не правило «всё, кроме»: правило «всё, кроме» ошибается
+в сторону открытости.
 
-Учтите при настройке: `GET /api/stream` — это SSE, а `EventSource` не умеет слать
-заголовок `Authorization`. В браузере это работает за счёт того, что учётные данные
-уже сохранены для origin после первого запроса; Android-приложение отдаёт их
-через обработчик аутентификации в WebView.
+| открыто | зачем |
+|---|---|
+| `/healthz` | мониторинг и скрипт выкатки |
+| `/alice`, `/alice/*` | вебхук: Алиса не умеет ни кук, ни basic auth |
+| `/pair` | страница сопряжения (один самодостаточный HTML, `src/pair-page.ts`) |
+| `/api/device/code`, `/api/device/token` | два эндпоинта потока |
+
+Закрыто всё остальное: статика дашборда и её ассеты, `/dash` вместе с `sw.js` и манифестом,
+`/api/*`, SSE, SPA-fallback, несуществующие пути.
+
+Сверка идёт по **сырому пути**, без декодирования процентов: декодировать здесь и не
+декодировать в роутере значило бы открыть `/%68ealthz` как `/healthz`, а отдать по нему
+SPA-fallback, то есть дашборд.
+
+Форма отказа зависит от того, кто спрашивает: переход в браузере получает `303` на
+`/pair?next=…`, всё остальное — честный `401`. Редирект в ответ на `fetch` за JSON
+превратился бы в «неожиданный HTML вместо данных».
+
+**SSE здесь удобнее, а не сложнее.** `EventSource` не умеет слать `Authorization` — это и
+было главным неудобством basic auth. Кука уходит сама, без единой строчки на клиенте.
+Взамен появляется обязанность: отзыв устройства должен рвать **уже открытый** поток
+(`SseHub.closeSession`), иначе отозванный телевизор получал бы события ребёнка часами —
+двери он больше не показывается.
+
+Заголовки `Authorization` и `Cookie` вырезаются из логов (`redact`).
+
+Первое устройство одобряется командой на сервере — `src/auth-cli.ts`, см. docs/DEPLOY.md.
+Лазейки в HTTP для этого нет намеренно.
 
 ## Тесты и типы
 

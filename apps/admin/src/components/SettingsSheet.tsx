@@ -7,6 +7,9 @@ interface Props {
   onChoose: (mode: ThemeMode) => void;
   cachedAt: string | null;
   online: boolean;
+  /** Сколько устройств ждёт одобрения — чтобы показать это прямо на кнопке. */
+  pendingDevices: number;
+  onDevices: () => void;
   onClose: () => void;
 }
 
@@ -20,7 +23,15 @@ const MODES: { id: ThemeMode; label: string }[] = [
  * Настройки. Живут за неприметной кнопкой в шапке: темой пользуются один раз,
  * и место на главном экране она не заслужила.
  */
-export function SettingsSheet({ mode, onChoose, cachedAt, online, onClose }: Props) {
+export function SettingsSheet({
+  mode,
+  onChoose,
+  cachedAt,
+  online,
+  pendingDevices,
+  onDevices,
+  onClose,
+}: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -76,6 +87,25 @@ export function SettingsSheet({ mode, onChoose, cachedAt, online, onClose }: Pro
                 : cachedAt
                   ? `Сервер не ответил — данные от ${formatWhen(cachedAt)}.`
                   : 'Данные свежие.'}
+            </p>
+          </div>
+
+          <div className="field">
+            <span className="field__label">Устройства</span>
+            <button
+              type="button"
+              className="btn"
+              style={{ width: '100%' }}
+              onClick={onDevices}
+            >
+              Одобрить и отозвать
+              {pendingDevices > 0 ? (
+                <span className="devrow__badge">ждут: {pendingDevices}</span>
+              ) : null}
+            </button>
+            <p className="field__hint">
+              Кто подключён к дневнику и кто просится. Потерянный телефон отзывается
+              здесь одним нажатием.
             </p>
           </div>
 

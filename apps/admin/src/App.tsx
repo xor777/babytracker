@@ -3,12 +3,14 @@ import { useTheme } from './hooks/useTheme';
 import { useConnection } from './hooks/useConnection';
 import { SettingsSheet } from './components/SettingsSheet';
 import { formatWhen } from './lib/format';
-import { fetchState } from './api';
+import { fetchState, goToPairing } from './api';
 import { ApiError } from './types';
 import { useHashRoute } from './hooks/useHashRoute';
 import { OverviewScreen } from './components/OverviewScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { StatsScreen } from './components/StatsScreen';
+import { DevicesScreen } from './components/DevicesScreen';
+import { useDevices } from './hooks/useDevices';
 import { plural } from './lib/format';
 
 interface Child {
@@ -35,6 +37,16 @@ export function App() {
   const [settings, setSettings] = useState(false);
   const theme = useTheme();
   const link = useConnection();
+  /*
+   * Заявки опрашиваем всегда, пока приложение открыто. Это единственный
+   * способ узнать, что перед телевизором кто-то стоит и ждёт: сам телевизор
+   * сказать об этом не может, а искать экран устройств «на всякий случай»
+   * никто не станет.
+   */
+  const devices = useDevices(
+    authBlocked ? 'off' : route === 'devices' ? 'active' : 'idle',
+  );
+  const waiting = devices.pending.length;
 
   useEffect(() => {
     const ac = new AbortController();
@@ -54,9 +66,14 @@ export function App() {
   const onBusy = useCallback((value: boolean) => setBusy(value), []);
 
   /**
-   * 401 приходит от Basic Auth на Caddy (§10.4). Броузер спрашивает пароль сам,
-   * но если сессия отвалилась посреди работы — fetch просто получает 401 и молчит.
-   * Поэтому говорим прямо: нужна перезагрузка, тогда снова появится окно входа.
+   * 401 означает, что сессии устройства больше нет: её отозвали, она истекла
+   * или приложение открылось из офлайн-кэша, пережившего выход (§11).
+   *
+   * Перезагрузка здесь не поможет и даже вредна: service worker честно отдаст
+   * сохранённую оболочку, и человек будет по кругу видеть работающее на вид
+   * приложение, которое не может получить ни одной цифры. Поэтому уводим на
+   * страницу сопряжения — и по дороге стираем офлайн-кэш, чтобы приложение
+   * не показывало историю ребёнка из памяти телефона после выхода.
    */
   if (authBlocked) {
     return (
@@ -73,17 +90,18 @@ export function App() {
 
       <main className="main">
           <p className="placeholder">
-            <span className="placeholder__big">Нужен вход</span>
-            Сервер просит логин и пароль. Обновите страницу — браузер спросит их снова.
+            <span className="placeholder__big">Сессия завершена</span>
+            Это устройство больше не подключено к дневнику. Подключите его заново:
+            откроется экран с кодом, который нужно одобрить с другого устройства.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <button
               type="button"
               className="btn btn--primary"
               style={{ flex: 'none' }}
-              onClick={() => window.location.reload()}
+              onClick={() => goToPairing()}
             >
-              Обновить страницу
+              Подключить устройство
             </button>
           </div>
         </main>
@@ -167,10 +185,22 @@ export function App() {
         </div>
       ) : null}
 
+      {waiting > 0 && route !== 'devices' ? (
+        <div className="banner" role="status">
+          {waiting === 1
+            ? 'Устройство просит доступ'
+            : `${waiting} ${plural(waiting, 'устройство', 'устройства', 'устройств')} просят доступ`}
+          <button type="button" className="banner__btn" onClick={() => go('devices')}>
+            Посмотреть
+          </button>
+        </div>
+      ) : null}
+
       <main className="main">
         {route === 'overview' ? <OverviewScreen /> : null}
         {route === 'stats' ? <StatsScreen /> : null}
         {route === 'history' ? <HistoryScreen onBusy={onBusy} /> : null}
+        {route === 'devices' ? <DevicesScreen devices={devices} /> : null}
       </main>
 
       {settings ? (
@@ -179,6 +209,11 @@ export function App() {
           onChoose={theme.choose}
           cachedAt={link.cachedAt}
           online={link.online}
+          pendingDevices={waiting}
+          onDevices={() => {
+            setSettings(false);
+            go('devices');
+          }}
           onClose={() => setSettings(false)}
         />
       ) : null}

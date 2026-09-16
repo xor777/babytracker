@@ -22,6 +22,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -266,6 +267,8 @@ class MainActivity : Activity() {
             overlay.defaultFocusHighlightEnabled = false
         }
 
+        setUpCookies()
+
         with(web.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -311,6 +314,11 @@ class MainActivity : Activity() {
                     view?.clearHistory()
                     historyDirty = false
                 }
+                // Страница загрузилась — если это был возврат со страницы
+                // сопряжения, кука сессии пришла прямо сейчас. Сбрасываем её
+                // на диск немедленно: телевизор чаще выключают из розетки,
+                // чем закрывают приложение, и onPause в этом случае не будет.
+                flushCookies()
                 showContent()
             }
 
@@ -427,9 +435,60 @@ class MainActivity : Activity() {
         return true
     }
 
+    // ------------------------------------------------------------ Куки
+
+    /**
+     * Сессия устройства (CONTRACT §11) живёт в куке, и её нужно хранить.
+     *
+     * Без этого телевизор проходил бы сопряжение при каждом включении: код на
+     * экране, поход за телефоном, одобрение — и так каждое утро. Приём кук
+     * включается явно, потому что умолчание зависит от прошивки и версии
+     * System WebView, а полагаться тут не на что: ошибка проявится не сразу,
+     * а через сутки, на первом же перезапуске.
+     */
+    private fun setUpCookies() {
+        try {
+            val cookies = CookieManager.getInstance()
+            cookies.setAcceptCookie(true)
+            // Дашборд и сервер на одном origin, но WebView внутри приложения
+            // умеет считать куки «сторонними». Разрешаем явно.
+            cookies.setAcceptThirdPartyCookies(web, true)
+        } catch (e: Exception) {
+            // Отсутствующий или обновляющийся System WebView. Приложение
+            // должно подняться и показать внятную ошибку, а не упасть.
+            Log.w(TAG, "CookieManager недоступен", e)
+        }
+    }
+
+    /**
+     * Сбросить куки на диск.
+     *
+     * CookieManager держит их в памяти и пишет когда сочтёт нужным. Телевизор
+     * же выключают из розетки: onPause может не случиться вовсе, и сессия
+     * пропадёт вместе с несохранённой кукой.
+     */
+    private fun flushCookies() {
+        try {
+            CookieManager.getInstance().flush()
+        } catch (e: Exception) {
+            Log.w(TAG, "не удалось сбросить куки на диск", e)
+        }
+    }
+
     // ------------------------------------------------------ Аутентификация
 
     /**
+     * УСТАРЕВШЕЕ. Путь входа теперь — сопряжение по коду (CONTRACT §11): сервер
+     * сам уводит на страницу с кодом, Kotlin для этого не нужен вовсе, и пароля
+     * в сборке больше не требуется. Это заметный выигрыш: пароль был зашит
+     * в APK, и только поэтому репозиторий обязан был быть приватным.
+     *
+     * Код оставлен до тех пор, пока боевой сервер ещё за Caddy: собранный из
+     * этой ветки APK должен работать и со старым сервером, и с новым. Удалять
+     * его следует после того, как basic auth снят на сервере, — не раньше.
+     *
+     * Ниже — как это работало.
+     *
      * Дашборд закрыт HTTP Basic на Caddy, а у телевизора есть пульт и нет клавиатуры —
      * пароль вводить некому. Отдаём его сами.
      *
@@ -782,6 +841,10 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        // Куки WebView живут в памяти и попадают на диск лениво. Без явного
+        // сброса сессия, полученная после сопряжения, может не пережить
+        // выключение телевизора — и наутро вместо дневника снова будет код.
+        flushCookies()
         web.onPause()
         super.onPause()
     }

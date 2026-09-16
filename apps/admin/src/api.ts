@@ -52,9 +52,64 @@ function noteFreshness(res: Response): void {
   for (const fn of freshnessListeners) fn(cachedAt);
 }
 
-/** Человеческий текст вместо «HTTP 401». Basic Auth стоит на Caddy (§10.4). */
+/* ------------------------------------------------------------------
+ * Сессия устройства (§11).
+ * ------------------------------------------------------------------ */
+
+export const PAIR_PATH = '/pair';
+
+/**
+ * Забыть всё, что приложение отложило про запас.
+ *
+ * Это не уборка ради чистоты, а необходимая часть выхода. Админка — PWA с
+ * service worker'ом, который держит в кэше и оболочку приложения, и последние
+ * ответы API, чтобы телефон без сети показывал вчерашние цифры вместо белого
+ * экрана. После выхода из сессии этот же кэш означал бы, что человек,
+ * взявший потерянный телефон, открывает приложение и видит историю ребёнка —
+ * пусть устаревшую, но настоящую, и без всякого сервера.
+ *
+ * Поэтому на выходе кэши сносятся, а воркер снимается с регистрации.
+ */
+export async function purgeOfflineData(): Promise<void> {
+  // Сначала просим сам воркер забыть кэши: он может положить что-то обратно
+  // между нашей уборкой и снятием регистрации.
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'bt-forget' });
+  } catch {
+    /* воркера может не быть вовсе */
+  }
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    }
+  } catch {
+    // Приватный режим или запрет хранилища — выходу это не мешает.
+  }
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((reg) => reg.unregister()));
+    }
+  } catch {
+    /* см. выше */
+  }
+}
+
+let leaving = false;
+
+/** Сессии нет — на экран сопряжения. Навигацию начинаем один раз. */
+export function goToPairing(): void {
+  if (leaving) return;
+  leaving = true;
+  void purgeOfflineData().finally(() => {
+    window.location.replace(`${PAIR_PATH}?next=%2Fdash`);
+  });
+}
+
+/** Человеческий текст вместо «HTTP 401». Дверь стоит в приложении (§11). */
 function describe(status: number, path: string): string {
-  if (status === 401) return 'Нужен вход: обновите страницу и введите логин и пароль.';
+  if (status === 401) return 'Сессия завершена. Подключите устройство заново.';
   if (status === 403) return 'Доступ закрыт.';
   if (status === 400) return `Сервер не принял запрос ${path}.`;
   if (status === 404 || status === 405) return `Сервер пока не умеет ${path}.`;
@@ -74,6 +129,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...init?.headers,
       },
       cache: 'no-store',
+      // Кука сессии (§11). Явно `same-origin`: другого origin здесь не бывает.
+      credentials: 'same-origin',
     });
   } catch (cause) {
     if ((cause as Error)?.name === 'AbortError') throw cause;
@@ -256,4 +313,71 @@ export async function fetchStats(days = 7, signal?: AbortSignal): Promise<StatsR
   // «сегодня» определяется датой, а не позицией в массиве.
   parsed.sort((a, b) => b.date.localeCompare(a.date));
   return { days: parsed };
+}
+
+/* ------------------------------------------------------------------
+ * Устройства (§11): кто ждёт одобрения и кто уже подключён.
+ * ------------------------------------------------------------------ */
+
+export interface PendingDevice {
+  id: number;
+  /** Код в том виде, в каком он написан на экране устройства: XXXX-XXXX. */
+  userCode: string;
+  kind: string;
+  label: string | null;
+  requestedAt: string;
+  expiresAt: string;
+  secondsLeft: number;
+}
+
+export interface DeviceSession {
+  id: string;
+  kind: string;
+  label: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  /** null — бессрочно (телевизор). */
+  expiresAt: string | null;
+  /** Это устройство, с которого смотрят прямо сейчас. */
+  current: boolean;
+}
+
+export interface DevicesResponse {
+  pending: PendingDevice[];
+  sessions: DeviceSession[];
+  codeTtlSec: number;
+}
+
+export async function fetchDevices(signal?: AbortSignal): Promise<DevicesResponse> {
+  const payload = await request<any>('/api/devices', { signal });
+  return {
+    pending: Array.isArray(payload?.pending) ? payload.pending : [],
+    sessions: Array.isArray(payload?.sessions) ? payload.sessions : [],
+    codeTtlSec: typeof payload?.codeTtlSec === 'number' ? payload.codeTtlSec : 600,
+  };
+}
+
+export async function approvePending(id: number): Promise<void> {
+  await request(`/api/devices/pending/${id}/approve`, { method: 'POST' });
+}
+
+export async function denyPending(id: number): Promise<void> {
+  await request(`/api/devices/pending/${id}/deny`, { method: 'POST' });
+}
+
+/** Отзыв устройства. Сервер рвёт и уже открытый поток событий. */
+export async function revokeDevice(id: string): Promise<void> {
+  await request(`/api/devices/${encodeURIComponent(id)}/revoke`, { method: 'POST' });
+}
+
+/**
+ * Выход. Сначала сервер гасит сессию, потом стираем офлайн-кэш: обратный
+ * порядок оставил бы на телефоне работающее приложение с живой сессией.
+ */
+export async function logout(): Promise<void> {
+  try {
+    await request('/api/auth/logout', { method: 'POST' });
+  } finally {
+    await purgeOfflineData();
+  }
 }
