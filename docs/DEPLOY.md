@@ -186,8 +186,11 @@ ssh $BABYTRACKER_HOST 'curl -s -o /dev/null -w "%{http_code}\n" localhost:8787/h
 # 3. Выпустить себе первую сессию (см. выше) и убедиться, что дневник открывается.
 
 # 4. Только теперь снять basic auth с Caddy.
-BABYTRACKER_DOMAIN=bt.adbgw.ru,bt.nuanu.ai \
-  ssh $BABYTRACKER_HOST 'bash -s' < infra/provision.sh
+#    Переменную окружения перед ssh ставить БЕСПОЛЕЗНО: она останется на твоей
+#    машине, удалённый bash её не увидит (ssh не пробрасывает окружение без
+#    SendEnv/AcceptEnv). Оба домена и так стоят значением по умолчанию внутри
+#    самого provision.sh — менять их надо там, а не здесь.
+ssh $BABYTRACKER_HOST 'bash -s' < infra/provision.sh
 
 # 5. Пересобрать APK телевизора — уже БЕЗ пароля — и поставить:
 cd apps/tv && ./gradlew assembleDebug -PDASHBOARD_URL=https://bt.nuanu.ai
