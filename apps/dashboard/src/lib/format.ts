@@ -77,10 +77,6 @@ export function formatMinutes(min: number | null | undefined): string {
   return showHours ? `${h} ч ${m} м` : `${m} м`;
 }
 
-export function formatDurationMs(ms: number): string {
-  return formatMinutes(Math.round(ms / MINUTE));
-}
-
 /** Склонение: 198 суток / 201 сутки */
 export function plural(n: number, one: string, few: string, many: string): string {
   const mod10 = n % 10;

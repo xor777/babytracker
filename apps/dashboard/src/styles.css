@@ -747,20 +747,6 @@ body {
   letter-spacing: 0.02em;
 }
 
-.bar-value--today {
-  font-size: 24px;
-  fill: var(--violet);
-}
-
-.bar-day {
-  font-size: 24px;
-  fill: var(--text-dim);
-}
-
-.bar-day--today {
-  fill: var(--cyan-soft);
-}
-
 .seg-appear {
   animation: seg-appear 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

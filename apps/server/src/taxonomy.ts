@@ -91,20 +91,6 @@ export function isKnownSubtype(type: EventType, subtype: string | null | undefin
   return spec.subtypes.includes(subtype);
 }
 
-/** Текстовая таблица таксономии для промпта. */
-export function taxonomyForPrompt(): string {
-  return EVENT_TYPES.map((type) => {
-    const spec = TAXONOMY[type];
-    const subtypes = spec.freeSubtype
-      ? 'свободный текст'
-      : spec.subtypes.length > 0
-        ? spec.subtypes.join(' | ')
-        : '—';
-    const units = spec.units.length > 0 ? spec.units.join(', ') : '—';
-    return `- ${type.padEnd(9)} subtype: ${subtypes}\n  ${'единицы:'.padEnd(10)} ${units}. ${spec.hint}`;
-  }).join('\n');
-}
-
 /* ------------------------------------------------------------------ */
 /* Нормы AAP (§10.1) — для подсказок на дашборде                        */
 /* ------------------------------------------------------------------ */

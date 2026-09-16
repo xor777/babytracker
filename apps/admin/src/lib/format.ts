@@ -148,16 +148,6 @@ export function splitStopwatch(ms: number): { hm: string; sec: string } {
   return { hm: h > 0 ? `${h}:${pad2(m)}` : String(m), sec: pad2(s) };
 }
 
-/** «20 минут назад», «1 ч 10 мин назад», «вчера в 23:40». */
-export function formatAgo(value: string | number | null | undefined, now = Date.now()): string {
-  const ms = typeof value === 'number' ? value : parseTs(value);
-  if (ms == null) return '—';
-  const diff = now - ms;
-  if (diff < MINUTE) return 'только что';
-  if (diff < DAY) return `${formatMinutes(Math.round(diff / MINUTE))} назад`;
-  return formatWhen(ms);
-}
-
 export function formatNumber(value: number | null | undefined, digits = 0): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return value.toFixed(digits).replace('.', ',');
