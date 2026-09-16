@@ -29,6 +29,12 @@
  *                                                  проверить экраны на пустой базе
  *   MOCK_NO_UTTERANCES=1 node mock-server.mjs    → падает только /api/utterances:
  *                                                  цитаты обязаны остаться на месте
+ *   MOCK_RECORDED_DAYS=2 node mock-server.mjs    → случай заказчика: ребёнку две
+ *                                                  недели, записи только за двое
+ *                                                  последних суток
+ *   CHILD_BIRTHDATE=2026-08-16 MOCK_RECORDED_DAYS=30 node mock-server.mjs
+ *                                                → месяц полных записей: как будет
+ *                                                  через месяц
  *
  * Если рядом лежит ./dist — отдаёт его по /dash, как это будет делать настоящий сервер.
  */
@@ -42,6 +48,15 @@ const CHILD_NAME = process.env.CHILD_NAME ?? 'Андрей';
 const CHILD_BIRTHDATE = process.env.CHILD_BIRTHDATE ?? '2026-09-02';
 /** MOCK_EMPTY=1 — как на проде у двухнедельного: только вес при рождении. */
 const EMPTY = process.env.MOCK_EMPTY === '1';
+/**
+ * За сколько последних суток вообще есть записи.
+ *
+ * Дневник почти никогда не ведут с рождения: у заказчика ребёнку две недели, а
+ * записывать начали на четырнадцатые сутки. Экран обязан показывать эту разницу,
+ * а не растворять её в средних, — значит мок обязан уметь её воспроизводить.
+ *   MOCK_RECORDED_DAYS=2 — случай заказчика: две недели жизни, записи за двое суток.
+ */
+const RECORDED_DAYS = Math.max(0, Number(process.env.MOCK_RECORDED_DAYS ?? 7));
 const FORCE_401 = process.env.MOCK_401 === '1';
 /** Роняет только /api/utterances: цитаты обязаны выжить — они приходят с событиями. */
 const NO_UTTERANCES = process.env.MOCK_NO_UTTERANCES === '1';
@@ -134,6 +149,18 @@ const FEED_PHRASES = [
 ];
 const DIAPER_PHRASES = ['поменяли подгузник', 'подгузник мокрый', 'покакал', 'сменили памперс'];
 
+/**
+ * Вес по возрасту, граммы.
+ *
+ * Как у настоящего новорождённого: провал первых суток до минимума на третьи,
+ * дальше ровный набор примерно по 32 г в сутки. Формула одна на весь мок —
+ * иначе отдельные «интересные» записи выпадают из кривой выбросами, и экран
+ * приходится проверять на ребёнке, которого не бывает.
+ */
+function weightFor(age) {
+  return age <= 3 ? 4620 - 107 * age : 4299 + 32 * (age - 3);
+}
+
 function seedDay(daysAgo) {
   // --- ночной сон: начался вчера вечером, кончился утром
   const nightStart = at(daysAgo + 1, 22, 10 + (daysAgo % 3) * 7);
@@ -193,11 +220,14 @@ function seedDay(daysAgo) {
   [7, 10, 13, 16, 19, 21].forEach((h, i) => {
     const ms = at(daysAgo, h, 20 + (i * 7) % 30);
     if (!past(ms)) return;
+    // «и пописал, и покакал» — отдельный подтип, который на сервере попадает
+    // в оба ряда сразу. Без него мок не показывает самый путаный случай.
+    const both = i === 3;
     const dirty = i === 1 || i === 4;
-    const u = say(DIAPER_PHRASES[i % DIAPER_PHRASES.length], ms);
+    const u = say(both ? 'пописал и покакал' : DIAPER_PHRASES[i % DIAPER_PHRASES.length], ms);
     add({
       type: 'diaper',
-      subtype: dirty ? 'dirty' : 'wet',
+      subtype: both ? 'both' : dirty ? 'dirty' : 'wet',
       started_at: ms,
       source: 'alice-llm',
       confidence: 0.92,
@@ -245,12 +275,12 @@ function seedDay(daysAgo) {
     }
   }
 
-  // --- взвешивания
-  if (daysAgo === 6 || daysAgo === 3 || daysAgo === 0) {
+  // --- взвешивания: раз в трое суток и обязательно сегодня
+  const ageToday = ageDays(localDateKey(at(daysAgo, 12)));
+  if (ageToday % 3 === 0 || daysAgo === 0) {
     const ms = at(daysAgo, 11, 10);
     if (past(ms)) {
-      // Ребёнку две недели: вес идёт от провала первых суток обратно к рождению.
-      const grams = 4395 + (6 - daysAgo) * 66;
+      const grams = weightFor(ageToday);
       const u = say(`взвесили, ${(grams / 1000).toFixed(2).replace('.', ',')} килограмма`, ms);
       add({
         type: 'measure',
@@ -473,13 +503,15 @@ function seedInteresting() {
 
   // 11. То же самое у взвешивания: точка во времени, а не промежуток.
   const t11 = at(1, 9, 20);
-  const u11 = say('взвесили, пять сто двадцать', t11);
+  // Значение — с той же кривой: этот случай про `ended_at`, а не про выброс веса.
+  const grams11 = weightFor(ageDays(localDateKey(t11)));
+  const u11 = say(`взвесили, ${(grams11 / 1000).toFixed(2).replace('.', ',')}`, t11);
   add({
     type: 'measure',
     subtype: 'weight',
     started_at: t11,
     ended_at: t11,
-    value_num: 5120,
+    value_num: grams11,
     value_unit: 'g',
     source: 'alice-llm',
     confidence: 0.88,
@@ -516,9 +548,16 @@ add({
 });
 
 if (!EMPTY) {
-  for (let d = 6; d >= 0; d--) seedDay(d);
-  seedInteresting();
-  seedPhrases();
+  for (let d = RECORDED_DAYS - 1; d >= 0; d--) {
+    // Событий до рождения не бывает: широкое окно не повод выдумывать ребёнку
+    // лишние сутки жизни.
+    if (at(d, 12) < BIRTH_MS) continue;
+    seedDay(d);
+  }
+  // Составные фразы и ошибки разбора живут на сутках 0–3. В разреженном режиме
+  // их сеять нельзя: они бы сами закрыли те пробелы, ради которых он и нужен.
+  if (RECORDED_DAYS >= 7) seedInteresting();
+  if (RECORDED_DAYS >= 1) seedPhrases();
 }
 events.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
 
@@ -583,15 +622,27 @@ function buildStats(days) {
     const feeds = dayEvents.filter((e) => e.type === 'feed');
     const volumes = feeds.filter((e) => e.value_unit === 'ml' && e.value_num != null);
     const diapers = dayEvents.filter((e) => e.type === 'diaper');
-    const sleeps = dayEvents.filter((e) => e.type === 'sleep');
-
+    /*
+     * Сон берётся не «начался в эти сутки», а «пересекается с этими сутками»,
+     * и режется по их границам — ровно как sleepSegments на сервере. Мок клал
+     * всю ночь в те сутки, где она началась: ночь с 22:10 до 6:35 давала одним
+     * суткам 8 ч 25 мин, а следующим — ноль. Ни одно из двух чисел не верно.
+     */
+    const dayStart = at(i, 0);
+    const dayEnd = at(i - 1, 0);
     let totalMin = 0;
     let longestMin = 0;
-    for (const s of sleeps) {
+    let sessions = 0;
+    for (const s of live()) {
+      if (s.type !== 'sleep') continue;
       const a = Date.parse(s.started_at);
-      const b = s.ended_at ? Date.parse(s.ended_at) : Date.now();
-      const min = Math.max(0, Math.round((b - a) / MINUTE));
+      const b = Math.max(a, s.ended_at ? Date.parse(s.ended_at) : Date.now());
+      const lo = Math.max(a, dayStart);
+      const hi = Math.min(b, dayEnd);
+      if (hi <= lo) continue;
+      const min = Math.round((hi - lo) / MINUTE);
       totalMin += min;
+      sessions += 1;
       longestMin = Math.max(longestMin, min);
     }
 
@@ -618,13 +669,20 @@ function buildStats(days) {
             ? null
             : Math.round(volumes.reduce((s, f) => s + f.value_num, 0)),
       },
-      diapers: {
-        wet: diapers.filter((d) => d.subtype === 'wet').length,
-        dirty: diapers.filter((d) => d.subtype === 'dirty').length,
-        both: diapers.filter((d) => d.subtype === 'both').length,
-        total: diapers.length,
-      },
-      sleep: { totalMin, sessions: sleeps.length, longestMin },
+      // Как на сервере (dailyStats в apps/server/src/events.ts): подгузник,
+      // который был И мокрым, И грязным, засчитывается в ОБА ряда. Мок считал
+      // его отдельной третьей кучкой — и прятал этим двойной счёт в админке,
+      // которая к `wet` прибавляла `both` ещё раз.
+      diapers: (() => {
+        const both = diapers.filter((d) => d.subtype === 'both').length;
+        return {
+          wet: diapers.filter((d) => d.subtype === 'wet').length + both,
+          dirty: diapers.filter((d) => d.subtype === 'dirty').length + both,
+          both,
+          total: diapers.length,
+        };
+      })(),
+      sleep: { totalMin, sessions, longestMin },
       measures: {
         weightG: lastOf('weight', (v, u) => (u === 'kg' ? Math.round(v * 1000) : v)),
         heightCm: lastOf('height'),

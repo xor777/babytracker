@@ -78,8 +78,11 @@ export function OverviewScreen() {
   const watch = elapsed != null ? splitStopwatch(elapsed) : null;
 
   const feedCount = o.today?.feeds.total ?? o.timeline.feeds.length;
-  const wet = (o.today?.diapers.wet ?? 0) + (o.today?.diapers.both ?? 0);
-  const dirty = (o.today?.diapers.dirty ?? 0) + (o.today?.diapers.both ?? 0);
+  // `wet` и `dirty` у сервера УЖЕ включают в себя `both` (см. dailyStats в
+  // apps/server/src/events.ts и тест «both — это и мокрый подгузник тоже»).
+  // Прибавлять его второй раз — значит считать такой подгузник дважды.
+  const wet = o.today?.diapers.wet ?? 0;
+  const dirty = o.today?.diapers.dirty ?? 0;
   const diaperCount = o.today?.diapers.total ?? o.timeline.diapers.length;
   const sleepMin = o.today?.sleep.totalMin ?? o.timeline.sleepMin;
 

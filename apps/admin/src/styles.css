@@ -825,6 +825,10 @@ textarea.input {
 }
 
 .metric__value {
+  /* Не сжимается и не переносится: «4,79 кг» — это одно число, и разрыв
+     посреди него читается как два. Подпись рядом ужимается первой. */
+  flex: none;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: 32px;
   font-weight: 600;
@@ -834,6 +838,7 @@ textarea.input {
 }
 
 .metric__unit {
+  min-width: 0;
   font-size: 13px;
   color: var(--text-2);
 }
@@ -901,6 +906,188 @@ textarea.input {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-3);
+}
+
+/* ============================================================
+   Полнота дневника
+
+   Карточка стоит раньше всех чисел и отвечает на вопрос, без которого
+   остальные числа не читаются: за сколько суток записи вообще есть.
+   Три состояния клетки — «есть», «нет», «неизвестно» — различаются формой,
+   а не цветом: цветом здесь оценивают, а оценок на странице нет.
+   ============================================================ */
+
+.cover {
+  border-left: 3px solid var(--accent-line);
+}
+
+.cover__strip {
+  display: flex;
+  gap: 3px;
+  margin: 2px 0 10px;
+}
+
+.cover__cell {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border-radius: 3px;
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-line);
+}
+
+.cover__cell[data-state='on'] {
+  background: var(--cyan);
+  border-color: var(--cyan);
+  opacity: 0.85;
+}
+
+/* Записей нет — штриховка. Тот же знак, что и на графиках ниже: один смысл
+   должен выглядеть одинаково, иначе полосу и столбцы приходится читать по
+   отдельным легендам. */
+.cover__cell[data-state='off'] {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    var(--line-strong) 3px,
+    var(--line-strong) 4px
+  );
+  border: 1px solid var(--line);
+}
+
+/* Неизвестно — пусто в пунктире. Это не «нет»: за краем выгрузки мы не знаем
+   ничего, и любая заливка тут была бы утверждением. */
+.cover__cell[data-state='unknown'] {
+  background: transparent;
+  border: 1px dotted var(--line-strong);
+}
+
+.cover__cell[data-today='yes'] {
+  outline: 1px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.cover__text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.cover__legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin-top: 9px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.cover__key {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--cyan);
+  border: 1px solid var(--cyan);
+  opacity: 0.85;
+}
+
+.cover__key[data-state='off'] {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    var(--line-strong) 3px,
+    var(--line-strong) 4px
+  );
+  border: 1px solid var(--line);
+  opacity: 1;
+}
+
+.cover__key[data-state='unknown'] {
+  background: transparent;
+  border: 1px dotted var(--line-strong);
+  opacity: 1;
+}
+
+/* ============================================================
+   Недели жизни — тренд, ради которого врач и открывает страницу
+   ============================================================ */
+
+.weeks__row + .weeks__row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--tint);
+}
+
+.weeks__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.weeks__name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.weeks__span {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.weeks__days {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.weeks__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.weeks__cell {
+  min-width: 0;
+  padding: 7px 4px 6px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+}
+
+.weeks__value {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.weeks__label {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--text-3);
+}
+
+.weeks__empty {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* Четыре факта в карточке ложатся сеткой 2x2 — на 390 px это единственная
+   раскладка, в которой подписи не рвутся посреди слова. */
+.split {
+  margin-top: 12px;
+}
+
+.substat__value--big {
+  font-size: 30px;
 }
 
 /* ============================================================
@@ -1350,6 +1537,47 @@ textarea.input {
 
 .bars__col--today .bars__fill {
   opacity: 0.6;
+}
+
+/* Сутки без записей: штриховка во всю высоту. Не столбец нулевой высоты —
+   тот означал бы «ноль», а это совсем другое утверждение. */
+.bars__gap {
+  height: 100%;
+  border-radius: 2px 2px 0 0;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    var(--line-strong) 3px,
+    var(--line-strong) 4px
+  );
+  opacity: 0.7;
+}
+
+/* Записали, а за сутки ни одного: настоящий ноль, и он обязан быть виден. */
+.bars__zero {
+  height: 3px;
+  width: 100%;
+  border-radius: 2px;
+  opacity: 0.9;
+}
+
+/* Второй ряд — отметка на своей высоте, а не этаж поверх первого:
+   складывать мокрые с грязными нельзя, они пересекаются. */
+.bars__marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 2px;
+  opacity: 0.95;
+}
+
+.bars__gapnote {
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-3);
 }
 
 .bars__axis {

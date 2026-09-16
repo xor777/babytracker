@@ -1,5 +1,5 @@
 import type { GrowthPoint } from '../types';
-import { DAY, formatDayShort, formatGrams, formatWeight, plural } from '../lib/format';
+import { DAY, formatDayShort, formatWeight, plural } from '../lib/format';
 
 interface Props {
   /** Измерения по возрастанию времени; первое считается точкой отсчёта. */
@@ -42,22 +42,14 @@ export function WeightChart({ points }: Props) {
 
   const birth = points[0];
   const last = points[points.length - 1];
-  const delta = last.value - birth.value;
   const dayNo = Math.max(0, Math.round((last.at - birth.at) / DAY));
 
   // Одно-единственное измерение — это не повод рисовать «график» из одной точки.
   if (points.length === 1) {
     return (
-      <>
-        <div className="metric">
-          <span className="metric__value">{formatWeight(birth.value)}</span>
-          <span className="metric__unit">при рождении</span>
-        </div>
-        <p className="chart-empty">
-          Это пока единственное измерение — точка отсчёта. Следующее взвешивание
-          покажет динамику.
-        </p>
-      </>
+      <p className="chart-empty">
+        Это пока единственное взвешивание — точка отсчёта. Следующее покажет динамику.
+      </p>
     );
   }
 
@@ -77,35 +69,18 @@ export function WeightChart({ points }: Props) {
   const baseY = y(birth.value);
   const line = points.map((p) => `${x(p.at).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
 
-  // Заливка между кривой и линией рождения: ниже линии — потеря, выше — набор.
+  // Заливка между кривой и линией рождения: показывает расстояние до неё.
   const areaBelow = `${line} ${x(last.at).toFixed(1)},${baseY.toFixed(1)} ${x(birth.at).toFixed(1)},${baseY.toFixed(1)}`;
-
-  const regained = delta >= 0;
 
   return (
     <>
-      <div className="metric">
-        <span className="metric__value">{regained ? '+' : '−'}{formatGrams(Math.abs(delta))}</span>
-        <span className="metric__unit">
-          от рождения
-          <br />
-          <span className="metric__quiet">{formatWeight(last.value)} сейчас</span>
-        </span>
-      </div>
-
       <svg className="weight" viewBox={`0 0 ${W} ${H}`} role="img"
         aria-label={`Вес: при рождении ${formatWeight(birth.value)}, сейчас ${formatWeight(last.value)}`}>
-        <defs>
-          <clipPath id="wt-above">
-            <rect x="0" y="0" width={W} height={baseY} />
-          </clipPath>
-          <clipPath id="wt-below">
-            <rect x="0" y={baseY} width={W} height={H - baseY} />
-          </clipPath>
-        </defs>
-
-        <polygon points={areaBelow} fill="var(--amber)" opacity="0.16" clipPath="url(#wt-below)" />
-        <polygon points={areaBelow} fill="var(--green)" opacity="0.16" clipPath="url(#wt-above)" />
+        {/* Заливка между кривой и линией рождения — одним тоном по обе стороны.
+            Зелёное сверху и янтарное снизу читались как «хорошо» и «плохо», а
+            потеря веса в первые дни — это физиология, а не беда. Направление и
+            так видно по кривой относительно пунктира. */}
+        <polygon points={areaBelow} fill="var(--t-measure)" opacity="0.14" />
 
         {/* Линия рождения — то, с чем сравнивают */}
         <line

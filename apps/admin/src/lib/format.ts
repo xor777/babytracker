@@ -40,9 +40,16 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** «7 ч 10 мин» / «40 мин» */
+/**
+ * «7 ч 10 мин» / «40 мин».
+ *
+ * Величина между нулём и минутой округлилась бы в «0 мин» — а это уже не
+ * короткая длительность, а её отсутствие. Такое не показываем никогда.
+ */
 export function formatMinutes(min: number | null | undefined): string {
-  const total = Math.max(0, Math.round(min ?? 0));
+  const raw = min ?? 0;
+  if (raw > 0 && raw < 1) return 'меньше минуты';
+  const total = Math.max(0, Math.round(raw));
   const h = Math.floor(total / 60);
   const m = total % 60;
   if (h === 0) return `${m} мин`;
@@ -156,4 +163,41 @@ export function splitStopwatch(ms: number): { hm: string; sec: string } {
 export function formatNumber(value: number | null | undefined, digits = 0): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return value.toFixed(digits).replace('.', ',');
+}
+
+/**
+ * Среднее за сутки: «8,5», «6», «0,1», «меньше 0,1», «—».
+ *
+ * Тут нельзя округлять до целого, и это не вкусовщина. Ровно на этом месте
+ * прода написала врачу «подгузники: в среднем 0 в сутки»: один подгузник за
+ * завершённые сутки поделили на неделю, получили 0,14 и округлили в ноль.
+ * Врач читает «0 подгузников» как признак обезвоживания — то есть экран
+ * сообщил выдуманный факт, причём самый опасный из возможных.
+ *
+ * Поэтому правило жёсткое: **положительная величина никогда не печатается
+ * нулём**. Не помещается в десятые — печатается словами «меньше 0,1».
+ * Настоящий ноль (за сутки с записями не случилось ни одного события этого
+ * рода) — печатается «0», и это другое утверждение.
+ */
+export function formatPerDay(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value === 0) return '0';
+
+  const sign = value < 0 ? '−' : '';
+  const abs = Math.abs(value);
+  if (abs < 0.05) return `${sign}меньше 0,1`;
+  // Десятая доля остаётся: «8,3 кормления в сутки» рядом с ориентиром 8–12 —
+  // это разная информация, а «8» и «8,4» на глаз неразличимы. Целое печатается
+  // целым, поэтому «8,0» не появляется.
+  return sign + formatNumber(abs, abs < 100 ? 1 : 0).replace(/,0$/, '');
+}
+
+/** «+34 г» / «−12 г» / «—». Знак обязателен: без него прибавка и потеря на вид одинаковы. */
+export function formatSignedGrams(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value === 0) return '0 г';
+  const sign = value > 0 ? '+' : '−';
+  const abs = Math.abs(value);
+  if (abs < 0.5) return `${sign}меньше 1 г`;
+  return `${sign}${Math.round(abs)} г`;
 }
