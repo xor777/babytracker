@@ -24,7 +24,7 @@ interface Child {
  * осознанно, за динамикой. Журнал третий: это инструмент починки, нужный реже.
  */
 const TABS = [
-  { id: 'overview' as const, label: 'Обзор' },
+  { id: 'overview' as const, label: 'День' },
   { id: 'stats' as const, label: 'Сводка' },
   { id: 'history' as const, label: 'Журнал' },
 ];
