@@ -20,7 +20,7 @@ import type { AddressInfo } from 'node:net';
 
 import { TEST_SECRET, aliceBody, authorize, makeTestApp, testConfig, testDb } from './helpers.ts';
 import { createApp } from '../src/app.ts';
-import { isOpenPath, pathOf, safeNext } from '../src/auth-guard.ts';
+import { PWA_ASSETS, isOpenPath, pathOf, safeNext } from '../src/auth-guard.ts';
 import { SESSION_COOKIE, issueSession } from '../src/device-auth.ts';
 import { ACK } from '../src/alice.ts';
 
@@ -30,6 +30,22 @@ import { ACK } from '../src/alice.ts';
 
 const DASHBOARD_MARK = 'ДАШБОРД-ТЕЛЕВИЗОРА-СЕКРЕТ';
 const ADMIN_MARK = 'АДМИНКА-СЕКРЕТ';
+
+/** Иконки PWA — имена из сборки админки (apps/admin/public). */
+const PWA_ICON_FILES = [
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-192.png',
+  'icon-maskable-512.png',
+  'apple-touch-icon.png',
+  'favicon-32.png',
+] as const;
+
+/** Полные адреса того же — то, что обязано открываться без сессии. */
+const PWA_OPEN_PATHS = [
+  '/dash/manifest.webmanifest',
+  ...PWA_ICON_FILES.map((name) => `/dash/${name}`),
+];
 
 interface Fixture {
   app: ReturnType<typeof createApp>['app'];
@@ -51,8 +67,10 @@ async function makeFullApp(): Promise<Fixture> {
   fs.writeFileSync(path.join(admin, 'index.html'), `<html>${ADMIN_MARK}</html>`);
   fs.writeFileSync(path.join(admin, 'assets', 'admin-d4e5f6.js'), `// ${ADMIN_MARK} bundle`);
   fs.writeFileSync(path.join(admin, 'sw.js'), 'self.addEventListener("install", () => {});');
+  // Оформление PWA — ровно теми именами, какими его кладёт сборка: тест на
+  // «что открыто» имеет смысл только если файлы на диске действительно есть.
   fs.writeFileSync(path.join(admin, 'manifest.webmanifest'), '{"name":"BabyTracker"}');
-  fs.writeFileSync(path.join(admin, 'icon-192.png'), 'PNG');
+  for (const icon of PWA_ICON_FILES) fs.writeFileSync(path.join(admin, icon), 'PNG');
 
   const cfg = testConfig({ DASHBOARD_DIST: tv, ADMIN_DIST: admin });
   const db = testDb();
@@ -237,9 +255,10 @@ test('без сессии закрыто всё: статика, ассеты, A
     ['GET', '/dash/'],
     ['GET', '/dash/index.html'],
     ['GET', '/dash/assets/admin-d4e5f6.js'],
+    // sw.js остаётся за дверью СОЗНАТЕЛЬНО: скрипт воркера браузер запрашивает
+    // с credentials «same-origin», то есть с нашей же кукой, и послабления ему
+    // не нужно. Манифест и иконки — наоборот, открыты: см. отдельный тест ниже.
     ['GET', '/dash/sw.js'],
-    ['GET', '/dash/manifest.webmanifest'],
-    ['GET', '/dash/icon-192.png'],
     ['GET', '/api/state'],
     ['GET', '/api/events'],
     ['GET', '/api/events?include_deleted=true'],
@@ -291,6 +310,190 @@ test('без сессии закрыто всё: статика, ассеты, A
     assert.equal(res.body.includes(ADMIN_MARK), false, `${method} ${url}: утекла админка`);
     assert.equal(/"child"|"sleep"|"events"/.test(res.body), false, `${method} ${url}: утекли данные`);
   }
+});
+
+/* ================================================================== */
+/* Оформление PWA: открыто ровно оно, и ничего вокруг                  */
+/* ================================================================== */
+
+/*
+ * Жалоба была такая: «добавляю приложение из браузера на рабочий стол —
+ * иконки по-прежнему нет». Причина: манифест браузер запрашивает анонимно,
+ * без кук (`<link rel="manifest">` без `crossorigin` — это запрос без
+ * учётных данных), и за дверью он получал 401. Манифест не читался вовсе,
+ * поэтому ярлык оставался без иконки и без имени.
+ *
+ * Лечится перечнем открытых файлов — и вот здесь ошибка стоит дороже всего
+ * во всём проекте: `/dash/` префиксом открыл бы админку целиком. Поэтому
+ * тестов два, и второй важнее первого.
+ */
+
+test('оформление PWA отдаётся без сессии: манифест и все иконки', async (t) => {
+  const h = await makeFullApp();
+  t.after(h.close);
+
+  for (const url of PWA_OPEN_PATHS) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.equal(res.statusCode, 200, `${url} без сессии → ${res.statusCode}, а нужен файл`);
+  }
+
+  // Тип манифеста — половина дела: с чужим Content-Type браузер игнорирует
+  // его молча, и установка на домашний экран просто не предлагается.
+  const manifest = await h.app.inject({ method: 'GET', url: '/dash/manifest.webmanifest' });
+  assert.match(
+    String(manifest.headers['content-type']),
+    /^application\/manifest\+json/,
+    'манифест с чужим типом браузер молча игнорирует',
+  );
+
+  // HEAD браузеры и прокси шлют наравне с GET.
+  assert.equal((await h.app.inject({ method: 'HEAD', url: '/dash/icon-192.png' })).statusCode, 200);
+});
+
+test('открыто ТОЛЬКО оформление: соседние файлы админки остаются за дверью', async (t) => {
+  const h = await makeFullApp();
+  t.after(h.close);
+
+  /*
+   * Главная проверка всей задачи. Каждый путь ниже лежит в том же каталоге,
+   * что и открытые иконки, и отличается от них написанием — ровно так и
+   * выглядела бы ошибка «открыли префикс вместо перечня».
+   */
+  const mustStayClosed = [
+    '/dash',
+    '/dash/',
+    '/dash/index.html',
+    '/dash/assets/admin-d4e5f6.js',
+    '/dash/sw.js',
+    // Похоже на открытое, но им не является.
+    '/dash/icon-192.png.map',
+    '/dash/icon-192.pngx',
+    '/dash/icon-19.png',
+    '/dash/manifest.webmanifest.bak',
+    '/dashx/icon-192.png',
+    '/DASH/icon-192.png',
+    // Через открытое имя наружу: traversal и процентное кодирование.
+    '/dash/icon-192.png/../index.html',
+    '/dash/manifest.webmanifest/../assets/admin-d4e5f6.js',
+    '/dash/assets/../index.html',
+    '/dash/%69con-192.png',
+    '/dash/icon-192%2Epng',
+    '/dash//icon-192.png',
+  ];
+
+  for (const url of mustStayClosed) {
+    const res = await h.app.inject({ method: 'GET', url });
+    assert.ok(
+      res.statusCode === 401 || res.statusCode === 303,
+      `${url} → ${res.statusCode}: рядом с иконками открылось лишнее`,
+    );
+    assert.equal(res.body.includes(ADMIN_MARK), false, `${url}: утекла админка`);
+    assert.equal(res.body.includes(DASHBOARD_MARK), false, `${url}: утёк дашборд`);
+  }
+
+  // И запись по открытому адресу тоже закрыта: перечень — только на чтение.
+  for (const method of ['POST', 'PUT', 'DELETE'] as const) {
+    const res = await h.app.inject({ method, url: '/dash/icon-192.png' });
+    assert.notEqual(res.statusCode, 200, `${method} /dash/icon-192.png не должен проходить дверь`);
+  }
+});
+
+test('перечень открытого: оформление PWA внутри, соседи снаружи', () => {
+  for (const p of PWA_OPEN_PATHS) {
+    assert.equal(isOpenPath('GET', p), true, `${p} обязан быть открыт`);
+    assert.equal(isOpenPath('HEAD', p), true, `HEAD ${p} обязан быть открыт`);
+    assert.equal(isOpenPath('POST', p), false, `POST ${p} обязан быть закрыт`);
+  }
+
+  for (const p of [
+    '/dash/sw.js',
+    '/dash/index.html',
+    '/dash/assets/index-abc123.js',
+    '/manifest.webmanifest',
+    '/icon-192.png',
+    '/dash/icon-192.png/../index.html',
+  ]) {
+    assert.equal(isOpenPath('GET', p), false, `${p} обязан быть закрыт`);
+  }
+});
+
+/*
+ * Связка между манифестом и дверью. Без неё легко получить ту же жалобу
+ * заново: кто-нибудь добавит в манифест иконку нового размера, в перечень её
+ * не впишет — и она молча начнёт отдавать 401. Молча, потому что браузер про
+ * недоступную иконку в консоли не пишет, а просто рисует пустой квадрат.
+ *
+ * Тест читает настоящие файлы админки, а не копию: копия разошлась бы
+ * с оригиналом ровно тогда, когда это важнее всего.
+ */
+test('каждая иконка из манифеста админки открыта в двери', () => {
+  const adminRoot = path.resolve(import.meta.dirname, '..', '..', 'admin');
+  const manifestPath = path.join(adminRoot, 'public', 'manifest.webmanifest');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+    icons?: Array<{ src: string }>;
+  };
+
+  const icons = manifest.icons ?? [];
+  assert.ok(icons.length > 0, 'в манифесте не осталось иконок — проверка потеряла смысл');
+
+  for (const icon of icons) {
+    // `src` в манифесте относителен адресу самого манифеста, то есть /dash/.
+    const url = new URL(icon.src, 'https://x/dash/manifest.webmanifest').pathname;
+    assert.equal(PWA_ASSETS.has(url), true, `иконка ${icon.src} не открыта в двери: будет 401`);
+    assert.equal(
+      fs.existsSync(path.join(adminRoot, 'public', icon.src)),
+      true,
+      `иконки ${icon.src} нет на диске`,
+    );
+  }
+});
+
+/*
+ * Вторая причина той же жалобы, и от авторизации она не зависит вовсе.
+ *
+ * Сервер отдаёт оболочку и по `/dash/`, и по `/dash` без слэша — намеренно,
+ * без лишнего редиректа. Но относительный `href="manifest.webmanifest"` на
+ * странице `/dash` браузер резолвит в `/manifest.webmanifest`, то есть в
+ * корень, где живёт дашборд телевизора. Там SPA-fallback отдаёт свой
+ * index.html: статус 200, тип text/html. Манифест с чужим типом браузер
+ * игнорирует МОЛЧА — ни ошибки в консоли, ни иконки.
+ *
+ * Проверено запросом до починки: `/manifest.webmanifest` и `/favicon-32.png`
+ * действительно возвращали HTML дашборда.
+ */
+test('ссылки на оформление в оболочке админки абсолютные и без crossorigin', () => {
+  const html = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', '..', 'admin', 'index.html'),
+    'utf8',
+  );
+
+  const links = [...html.matchAll(/<link\b[^>]*>/g)].map((m) => m[0]);
+  const byRel = (rel: string) =>
+    links.find((tag) => new RegExp(`rel=["']${rel}["']`).test(tag)) ?? '';
+
+  for (const rel of ['manifest', 'icon', 'apple-touch-icon']) {
+    const tag = byRel(rel);
+    assert.notEqual(tag, '', `в оболочке нет <link rel="${rel}">`);
+
+    const href = /href=["']([^"']+)["']/.exec(tag)?.[1] ?? '';
+    assert.ok(
+      href.startsWith('/dash/'),
+      `rel="${rel}" ссылается на «${href}»: относительный путь на странице /dash ` +
+        'уедет в корень, к дашборду телевизора, и вернёт HTML вместо файла',
+    );
+  }
+
+  /*
+   * `crossorigin` на манифесте — заманчивая и неверная починка. Он вернул бы
+   * куку к запросу манифеста, но вместе с ней и требование сессии: у того,
+   * кто уже поставил приложение на экран, а сессию потерял, иконка пропала бы.
+   * Поэтому открыты файлы, а не включены куки.
+   */
+  assert.equal(
+    /crossorigin/i.test(byRel('manifest')),
+    false,
+    'crossorigin вернул бы манифесту требование сессии — оформление должно читаться всегда',
+  );
 });
 
 test('массовый переразбор: без сессии закрыт, с сессией работает', async (t) => {

@@ -12,9 +12,12 @@
 
     <title>ANDREYTRACKER · дневник</title>
 
-    <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png" />
-    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <!-- Пути абсолютные: страница отдаётся и по /dash без слэша, а там
+         относительный href уехал бы в корень, к дашборду телевизора.
+         `crossorigin` намеренно нет — почему, см. auth-guard.ts, PWA_ASSETS. -->
+    <link rel="manifest" href="/dash/manifest.webmanifest" />
+    <link rel="icon" href="/dash/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/dash/apple-touch-icon.png" />
 
     <!-- iOS: запуск с домашнего экрана без адресной строки -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
