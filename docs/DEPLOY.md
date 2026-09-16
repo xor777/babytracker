@@ -123,6 +123,15 @@ ingress:
 одобряется командой на сервере. Лазейки в HTTP для этого нет намеренно: она осталась бы
 открытой навсегда, а ssh на сервер и так равносилен доступу к файлу базы.
 
+Команды ниже написаны для интерактивного ssh. **Одной строкой через `ssh host '…'` они
+не работают**: неинтерактивный shell не читает профиль, и `pnpm` не находится
+(`bash: line 1: pnpm: command not found`). В таком виде PATH надо задать явно:
+
+```bash
+ssh $BABYTRACKER_HOST 'export PATH=$HOME/.local/node/bin:$HOME/.local/bin:$PATH && \
+  cd ~/babytracker && pnpm --filter @babytracker/server auth approve КОД'
+```
+
 ```bash
 ssh $BABYTRACKER_HOST
 cd ~/babytracker/apps/server
