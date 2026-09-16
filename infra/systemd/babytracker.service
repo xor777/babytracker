@@ -12,6 +12,11 @@ Environment=NODE_ENV=production
 # Claude CLI должен работать через подписку (OAuth, `claude setup-token`).
 # Если в окружении окажется ANTHROPIC_API_KEY, CLI молча переключится на
 # поштучную оплату по API мимо подписки — поэтому гасим его явно.
+# Файлы базы создаются процессом, и режим им достаётся от umask. Данные тут
+# медицинские, и лежат они на общей машине: 0077 закрывает их всем, кроме
+# владельца, и переживает любую пересборку — в отличие от разового chmod.
+UMask=0077
+
 UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
 ExecStart=%h/.local/node/bin/node src/index.ts
 Restart=always

@@ -206,7 +206,19 @@ export const PAIR_PAGE_HTML = `<!doctype html>
   var pollTimer = null;
   var tickTimer = null;
 
-  function say(text) { metaEl.innerHTML = text; }
+  /*
+   * textContent, а не innerHTML. Сегодня сюда приходят только литералы, но это
+   * единственный сток разметки на странице входа: попади в него однажды строка
+   * с сервера или текст ошибки — получился бы XSS ровно там, где человек вводит
+   * код. Единственное место, где нужна была жирность, вынесено в свой элемент.
+   */
+  function say(text) { metaEl.textContent = text; }
+  function sayLeft(mmssText) {
+    metaEl.textContent = "Код действителен ещё ";
+    var b = document.createElement("b");
+    b.textContent = mmssText;
+    metaEl.appendChild(b);
+  }
 
   function showCode(display) {
     codeEl.textContent = display;
@@ -224,7 +236,7 @@ export const PAIR_PAGE_HTML = `<!doctype html>
     if (stopped || !expiresAtMs) return;
     var left = expiresAtMs - Date.now();
     barEl.style.transform = "scaleX(" + Math.max(0, Math.min(1, ttlMs ? left / ttlMs : 0)) + ")";
-    if (left > 0) say("Код действителен ещё <b>" + mmss(left) + "</b>");
+    if (left > 0) sayLeft(mmss(left));
   }
 
   function finish(kind, title, lead, text) {
