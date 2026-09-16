@@ -325,6 +325,32 @@ body {
   color: #3fbf8e;
 }
 
+.panel__meta--diaper {
+  color: #9070dd;
+}
+
+/* Значок легенды — уменьшенная копия метки с ленты: форма, а не только цвет. */
+.legend {
+  display: inline-block;
+  vertical-align: baseline;
+  margin-right: 10px;
+}
+
+.legend--feed {
+  width: 11px;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--green);
+  transform: translateY(2px);
+}
+
+.legend--diaper {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--violet);
+}
+
 .panel__meta + .panel__meta {
   margin-left: -4px;
   padding-left: 16px;

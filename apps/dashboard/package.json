@@ -9,7 +9,7 @@
     "preview": "vite preview --host --port 4173",
     "typecheck": "tsc --noEmit",
     "mock": "node mock-server.mjs",
-    "test": "echo \"dashboard: no unit tests\""
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\""
   },
   "dependencies": {
     "react": "^19.2.0",

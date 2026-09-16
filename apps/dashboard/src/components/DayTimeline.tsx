@@ -3,19 +3,38 @@ import type { TrackerEvent } from '../types';
 import { formatMinutes, HOUR, parseTs } from '../lib/format';
 import { toSegments } from '../lib/sleep';
 import { zonedHour } from '../lib/tz';
+import { clampCenter, FEED_TOP, marksInWindow, RIBBON, TRACK_BOTTOM } from '../lib/ribbon';
 
 interface Props {
   events: TrackerEvent[];
   now: number;
 }
 
-const W = 892;
-const H = 156; // = высота .panel__body у панели 240 px
-const TRACK_Y = 14;
-const TRACK_H = 62;
-const TRACK_BOTTOM = TRACK_Y + TRACK_H;
-const FEED_Y = 86;
-const FEED_H = 26;
+/*
+ * Полка меток.
+ *
+ * Смотрят с трёх метров, и цветом одним различать нельзя: близкие оттенки
+ * на таком расстоянии сливаются, а у части людей не различаются и вблизи.
+ * Поэтому кормления и подгузники разведены признаками, которые видны формой:
+ * еда — прямоугольные столбики ВВЕРХ от полки, подгузники — круглые метки
+ * ВНИЗ от неё. Направление и силуэт читаются даже боковым зрением и в серых
+ * тонах; цвет (зелёный/фиолетовый — те же, что у счётчиков в «Сутках»)
+ * остаётся приятным дополнением, а не несущей конструкцией.
+ *
+ * Кружок подгузника крупнее, чем кажется нужным: фиолетовый заметно темнее
+ * зелёного (в серых тонах 141 против 212), и метки поменьше на уменьшенном
+ * снимке попросту пропадали. Разницу в светлоте оставляем — она и есть
+ * различие без цвета, — а видимость добираем площадью.
+ *
+ * Это по-прежнему одна полка, а не третья дорожка: третья дорожка когда-то
+ * превращала ленту в шум, и это решение в силе. Сон выше и вдвое крупнее —
+ * он остаётся главным.
+ *
+ * Сами числа и правила — в lib/ribbon.ts, они под тестом.
+ */
+const { W, H, TRACK_Y, TRACK_H, SHELF_Y, FEED_W, FEED_H, DIAPER_R, DIAPER_CY } = RIBBON;
+/** Тёмная обводка меток: соседние метки не сливаются в одно пятно. */
+const MARK_EDGE = '#04121a';
 const SPAN = 24 * HOUR;
 
 function shortDuration(ms: number): string {
@@ -25,21 +44,23 @@ function shortDuration(ms: number): string {
   return h > 0 ? `${h}ч${String(m).padStart(2, '0')}` : `${m}м`;
 }
 
+/** Моменты живых событий одного типа, попавшие в окно ленты. */
+function marksOf(events: TrackerEvent[], type: string, from: number, to: number): number[] {
+  const times = events
+    .filter((ev) => ev.type === type && !ev.deleted_at)
+    .map((ev) => parseTs(ev.started_at))
+    .filter((ms): ms is number => ms != null);
+  return marksInWindow(times, from, to);
+}
+
 export function DayTimeline({ events, now }: Props) {
   // Пересчитываем раз в полминуты, а не каждый тик секундомера.
   const anchor = Math.floor(now / 30_000) * 30_000;
   const from = anchor - SPAN;
 
   const segments = useMemo(() => toSegments(events, from, anchor), [events, from, anchor]);
-  const feedMarks = useMemo(
-    () =>
-      events
-        .filter((ev) => ev.type === 'feed' && !ev.deleted_at)
-        .map((ev) => parseTs(ev.started_at))
-        .filter((ms): ms is number => ms != null && ms >= from && ms <= anchor)
-        .sort((a, b) => a - b),
-    [events, from, anchor],
-  );
+  const feedMarks = useMemo(() => marksOf(events, 'feed', from, anchor), [events, from, anchor]);
+  const diaperMarks = useMemo(() => marksOf(events, 'diaper', from, anchor), [events, from, anchor]);
 
   const totalMs = segments.reduce((acc, s) => acc + (s.end - s.start), 0);
   const x = (t: number) => ((t - from) / SPAN) * W;
@@ -64,9 +85,22 @@ export function DayTimeline({ events, now }: Props) {
       <div className="panel__head">
         <h2 className="panel__title">Последние 24 часа</h2>
         <span className="panel__rule" />
-        {/* Цвет подписи = цвет дорожки: это и легенда тоже. */}
+        {/*
+          Легенда. У сна цвет подписи совпадает с цветом дорожки — этого хватает,
+          дорожка одна и ни с чем не спорит. У меток легендой служит сам значок:
+          «подгузники 10» словами не помещались (964 px при 892 доступных — линейка
+          схлопывалась в ноль), а главное — различать их всё равно надо формой,
+          а не словом. Значок в шапке ровно тот же, что на ленте.
+        */}
         <span className="panel__meta panel__meta--sleep">сон {formatMinutes(totalMs / 60000)}</span>
-        <span className="panel__meta panel__meta--feed">еда {feedMarks.length}</span>
+        <span className="panel__meta panel__meta--feed" title="кормления">
+          <i className="legend legend--feed" />
+          {feedMarks.length}
+        </span>
+        <span className="panel__meta panel__meta--diaper" title="подгузники">
+          <i className="legend legend--diaper" />
+          {diaperMarks.length}
+        </span>
       </div>
       <div className="panel__body">
         <svg className="chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
@@ -141,30 +175,6 @@ export function DayTimeline({ events, now }: Props) {
             );
           })}
 
-          {/* кормления — вторая дорожка */}
-          <line
-            x1="0"
-            x2={W}
-            y1={FEED_Y + FEED_H}
-            y2={FEED_Y + FEED_H}
-            stroke="rgba(77,240,169,0.22)"
-            strokeWidth="1"
-          />
-          {feedMarks.map((ms) => (
-            <rect
-              key={ms}
-              className="seg-appear"
-              style={{ transformOrigin: `0 ${FEED_Y + FEED_H}px` }}
-              x={Math.min(W - 7, Math.max(0, x(ms) - 3.5))}
-              y={FEED_Y}
-              width="7"
-              height={FEED_H}
-              rx="2"
-              fill="var(--green)"
-              opacity="0.92"
-            />
-          ))}
-
           {/* подписи часов */}
           {ticks
             .filter((t) => t.major)
@@ -192,12 +202,55 @@ export function DayTimeline({ events, now }: Props) {
             })}
 
           <g className="now-marker">
-            <line x1={W - 1} x2={W - 1} y1={TRACK_Y - 8} y2={FEED_Y + FEED_H} stroke="var(--accent)" strokeWidth="3" />
+            <line x1={W - 1} x2={W - 1} y1={TRACK_Y - 8} y2={SHELF_Y} stroke="var(--accent)" strokeWidth="3" />
             <polygon
               points={`${W - 11},${TRACK_Y - 14} ${W + 9},${TRACK_Y - 14} ${W - 1},${TRACK_Y - 3}`}
               fill="var(--accent)"
             />
           </g>
+
+          {/*
+            Метки рисуются последними — поверх отметки «сейчас»: самая свежая
+            запись всегда стоит у правого края и раньше терялась под ней.
+          */}
+          {/* полка: от неё еда растёт вверх, подгузники висят вниз */}
+          <line x1="0" x2={W} y1={SHELF_Y} y2={SHELF_Y} stroke="rgba(63,233,255,0.3)" strokeWidth="1" />
+
+          {/* кормления — столбики вверх от полки */}
+          {feedMarks.map((ms) => {
+            const cx = clampCenter(x(ms), FEED_W / 2);
+            return (
+              <g key={`f${ms}`} className="seg-appear" style={{ transformOrigin: `0 ${SHELF_Y}px` }}>
+                <rect
+                  x={cx - FEED_W / 2}
+                  y={FEED_TOP}
+                  width={FEED_W}
+                  height={FEED_H}
+                  rx="3"
+                  fill="var(--green)"
+                  stroke={MARK_EDGE}
+                  strokeWidth="2"
+                />
+                {/* светлая кромка сверху — как у блоков сна: метка читается объёмной */}
+                <rect x={cx - FEED_W / 2 + 2} y={FEED_TOP + 2} width={FEED_W - 4} height="4" rx="1.5" fill="#d9ffee" />
+              </g>
+            );
+          })}
+
+          {/* подгузники — круглые метки вниз от полки */}
+          {diaperMarks.map((ms) => (
+            <circle
+              key={`d${ms}`}
+              className="seg-appear"
+              style={{ transformOrigin: `0 ${SHELF_Y}px` }}
+              cx={clampCenter(x(ms), DIAPER_R + 1)}
+              cy={DIAPER_CY}
+              r={DIAPER_R}
+              fill="var(--violet)"
+              stroke={MARK_EDGE}
+              strokeWidth="2"
+            />
+          ))}
         </svg>
       </div>
     </section>
