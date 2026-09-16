@@ -9,7 +9,10 @@
  * Поэтому зона задаётся явно и чинится без пересборки: `?tz=Europe/Moscow`
  * в адресе или `VITE_TZ` на сборке. По умолчанию — зона устройства.
  */
-const ENV_TZ = ((import.meta.env.VITE_TZ as string | undefined) ?? '').trim();
+// import.meta.env существует только под vite. Тесты гоняет сам node, и без
+// осторожного доступа любой модуль, потянувший этот файл, падал бы там на
+// чтении свойства у undefined.
+const ENV_TZ = ((import.meta.env?.VITE_TZ as string | undefined) ?? '').trim();
 
 function deviceTz(): string {
   try {

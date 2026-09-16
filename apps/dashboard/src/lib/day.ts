@@ -88,6 +88,26 @@ export function feedLabel(ev: TrackerEvent | null): string | null {
   return what;
 }
 
+/*
+ * Подпись и слово для последнего кормления.
+ *
+ * Вид кормления известен не всегда: родитель говорит «начал есть», модель
+ * честно оставляет грудь/смесь пустыми и пишет в примечании, что не назвали.
+ * Раньше в этом случае подставлялось слово «кормление», и на весь экран
+ * выходило «ПОСЛЕДНИЙ РАЗ ЕЛ · КОРМЛЕНИЕ». Поэтому когда вида нет, меняем не
+ * слово, а подпись: «ПОСЛЕДНЕЕ · КОРМЛЕНИЕ» читается как надо, а время и
+ * «сколько назад» строкой ниже и есть то, ради чего сюда смотрят.
+ */
+export function feedHeadline(ev: TrackerEvent | null, known: string, unknown: string) {
+  const what = feedLabel(ev);
+  if (what === null) return { label: unknown, word: 'КОРМЛЕНИЕ' };
+  // Вид неизвестен — это ПУСТОЙ subtype, а не пустая подпись: feedLabel на
+  // событии без вида возвращает слово «кормление», а не null. На этом уже
+  // один раз обожглись, поэтому проверяем именно поле.
+  const kindKnown = typeof ev?.subtype === 'string' && ev.subtype.trim() !== '';
+  return { label: kindKnown ? known : unknown, word: what.toUpperCase() };
+}
+
 export interface FeedSummary {
   count: number;
   /** Сумма только по тем кормлениям, где объём назван (контракт §10.2: NULL ≠ 0). */

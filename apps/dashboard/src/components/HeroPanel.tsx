@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { TrackerEvent, TrackerState } from '../types';
 import { formatMinutes, formatStopwatch, formatTime, parseTs } from '../lib/format';
-import { feedLabel, type FeedSummary, type OngoingActivity } from '../lib/day';
+import { feedHeadline, type FeedSummary, type OngoingActivity } from '../lib/day';
 
 interface Props {
   state: TrackerState;
@@ -55,23 +55,6 @@ function Timer({ ms }: { ms: number }) {
  * не видно. Поэтому у прошедшего крупно стоит **время события**, оно не
  * меняется, а «сколько прошло» — мелко, словами и без секунд.
  */
-/*
- * Подпись и слово для последнего кормления.
- *
- * Вид кормления известен не всегда: родитель говорит «начал есть», модель
- * честно оставляет грудь/смесь пустыми и пишет в примечании, что не назвали.
- * Раньше в этом случае подставлялось слово «кормление», и на весь экран
- * выходило «ПОСЛЕДНИЙ РАЗ ЕЛ · КОРМЛЕНИЕ». Поэтому когда вида нет, меняем не
- * слово, а подпись: «ПОСЛЕДНЕЕ · КОРМЛЕНИЕ» читается как надо, а время и
- * «сколько назад» строкой ниже и есть то, ради чего сюда смотрят.
- */
-function feedHeadline(ev: TrackerEvent | null, known: string, unknown: string) {
-  const what = feedLabel(ev);
-  return what === null
-    ? { label: unknown, word: 'КОРМЛЕНИЕ' }
-    : { label: known, word: what.toUpperCase() };
-}
-
 function Past({ at, now, tail }: { at: number; now: number; tail?: string }) {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
   return (
