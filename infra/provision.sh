@@ -99,6 +99,21 @@ if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
   fi
 fi
 
+# ---------- короткая команда bt для управления устройствами ----------
+# Инструкция предлагала «pnpm --filter … auth», и это оказалось ловушкой:
+# pnpm запускает скрипт из apps/server, а боевой .env лежит уровнем выше —
+# команда молча смотрела в ПУСТУЮ базу рядом с кодом и отвечала «код не ждёт
+# одобрения». Обёртка задаёт тот же каталог и тот же .env, что у systemd-юнита.
+log "Ставлю короткую команду bt"
+mkdir -p "$BIN"
+cat > "$BIN/bt" <<'BTCMD'
+#!/bin/sh
+# Управление устройствами: bt pending | approve КОД | list | revoke id
+cd "$HOME/babytracker/apps/server" || exit 1
+exec "$HOME/.local/node/bin/node" --env-file-if-exists=../../.env src/auth-cli.ts "$@"
+BTCMD
+chmod +x "$BIN/bt"
+
 # ---------- Caddy: HTTPS c автоматическим Let's Encrypt ----------
 # Нужен root: порты 80/443 привилегированные, а сертификаты должны обновляться
 # сами, без участия человека.

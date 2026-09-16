@@ -123,25 +123,22 @@ ingress:
 одобряется командой на сервере. Лазейки в HTTP для этого нет намеренно: она осталась бы
 открытой навсегда, а ssh на сервер и так равносилен доступу к файлу базы.
 
-Команды ниже написаны для интерактивного ssh. **Одной строкой через `ssh host '…'` они
-не работают**: неинтерактивный shell не читает профиль, и `pnpm` не находится
-(`bash: line 1: pnpm: command not found`). В таком виде PATH надо задать явно:
+`provision.sh` ставит короткую команду **`bt`** — пользуйтесь ей, а не `pnpm`:
 
 ```bash
-ssh $BABYTRACKER_HOST 'export PATH=$HOME/.local/node/bin:$HOME/.local/bin:$PATH && \
-  cd ~/babytracker && pnpm --filter @babytracker/server auth approve КОД'
-```
-
-```bash
-ssh $BABYTRACKER_HOST
-cd ~/babytracker/apps/server
-
 # 1. Открой дневник на телефоне — он покажет код. Проверь, что заявка дошла:
-pnpm --filter @babytracker/server auth pending
+ssh $BABYTRACKER_HOST 'bt pending'
 
 # 2. Одобри её. Регистр и тире не важны, «wdjb mjht» тоже подойдёт:
-pnpm --filter @babytracker/server auth approve WDJB-MJHT
+ssh $BABYTRACKER_HOST 'bt approve WDJB-MJHT'
 ```
+
+> **Почему не `pnpm --filter … auth`.** Так было написано раньше, и это грабли:
+> `pnpm` запускает скрипт из `apps/server`, а боевой `.env` лежит уровнем выше.
+> Команда печатала `.env not found`, молча открывала **пустую базу рядом с кодом**
+> и отвечала «код не ждёт одобрения» — при совершенно верном коде. Теперь скрипт
+> `auth` читает и корневой `.env`, но короткая `bt` надёжнее: она задаёт тот же
+> каталог и тот же файл настроек, с какими работает systemd-юнит.
 
 Телефон подхватит сессию в течение нескольких секунд. **Дальше ssh не нужен**: все
 остальные устройства, включая телевизор, одобряются с телефона.
@@ -149,13 +146,15 @@ pnpm --filter @babytracker/server auth approve WDJB-MJHT
 ### Остальные команды
 
 ```bash
-pnpm --filter @babytracker/server auth pending     # кто ждёт одобрения
-pnpm --filter @babytracker/server auth approve <КОД|id>
-pnpm --filter @babytracker/server auth deny <id>
-pnpm --filter @babytracker/server auth list        # кто подключён (--all: и отозванные)
-pnpm --filter @babytracker/server auth revoke <id> # отозвать устройство
-pnpm --filter @babytracker/server auth issue --kind tv --label "ТВ в детской"
+bt pending                        # кто ждёт одобрения
+bt approve <КОД|id>
+bt deny <id>
+bt list                           # кто подключён (--all: и отозванные)
+bt revoke <id>                    # отозвать устройство
+bt issue --kind tv --label "ТВ в детской"
 ```
+
+Через ssh одной строкой — так же: `ssh $BABYTRACKER_HOST 'bt list'`.
 
 `auth issue` выпускает сессию **без кода** и печатает её секрет. Нужна для отладки и на
 случай, когда браузера под рукой нет вовсе:

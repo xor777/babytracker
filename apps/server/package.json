@@ -9,9 +9,9 @@
   },
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env src/index.ts",
-    "start": "node --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=../../.env --env-file-if-exists=.env src/index.ts",
     "mcp": "node --env-file-if-exists=.env src/mcp-server.ts",
-    "auth": "node --env-file-if-exists=.env src/auth-cli.ts",
+    "auth": "node --env-file-if-exists=../../.env --env-file-if-exists=.env src/auth-cli.ts",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
