@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { EventPatch, TrackerEvent } from '../types';
 import { TYPES, sourceLabel, typeDef, unitLabel } from '../lib/taxonomy';
-import { formatWhen, isoToLocalInput, localInputToIso, parseTs } from '../lib/format';
+import { formatWhen, isoToLocalInput, msToLocalInput } from '../lib/format';
+import { freeSubtype, parseValue, reviewDraft, suggestEnd, toDraft } from '../lib/draft';
 
 interface Props {
   event: TrackerEvent;
@@ -15,47 +16,16 @@ interface Props {
   onRestore: (id: number) => Promise<string | null>;
 }
 
-interface Draft {
-  type: string;
-  subtype: string;
-  started: string;
-  ended: string;
-  value: string;
-  unit: string;
-  note: string;
-}
-
-function toDraft(e: TrackerEvent): Draft {
-  return {
-    type: String(e.type),
-    subtype: e.subtype ?? '',
-    started: isoToLocalInput(e.started_at),
-    ended: isoToLocalInput(e.ended_at),
-    value: e.value_num == null ? '' : String(e.value_num),
-    unit: e.value_unit ?? '',
-    note: e.note ?? '',
-  };
-}
-
-/** Подтип у meds — название препарата, у note его нет вовсе (§10.2). */
-function freeSubtype(type: string): boolean {
-  return type === 'meds';
-}
-
-function parseValue(raw: string): number | null | 'bad' {
-  const trimmed = raw.trim();
-  if (trimmed === '') return null;
-  const n = Number(trimmed.replace(',', '.'));
-  return Number.isFinite(n) ? n : 'bad';
-}
-
 export function EventSheet({ event, busy, onClose, onSave, onDelete, onRestore }: Props) {
-  const [draft, setDraft] = useState<Draft>(() => toDraft(event));
+  const [draft, setDraft] = useState(() => toDraft(event));
   const [err, setErr] = useState<string | null>(null);
+  /** Время конца в поле подставлено нами, человек его ещё не набирал (см. suggestEnd). */
+  const [endAuto, setEndAuto] = useState(false);
 
   useEffect(() => {
     setDraft(toDraft(event));
     setErr(null);
+    setEndAuto(false);
   }, [event]);
 
   useEffect(() => {
@@ -73,54 +43,43 @@ export function EventSheet({ event, busy, onClose, onSave, onDelete, onRestore }
 
   const def = typeDef(draft.type);
   const deleted = Boolean(event.deleted_at);
-
-  /*
-   * Инпут `datetime-local` знает только минуты, а у событий Алисы есть секунды.
-   * Поэтому «изменилось ли время» решаем в той же точности, в какой человек его видит:
-   * иначе патч содержал бы started_at с первого же рендера и сохранение «без правок»
-   * молча срезало бы секунды — вместе с порядком событий внутри фразы (§10.3).
-   */
+  // Только для подсказки под полем; для патча то же сравнение делает reviewDraft.
   const startedTouched = draft.started !== isoToLocalInput(event.started_at);
-  const endedTouched = draft.ended !== isoToLocalInput(event.ended_at);
-
-  const startedIso = localInputToIso(draft.started);
-  const endedIso = localInputToIso(draft.ended);
 
   const value = parseValue(draft.value);
 
-  const problems: string[] = [];
-  if (!startedIso) problems.push('Без времени начала запись не сохранить.');
-  if (startedIso && endedIso && (parseTs(endedIso) ?? 0) < (parseTs(startedIso) ?? 0)) {
-    problems.push('Конец раньше начала.');
-  }
-  if (value === 'bad') problems.push('Значение должно быть числом.');
-  if (typeof value === 'number' && value < 0) problems.push('Значение не может быть отрицательным.');
-  if (typeof value === 'number' && def.units.length > 0 && !draft.unit) {
-    problems.push('Выберите единицу измерения.');
-  }
-  const valid = problems.length === 0;
+  const { patch, problems, dirty, valid } = useMemo(
+    () => reviewDraft(event, draft, endAuto),
+    [event, draft, endAuto],
+  );
 
-  const patch = useMemo<EventPatch>(() => {
-    const next: EventPatch = {};
-    if (draft.type !== event.type) next.type = draft.type;
-    const subtype = draft.subtype.trim() || null;
-    if (subtype !== (event.subtype ?? null)) next.subtype = subtype;
-    if (startedTouched && startedIso) next.started_at = startedIso;
-    if (endedTouched) next.ended_at = endedIso;
-    if (typeof value === 'number' || value === null) {
-      if (value !== (event.value_num ?? null)) next.value_num = value;
-      const unit = value == null ? null : draft.unit || null;
-      if (unit !== (event.value_unit ?? null)) next.value_unit = unit;
-    }
-    const note = draft.note.trim() || null;
-    if (note !== (event.note ?? null)) next.note = note;
-    return next;
-  }, [draft, event, startedIso, endedIso, startedTouched, endedTouched, value]);
+  /**
+   * Первое прикосновение к пустому полю конца. Подставляем дату и время сразу:
+   * пока в поле пусто, браузер не отдаёт набранные цифры вообще (см. suggestEnd),
+   * и человек набирает время в никуда.
+   */
+  const touchEnd = () => {
+    if (draft.ended) return;
+    setDraft((d) => ({ ...d, ended: suggestEnd(event.started_at) }));
+    setEndAuto(true);
+  };
 
-  const dirty = Object.keys(patch).length > 0;
+  /** Набрал сам, выбрал пикером или нажал «Сейчас» — подстановка стала правкой. */
+  const editEnd = (ended: string) => {
+    setEndAuto(false);
+    setDraft((d) => ({ ...d, ended }));
+  };
+
+  /** Ушёл, ничего не набрав: возвращаем поле в пустое, чтобы не закрыть сон случайно. */
+  const leaveEnd = () => {
+    if (!endAuto) return;
+    setEndAuto(false);
+    setDraft((d) => ({ ...d, ended: '' }));
+  };
 
   const pickType = (id: string) => {
     const nextDef = typeDef(id);
+    setEndAuto(false);
     setDraft((d) => {
       // У типа без единиц (сон, подгузник, заметка) значения не бывает — убираем оба,
       // иначе остаётся «сон со значением 130 без единицы».
@@ -255,19 +214,30 @@ export function EventSheet({ event, busy, onClose, onSave, onDelete, onRestore }
                   type="datetime-local"
                   className="input input--time"
                   value={draft.ended}
-                  onChange={(e) => setDraft({ ...draft, ended: e.target.value })}
+                  onFocus={touchEnd}
+                  onBlur={leaveEnd}
+                  onChange={(e) => editEnd(e.target.value)}
                 />
-                {draft.ended ? (
+                {draft.ended && !endAuto ? (
+                  <button type="button" className="btn" onClick={() => editEnd('')}>
+                    {def.openable ? 'Идёт' : 'Убрать'}
+                  </button>
+                ) : (
+                  // Самый частый случай: сон только что кончился. Одна кнопка вместо набора.
                   <button
                     type="button"
                     className="btn"
-                    onClick={() => setDraft({ ...draft, ended: '' })}
+                    onClick={() => editEnd(msToLocalInput(Date.now()))}
                   >
-                    {def.openable ? 'Идёт' : 'Убрать'}
+                    Сейчас
                   </button>
-                ) : null}
+                )}
               </div>
-              {!draft.ended ? (
+              {endAuto ? (
+                <p className="field__hint">
+                  Пока только подсказка: поправьте цифры или нажмите «Сейчас».
+                </p>
+              ) : !draft.ended ? (
                 <p className="field__hint">
                   {def.openable
                     ? 'Пусто — событие ещё не закончилось.'

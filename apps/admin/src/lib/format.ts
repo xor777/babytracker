@@ -78,12 +78,17 @@ export function dayTitle(ms: number, now = Date.now()): string {
   return formatDay(ms);
 }
 
+/** Момент → значение для <input type="datetime-local"> в локальной зоне, с точностью до минуты. */
+export function msToLocalInput(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 /** ISO UTC → значение для <input type="datetime-local"> в локальной зоне. */
 export function isoToLocalInput(iso: string | null | undefined): string {
   const ms = parseTs(iso);
   if (ms == null) return '';
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return msToLocalInput(ms);
 }
 
 /** Обратно: значение инпута (локальное время) → ISO UTC для БД (§1). */
