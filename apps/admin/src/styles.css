@@ -1597,17 +1597,6 @@ textarea.input {
   opacity: 0.9;
 }
 
-/* Второй ряд — отметка на своей высоте, а не этаж поверх первого:
-   складывать мокрые с грязными нельзя, они пересекаются. */
-.bars__marker {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 3px;
-  border-radius: 2px;
-  opacity: 0.95;
-}
-
 .bars__gapnote {
   margin-top: 7px;
   font-size: 11.5px;
@@ -1626,6 +1615,165 @@ textarea.input {
 
 .bars__bandnote {
   font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Подгузники: точка на каждый подгузник
+
+   Не столбец: у столбца читается длина, а врачу нужно число. Здесь
+   считать нечего — сколько сменили, столько и знаков. Геометрию
+   (шаг, размер, зазор пятёрок) считает DiaperDots и кладёт инлайном:
+   она зависит от числа суток на экране и от самого плодовитого дня.
+   ============================================================ */
+
+.dots {
+  margin-top: 4px;
+}
+
+.dots__plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 1px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Ориентир — черта в зазоре под шестым знаком, а не оценка. */
+.dots__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--t-diaper);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.dots__col {
+  position: relative;
+  flex: 1;
+  min-width: 3px;
+  height: 100%;
+  border-radius: 2px 2px 0 0;
+}
+
+.dots__col--today {
+  background: var(--tint);
+}
+
+/* Знак подгузника. Размер и место приходят инлайном — здесь только облик. */
+.dots__dot {
+  display: inline-block;
+  flex: none;
+  border-radius: 50%;
+}
+
+.dots__col .dots__dot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dots__dot--wet {
+  background: var(--t-diaper);
+}
+
+/* Грязный — квадрат: цвета мало, форма читается и в оттенках серого. */
+.dots__dot--dirty {
+  background: var(--t-measure);
+  border-radius: 2px;
+}
+
+/*
+ * И мокрый, и грязный — ОДИН знак на один подгузник, но двух цветов.
+ * Низ зелёный, верх оранжевый: знак лежит на стыке кучек, и оба отрезка —
+ * зелёный снизу и оранжевый сверху — проходят сквозь него, не разрываясь.
+ */
+.dots__dot--both {
+  background: linear-gradient(to top, var(--t-diaper) 50%, var(--t-measure) 50%);
+}
+
+/* Подгузник записан, а мокрый он или грязный — не разобрали. Пустой знак: он
+   занимает своё место в счёте, но ничего не утверждает. */
+.dots__dot--unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+
+/* Сутки без записей: штриховка во всю высоту. Не ноль — «мы не знаем». */
+.dots__hatch {
+  height: 100%;
+  border-radius: 2px 2px 0 0;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    var(--line-strong) 3px,
+    var(--line-strong) 4px
+  );
+  opacity: 0.7;
+}
+
+/* Записали, а за сутки ни одного: настоящий ноль, и он обязан быть виден. */
+.dots__zero {
+  position: absolute;
+  bottom: 0;
+  left: 15%;
+  right: 15%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--t-diaper);
+  opacity: 0.9;
+}
+
+.dots__axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.dots__note {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.dots__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.dots__legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dots__legend .dots__dot {
+  width: 9px;
+  height: 9px;
+}
+
+/* Та же поправка на «квадрат кажется крупнее», что и на графике. */
+.dots__legend .dots__dot--dirty {
+  width: 8px;
+  height: 8px;
+}
+
+.dots__gapnote {
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text-3);
 }
 

@@ -20,6 +20,7 @@ import {
   averagePerDay,
   buildWindow,
   coverage,
+  diaperMarks,
   feedGapFacts,
   sleepFacts,
   weeks,
@@ -308,6 +309,116 @@ test('среднее не округляется внутри: округляе�
   assert.ok(avg);
   assert.equal(avg.value, 25 / 3);
   assert.equal(formatPerDay(avg.value), '8,3');
+});
+
+/* ================================================================== *
+ * 3.5. Подгузники: знаков ровно столько, сколько подгузников
+ *
+ * Карточка рисует штуку на каждый подгузник, а сервер отдаёт два
+ * ПЕРЕСЕКАЮЩИХСЯ ряда: подгузник с подтипом `both` лежит и в `wet`, и в
+ * `dirty`. Отсюда единственное, что нельзя сломать: сумма нарисованного
+ * не должна превышать число сменённых подгузников. Иначе картинка
+ * покажет врачу подгузников больше, чем было, — а по ним он судит об
+ * обезвоживании.
+ * ================================================================== */
+
+/** Инвариант карточки: кучки не пересекаются и в сумме дают ровно `total`. */
+function assertHonest(m: ReturnType<typeof diaperMarks>, d: DailyStats['diapers']) {
+  assert.ok(m);
+  assert.equal(
+    m.wetOnly + m.both + m.dirtyOnly + m.unknown,
+    m.total,
+    'нарисованных знаков должно быть ровно столько, сколько подгузников сменили',
+  );
+  assert.ok(m.total <= d.total, 'знаков больше, чем подгузников, быть не может');
+}
+
+test('подгузник «и мокрый, и грязный» рисуется ОДИН раз, а не дважды', () => {
+  // 5 сменили: 3 только мокрых, 1 только грязный, 1 сразу оба.
+  // Сервер отдаёт wet=4, dirty=2 — в сумме 6, и стопка нарисовала бы шесть.
+  const d = { wet: 4, dirty: 2, both: 1, total: 5 };
+  const m = diaperMarks(d);
+  assert.deepEqual(m, { wetOnly: 3, both: 1, dirtyOnly: 1, unknown: 0, total: 5 });
+  assertHonest(m, d);
+});
+
+test('сутки, где каждый подгузник и мокрый, и грязный: три знака, а не шесть', () => {
+  const d = { wet: 3, dirty: 3, both: 3, total: 3 };
+  const m = diaperMarks(d);
+  assert.deepEqual(m, { wetOnly: 0, both: 3, dirtyOnly: 0, unknown: 0, total: 3 });
+  assertHonest(m, d);
+});
+
+test('кучки складываются обратно в ряды сервера: врач сравнивает с ориентиром их', () => {
+  const d = { wet: 8, dirty: 4, both: 2, total: 10 };
+  const m = diaperMarks(d);
+  assert.ok(m);
+  assert.equal(m.wetOnly + m.both, d.wet, 'мокрые — это нижний отрезок вместе с двойными');
+  assert.equal(m.dirtyOnly + m.both, d.dirty, 'грязные — верхний отрезок вместе с двойными');
+  assertHonest(m, d);
+});
+
+test('подгузник без подтипа не теряется: знаков всё равно столько, сколько сменили', () => {
+  // «поменяли подгузник» без уточнения: в wet/dirty он не попал, в total — да.
+  const d = { wet: 5, dirty: 1, both: 0, total: 7 };
+  const m = diaperMarks(d);
+  assert.deepEqual(m, { wetOnly: 5, both: 0, dirtyOnly: 1, unknown: 1, total: 7 });
+  assertHonest(m, d);
+});
+
+test('подгузников за сутки не записано — null, а не ноль', () => {
+  assert.equal(diaperMarks(null), null);
+  assert.equal(diaperMarks(undefined), null);
+  // А вот записанный ноль — это ноль, и он остаётся нулём.
+  assert.deepEqual(diaperMarks({ wet: 0, dirty: 0, both: 0, total: 0 }), {
+    wetOnly: 0,
+    both: 0,
+    dirtyOnly: 0,
+    unknown: 0,
+    total: 0,
+  });
+});
+
+test('битые числа с сервера не рисуют лишних подгузников', () => {
+  // `both` больше, чем `wet`; сумма подтипов больше, чем `total`. Так быть не
+  // должно, но если случится — лучше показать меньше, чем придумать подгузник.
+  for (const d of [
+    { wet: 1, dirty: 5, both: 4, total: 2 },
+    { wet: 9, dirty: 9, both: 0, total: 3 },
+    { wet: -2, dirty: 1.7, both: 0, total: 3 },
+  ]) {
+    const m = diaperMarks(d);
+    assert.ok(m);
+    assert.ok(
+      m.wetOnly + m.both + m.dirtyOnly + m.unknown <= Math.max(0, Math.floor(d.total)),
+      `знаков больше, чем подгузников: ${JSON.stringify(d)} → ${JSON.stringify(m)}`,
+    );
+    assert.ok(
+      [m.wetOnly, m.both, m.dirtyOnly, m.unknown].every((n) => Number.isInteger(n) && n >= 0),
+      `знаки обязаны быть целыми и неотрицательными: ${JSON.stringify(m)}`,
+    );
+  }
+});
+
+test('на любых правдоподобных сутках нарисованное не превышает сменённого', () => {
+  // Перебор вместо примера: ровно этот инвариант и есть причина всей раскладки.
+  for (let wetOnly = 0; wetOnly <= 6; wetOnly++) {
+    for (let dirtyOnly = 0; dirtyOnly <= 6; dirtyOnly++) {
+      for (let both = 0; both <= 4; both++) {
+        for (const extra of [0, 1, 2]) {
+          const total = wetOnly + dirtyOnly + both + extra;
+          const d = { wet: wetOnly + both, dirty: dirtyOnly + both, both, total };
+          const m = diaperMarks(d);
+          assert.ok(m);
+          assert.deepEqual(
+            m,
+            { wetOnly, both, dirtyOnly, unknown: extra, total },
+            `не разложилось: ${JSON.stringify(d)}`,
+          );
+        }
+      }
+    }
+  }
 });
 
 /* ================================================================== *

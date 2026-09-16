@@ -8,28 +8,16 @@ export interface BarDay {
    * и на его месте стоит штриховка «данных нет».
    */
   primary: number | null;
-  /**
-   * Второй ряд — НЕ стопкой, а отметкой на своей высоте.
-   *
-   * Складывать мокрые с грязными нельзя: подгузник, который был и мокрым, и
-   * грязным, честно посчитан в обоих рядах, и столбик их суммы показал бы
-   * подгузников больше, чем сменили. Ряды независимы, шкала у них общая —
-   * значит второй ряд это метка, а не этаж.
-   */
-  marker?: number | null;
 }
 
 interface Props {
   days: BarDay[];
   norm?: NormRange | null;
   tone: string;
-  toneSecondary?: string;
   /** Как подписать значение в подсказке. */
   unit?: string;
   /** Пересчёт значения для подписи (минуты → часы). */
   format?: (v: number) => string;
-  /** Как назвать второй ряд в подсказке. */
-  markerLabel?: string;
   /** Пояснить штриховку под графиком. На странице это нужно один раз, а не у каждой карточки. */
   gapNote?: boolean;
 }
@@ -49,23 +37,14 @@ interface Props {
  * чтобы он не съезжал на доли пикселя вместе с viewBox. Сегодняшний день помечен
  * отдельно — сутки ещё не закончились, и сравнивать его с прошедшими нечестно.
  */
-export function DayBars({
-  days: input,
-  norm,
-  tone,
-  toneSecondary,
-  unit,
-  format,
-  markerLabel,
-  gapNote,
-}: Props) {
+export function DayBars({ days: input, norm, tone, unit, format, gapNote }: Props) {
   if (input.length === 0) return <p className="chart-empty">Данных за период пока нет.</p>;
 
   // Сводка приходит от свежих к старым, а время на графике всегда течёт вправо.
   const days = [...input].sort((a, b) => a.date.localeCompare(b.date));
 
   const todayKey = localDateKey(Date.now());
-  const totals = days.map((d) => Math.max(d.primary ?? 0, d.marker ?? 0));
+  const totals = days.map((d) => d.primary ?? 0);
   const normTop = norm?.max ?? norm?.min ?? 0;
   const max = Math.max(1, ...totals, normTop) * 1.15;
   const gaps = days.filter((d) => d.primary == null).length;
@@ -75,9 +54,10 @@ export function DayBars({
 
   /*
    * Ориентир с обеими границами (8–12 кормлений) — это полоса.
-   * Ориентир «6 и больше» полосой рисовать нельзя: у него нет верха, и заливка
-   * от 6 до потолка закрашивает весь график, превращая подсказку в помеху.
-   * Для него — одна пунктирная черта порога.
+   * Ориентир вида «столько и больше» полосой рисовать нельзя: у него нет верха,
+   * и заливка до потолка закрашивает весь график, превращая подсказку в помеху.
+   * Для него — одна пунктирная черта порога. (Подгузники с их «6+» живут теперь
+   * в DiaperDots: там знаки штучные, и черта ложится под шестой знак.)
    */
   const bandLo = norm?.min ?? null;
   const bandHi = norm?.max ?? null;
@@ -105,7 +85,7 @@ export function DayBars({
           const isToday = d.date === todayKey;
           const when = formatDayShort(parseTs(`${d.date}T12:00:00`) ?? Date.now());
           const missing = d.primary == null;
-          const total = (d.primary ?? 0) + (d.marker ?? 0);
+          const total = d.primary ?? 0;
 
           return (
             <div
@@ -114,9 +94,7 @@ export function DayBars({
               title={
                 missing
                   ? `${when}: записей нет`
-                  : `${when}: ${label(d.primary ?? 0)}${
-                      d.marker != null ? `, ${markerLabel ?? 'второй ряд'} ${label(d.marker)}` : ''
-                    }${isToday ? ' (сутки ещё идут)' : ''}`
+                  : `${when}: ${label(d.primary ?? 0)}${isToday ? ' (сутки ещё идут)' : ''}`
               }
             >
               {missing ? (
@@ -131,13 +109,6 @@ export function DayBars({
                       как «не записывали», то есть как совсем другое утверждение. */}
                   {total === 0 ? (
                     <div className="bars__zero" style={{ background: tone }} aria-hidden="true" />
-                  ) : null}
-                  {d.marker != null && d.marker > 0 ? (
-                    <div
-                      className="bars__marker"
-                      style={{ bottom: pct(d.marker), background: toneSecondary ?? tone }}
-                      aria-hidden="true"
-                    />
                   ) : null}
                 </>
               )}

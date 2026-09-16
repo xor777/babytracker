@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { periodsForAge, useChild, useStats } from '../hooks/useStats';
 import {
   averagePerDay,
+  diaperMarks,
   feedGapFacts,
   observationFacts,
   observationPhrase,
@@ -28,6 +29,8 @@ import { CoverageStrip } from './CoverageStrip';
 import { WeightChart } from './WeightChart';
 import { DayBars } from './DayBars';
 import type { BarDay } from './DayBars';
+import { DiaperDots } from './DiaperDots';
+import type { DiaperDay } from './DiaperDots';
 
 /**
  * «Сводка» — страница, с которой врач на осмотре получает ответы.
@@ -101,16 +104,21 @@ export function StatsScreen() {
   // Ориентиры сервер считает на возраст (§10.1) — берём самые свежие.
   const norms = cells[cells.length - 1]?.norms;
 
-  const bars = (pick: (c: DayCell) => number | null, second?: (c: DayCell) => number | null) =>
+  const bars = (pick: (c: DayCell) => number | null) =>
     cells.map<BarDay>((c) => {
       // Сутки без записей (и сутки, про которые мы не знаем) — не ноль, а пробел.
       const blank = c.recorded === false || c.recorded === null;
-      return {
-        date: c.date,
-        primary: blank ? null : pick(c),
-        marker: second && !blank ? second(c) : undefined,
-      };
+      return { date: c.date, primary: blank ? null : pick(c) };
     });
+
+  // Подгузники рисуются штуками, а не длиной: два пересекающихся ряда с сервера
+  // раскладываются на непересекающиеся кучки, чтобы знаков вышло ровно столько,
+  // сколько подгузников сменили (см. diaperMarks).
+  const diaperDays = cells.map<DiaperDay>((c) => ({
+    date: c.date,
+    blank: c.recorded === false || c.recorded === null,
+    marks: diaperMarks(c.diapers),
+  }));
 
   if (s.status === 'error') {
     return (
@@ -303,21 +311,13 @@ export function StatsScreen() {
                   hint={denom(avg.dirty)}
                 />
               </div>
-              <DayBars
-                days={bars(
-                  (c) => c.diapers?.wet ?? 0,
-                  (c) => c.diapers?.dirty ?? 0,
-                )}
-                norm={norms?.wetDiapers}
-                tone="var(--t-diaper)"
-                toneSecondary="var(--t-measure)"
-                unit="шт"
-                markerLabel="грязных"
-              />
+              <DiaperDots days={diaperDays} norm={norms?.wetDiapers} />
               <p className="card__note">
-                Столбец — мокрые, чёрточка поверх него — грязные. Ряды не складываются:
-                подгузник, который был и мокрым, и грязным, посчитан в обоих. Это один
-                подгузник, но два разных признака, и врач смотрит на них по отдельности.
+                Знак — подгузник: сколько сменили, столько и знаков. Мокрые — снизу,
+                грязные — сверху, а тот, что был и мокрым, и грязным, стоит между ними
+                одним двуцветным знаком и входит в оба счёта. Поэтому «мокрых» и
+                «грязных» по отдельности больше, чем подгузников: это один подгузник и
+                два разных признака, и врач смотрит на них порознь.
               </p>
             </>
           ) : (
