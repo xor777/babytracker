@@ -47,8 +47,9 @@ export const TAXONOMY: Readonly<{ [T in EventType]: TypeSpec<T> }> = {
     subtypes: SUBTYPES.feed,
     units: ['ml', 'min', 'g'],
     hint:
-      'бутылочка — объём в ml; грудь — длительность в min, сторона в note (left/right/both); ' +
-      'объём НЕ обязателен, не названо — NULL',
+      // Про необязательность объёма сказано в «правилах данных» одним общим
+      // правилом на все типы — здесь не повторяется.
+      'бутылочка — объём в ml; грудь — длительность в min, сторона в note (left/right/both)',
   },
   pump: { subtypes: SUBTYPES.pump, units: ['ml'], hint: 'сцеживание, объём в ml' },
   diaper: {

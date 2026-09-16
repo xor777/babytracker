@@ -326,7 +326,11 @@ test('канонический случай: «заснул» при откры�
   assert.match(text, /\(а\) проснулся, а сказать забыли/);
   assert.match(text, /пропущенное пробуждение/);
   assert.match(text, /Момент пробуждения\nНЕИЗВЕСТЕН/);
-  assert.match(text, /поставила ГРАНИЦУ|Поставила ГРАНИЦУ/);
+  // Сон закрывается ЗАЩИТИМОЙ границей, а не выдуманным временем пробуждения,
+  // и сказано это в образце заметки человеческим языком (см. «NOTE ЧИТАЕТ
+  // ЧЕЛОВЕК»): «записала до <времени>: позже он точно не спал».
+  assert.match(text, /Записала до \d\d:\d\d/);
+  assert.match(text, /позже он точно не спал/);
   assert.match(text, /confidence=0\.3/);
   assert.doesNotMatch(text, /это \(б\), повтор/, 'через три часа ветка повтора не предлагается');
   d.close();
@@ -537,6 +541,152 @@ test('запись матчера подана как черновик с id, а
   assert.match(text, /Его запись — черновик/);
   assert.match(text, /confidence=0\.4/);
   d.close();
+});
+
+/* ------------------------------------------------------------------ */
+/* Якорь времени и прежние допущения (разбор прод-случая 14:03)        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Прод, 14:03. Родитель: «что он спал полчаса» — ждал сна 13:33–14:03.
+ * Модель записала 12:35–13:05 с confidence 0.5 и сама написала в заметке, что
+ * выходит противоречие с кормлением 12:16–13:00. Якорь уехал на час назад,
+ * потому что в 13:05 по «проснулся» осталась заметка-допущение, а промпт велел
+ * уточнять прежние допущения первым делом — фраза была прочитана как ответ
+ * на неё. Правил про длительность без начала в промпте не было вовсе.
+ */
+function eventRow(id: number, type: string, minutesAgo: number, endMinutesAgo: number | null, extra: Partial<EventRow> = {}): EventRow {
+  return {
+    id,
+    child_id: 'andrey',
+    type,
+    subtype: null,
+    started_at: new Date(NOW.getTime() - minutesAgo * 60_000).toISOString(),
+    ended_at: endMinutesAgo === null ? null : new Date(NOW.getTime() - endMinutesAgo * 60_000).toISOString(),
+    value_num: null,
+    value_unit: null,
+    note: null,
+    source: 'alice-fast',
+    utterance_id: null,
+    confidence: 0.9,
+    created_at: NOW.toISOString(),
+    updated_at: NOW.toISOString(),
+    deleted_at: null,
+    ...extra,
+  };
+}
+
+/** Лента прод-случая: кормление 12:16–13:00, подгузник 12:28, заметка о пробуждении 13:05. */
+function prodFeed(): EventRow[] {
+  return [
+    eventRow(3, 'note', 58, 58, {
+      note: `${ASSUMPTION_MARK} Проснулся, засыпание не было зафиксировано — когда заснул, неизвестно`,
+      confidence: 0.3,
+    }),
+    eventRow(2, 'diaper', 95, 95, { subtype: 'both' }),
+    eventRow(1, 'feed', 107, 63, { subtype: 'bottle', source: 'alice-llm' }),
+  ];
+}
+
+test('длительность без начала якорится к моменту фразы, а не к прежней записи', () => {
+  const text = prompt({ say: 'что он спал полчаса', recentEvents: prodFeed() });
+
+  assert.match(text, /ЯКОРЬ ВРЕМЕНИ — МОМЕНТ ФРАЗЫ/);
+  assert.match(text, /ДЛИТЕЛЬНОСТЬ БЕЗ НАЧАЛА[\s\S]{0,80}кончилось в него/);
+  assert.match(
+    text,
+    /Привязывать к прежней записи — только\s*\n?\s*если фраза называет её прямо или она в окне повтора/,
+    'привязка к прежней записи разрешена по двум проверяемым признакам, а не «по смыслу»',
+  );
+});
+
+test('«спал полчаса» — не названное время: карточка «задним числом» не поднимается', () => {
+  const say = 'что он спал полчаса';
+  const fast = matchFast(say, undefined, { now: NOW, tz: cfg.tz });
+
+  assert.equal(fast.timeUnresolved, true, 'матчер по слову «полчаса» признаёт время неразобранным');
+  assert.equal('at' in fast && Boolean(fast.at), false, 'но времени родитель не называл');
+
+  const text = prompt({ say, fast, recentEvents: prodFeed() });
+  assert.doesNotMatch(
+    text,
+    /ТВОЙ СЛУЧАЙ: событие задним числом/,
+    'длительность — не названное время, разрешения писать противоречие с confidence=0.5 быть не должно',
+  );
+});
+
+test('названное родителем время карточку «задним числом» по-прежнему поднимает', () => {
+  const fast: FastResult = {
+    kind: 'sleep_start',
+    confidence: 0.9,
+    at: new Date(NOW.getTime() - 180 * 60_000).toISOString(),
+    mayContainMore: false,
+    timeUnresolved: false,
+  };
+  const text = prompt({ say: 'он заснул в одиннадцать', fast, recentEvents: prodFeed() });
+
+  assert.match(text, /ТВОЙ СЛУЧАЙ: событие задним числом/);
+  assert.match(text, /НЕ СДВИГАЙ соседние/);
+  assert.match(
+    text,
+    /confidence=0\.5/,
+    'поведение при названном времени не меняется: пишем как названо и помечаем',
+  );
+});
+
+test('случай «время названо, но не разобрано» не осиротел без карточки', () => {
+  const say = 'андрей заснул полтора часа назад';
+  const text = prompt({ say, fast: matchFast(say, undefined, { now: NOW, tz: cfg.tz }) });
+
+  assert.match(text, /СИГНАЛ «время названо, но не разобрано»/);
+  assert.match(text, /Вычисли время по ЯКОРЮ из правил данных/);
+  assert.match(text, /событие задним числом, после него уже есть записи →/, 'вердикт печатается всегда');
+});
+
+test('прежнее допущение уточняется только фразой, которая в него ложится без противоречия', () => {
+  const text = prompt();
+  assert.match(text, /УТОЧНЯЕТ только та\s*\n?\s*фраза, что ложится в допущение БЕЗ противоречия/);
+  assert.match(text, /это новый факт, а не ответ на твой пробел/);
+});
+
+/* ------------------------------------------------------------------ */
+/* Язык примечаний: note читает человек, а не программа                */
+/* ------------------------------------------------------------------ */
+
+test('в промпте сказано, что note пишется человеческим языком', () => {
+  const text = prompt();
+  assert.match(text, /NOTE ЧИТАЕТ ЧЕЛОВЕК/);
+  assert.match(text, /Ни номеров\s*\n?записей/);
+  assert.match(text, /времена и числа остаются/, 'точность не приносится в жертву простоте');
+});
+
+test('образцы примечаний в промпте сами написаны без жаргона', () => {
+  const d = db();
+  startSleep(d, cfg, { at: new Date(NOW.getTime() - 200 * 60_000).toISOString() });
+  const correction = 'нет, он не спал, исправь, он заснул в девять, а не в десять';
+  const texts = [
+    prompt(),
+    prompt({ db: d }),
+    prompt({ db: d, say: correction, recentEvents: prodFeed() }),
+    prompt({ say: 'он какой-то желтенький' }),
+    prompt({ say: 'начал кушать', recentEvents: [eventRow(9, 'feed', 200, null, { subtype: 'breast' })] }),
+  ];
+  d.close();
+
+  // Образец примечания всегда начинается с маркера и кончается закрывающей
+  // кавычкой — по ним его и достаём из текста промпта.
+  const samples = texts
+    .flatMap((t) => [...t.matchAll(/\[\?\][^»"]{10,}/g)].map((m) => m[0]))
+    .filter((s) => !s.includes('id=32')); // единственный образец «как НЕ надо»
+
+  assert.ok(samples.length >= 5, `образцов нашлось ${samples.length} — сломался разбор`);
+  for (const s of samples) {
+    assert.doesNotMatch(s, /\bid\s*=/, `ссылка на номер записи в примечании: «${s}»`);
+    assert.doesNotMatch(s, /ended_at|value_num|update_event|log_event|confidence=/, `имя поля или тула: «${s}»`);
+    assert.doesNotMatch(s, /матчер|fast-path|карточк/i, `внутреннее слово проекта: «${s}»`);
+    assert.doesNotMatch(s, /[А-ЯЁ]{4,}/, `протокольный капс: «${s}»`);
+    assert.doesNotMatch(s, /свела к точке|вид оставила пустым/, `канцелярит: «${s}»`);
+  }
 });
 
 /* ------------------------------------------------------------------ */
