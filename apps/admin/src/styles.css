@@ -1132,6 +1132,10 @@ textarea.input {
 .strip {
   position: relative;
   padding-top: 2px;
+
+  /* Размер метки. Держится заодно с MARK_PX в DayStrip.tsx: там по нему
+     считается, какие метки слиплись бы и рисуются одной фигурой. */
+  --mark: 8px;
 }
 
 .strip__row {
@@ -1171,32 +1175,55 @@ textarea.input {
   opacity: 0.9;
 }
 
-.strip__row--marks {
-  height: 11px;
-  margin-top: 3px;
+/* Дорожка кормлений жмётся к полосе сна, дорожка подгузников — к оси часов:
+   между ними зазор больше, чем внутри, поэтому это две ленты, а не полосатая
+   рябь из одинаковых чёрточек. */
+.strip__row--marks[data-kind='feed'] {
+  height: var(--mark);
+  margin-top: 4px;
+}
+
+.strip__row--marks[data-kind='diaper'] {
+  height: var(--mark);
+  margin-top: 6px;
 }
 
 .strip__mark {
   position: absolute;
-  top: 2px;
-  width: 2px;
-  height: 7px;
-  margin-left: -1px;
-  border-radius: 1px;
+  top: 0;
+  min-width: var(--mark);
+  height: var(--mark);
+  /* Элемент шире пролёта пачки ровно на одну метку (ширину задаёт компонент),
+     сдвиг влево на половину ставит его центром на время первого события. */
+  margin-left: calc(var(--mark) / -2);
 }
 
+/* Кормление — круглое. Пачка кормлений вытягивается в капсулу: силуэт
+   остаётся круглым, и пачка читается как «ел несколько раз подряд». */
 .strip__row--marks[data-kind='feed'] .strip__mark {
   background: var(--t-feed);
+  border-radius: 999px;
 }
 
+/* Подгузник — угловатый клин вниз, к оси часов. Пачка превращается в трапецию:
+   тот же плоский верх и скошенные бока. Ровно та же формула и для одиночной
+   метки — при ширине в одну метку трапеция вырождается в треугольник.
+   Клин ещё и легче кружка по «количеству краски»: дорожка подгузников выходит
+   тише кормлений даже в обесцвеченном виде. */
 .strip__row--marks[data-kind='diaper'] .strip__mark {
   background: var(--t-diaper);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    calc(100% - var(--mark) / 2) 100%,
+    calc(var(--mark) / 2) 100%
+  );
 }
 
 .strip__axis {
   position: relative;
   height: 14px;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 
 .strip__tick {
@@ -1227,22 +1254,32 @@ textarea.input {
   gap: 5px;
 }
 
+/* Ключ легенды повторяет ФОРМУ метки, а не только её цвет: сопоставлять
+   легенду с полосой нужно по силуэту — иначе легенда сама держится на паре
+   близких оттенков и не помогает. */
 .strip__key::before {
   content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+  flex: none;
+  width: 9px;
+  height: 9px;
 }
 
 .strip__key[data-kind='sleep']::before {
+  width: 12px;
+  height: 7px;
+  border-radius: 2px;
   background: var(--t-sleep);
 }
 
 .strip__key[data-kind='feed']::before {
+  border-radius: 999px;
   background: var(--t-feed);
 }
 
 .strip__key[data-kind='diaper']::before {
+  width: 10px;
+  height: 8px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
   background: var(--t-diaper);
 }
 
