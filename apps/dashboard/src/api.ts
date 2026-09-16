@@ -1,11 +1,14 @@
 import type { Health, TrackerEvent, TrackerState, Utterance } from './types';
+import { REQUEST_TIMEOUT_MS } from './lib/watchdog';
 
 /**
  * База API. В dev — пустая строка (работает vite-прокси на 8787).
  * В проде дашборд отдаётся статикой того же сервера, поэтому по умолчанию тоже пусто
  * (тот же origin). Если фронт живёт отдельно — VITE_API_BASE=http://tracker.local:8787
  */
-const RAW_BASE = (import.meta.env.VITE_API_BASE ?? '').trim();
+// Необязательная цепочка не для красоты: под node (тесты) `import.meta.env`
+// не существует вовсе, и без неё модуль падает на импорте — так же, как в tz.ts.
+const RAW_BASE = (import.meta.env?.VITE_API_BASE ?? '').trim();
 export const API_BASE = RAW_BASE.replace(/\/+$/, '');
 
 export function apiUrl(path: string): string {
@@ -38,22 +41,45 @@ export function goToPairing(): void {
   window.location.replace(`${PAIR_PATH}?next=${next}`);
 }
 
+/**
+ * Запрос со сроком.
+ *
+ * `fetch` сам по себе не истекает никогда: повисший запрос висит, пока жива
+ * страница. На телевизоре это выливалось в вечную надпись «подключение к
+ * телеметрии» — экран честно ждал ответа, которого уже не будет. Поэтому срок
+ * ставим сами: повисший запрос обязан стать ошибкой, а ошибку экран умеет
+ * показать и повторить.
+ *
+ * `AbortSignal.timeout`/`AbortSignal.any` не берём намеренно: в WebView
+ * телевизора их может не быть, и падение будет тем самым молчаливым.
+ */
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(apiUrl(path), {
-    signal,
-    headers: { accept: 'application/json' },
-    cache: 'no-store',
-    // Кука сессии (§11). Явно `same-origin`, а не `include`: другого origin
-    // здесь не бывает, а `include` обещал бы отправку туда, куда сервер её
-    // всё равно не пустит — CORS у нас без credentials.
-    credentials: 'same-origin',
-  });
-  if (res.status === 401) {
-    goToPairing();
-    throw new Error(`${path} → нет сессии`);
+  const ctrl = new AbortController();
+  const stop = () => ctrl.abort();
+  const bail = setTimeout(stop, REQUEST_TIMEOUT_MS);
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop);
+
+  try {
+    const res = await fetch(apiUrl(path), {
+      signal: ctrl.signal,
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+      // Кука сессии (§11). Явно `same-origin`, а не `include`: другого origin
+      // здесь не бывает, а `include` обещал бы отправку туда, куда сервер её
+      // всё равно не пустит — CORS у нас без credentials.
+      credentials: 'same-origin',
+    });
+    if (res.status === 401) {
+      goToPairing();
+      throw new Error(`${path} → нет сессии`);
+    }
+    if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(bail);
+    signal?.removeEventListener('abort', stop);
   }
-  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
-  return (await res.json()) as T;
 }
 
 /**

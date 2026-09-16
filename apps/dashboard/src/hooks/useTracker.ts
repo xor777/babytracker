@@ -17,6 +17,7 @@ import type {
 } from '../types';
 import { upsertEvent } from '../lib/sleep';
 import { loadSnapshot, saveSnapshot } from '../lib/snapshot';
+import { STREAM_OPEN_MS, shouldReload } from '../lib/watchdog';
 
 const UTTERANCE_LIMIT = 20;
 /** Раз в столько мс освежаем REST-данные даже при живом SSE (страховка от рассинхрона). */
@@ -31,6 +32,27 @@ const PROBE_EVERY_MS = 15_000;
 const SILENCE_MS = 25_000;
 /** Страховочный предел: столько молчания — пересоздаём поток в любом случае. */
 const ZOMBIE_MS = 10 * 60 * 1000;
+
+/** Отметка о прошлой перезагрузке сторожа — переживает саму перезагрузку. */
+const RELOAD_KEY = 'andreytracker.stuck';
+
+function readReloadStamp(): number | null {
+  try {
+    const raw = window.localStorage.getItem(RELOAD_KEY);
+    const n = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeReloadStamp(at: number): void {
+  try {
+    window.localStorage.setItem(RELOAD_KEY, String(at));
+  } catch {
+    // приватный режим или переполнение — переживём без отметки
+  }
+}
 
 /**
  * Отпечаток состояния. Если при опросе он отличается от того, что последним
@@ -84,6 +106,12 @@ export function useTracker(): TrackerData {
 
   const offsetRef = useRef(0);
   const mountedRef = useRef(true);
+  /** Когда последний раз хоть что-то пришло с сервера. */
+  const lastOkRef = useRef(Date.now());
+  /** Получали ли мы данные хоть раз за эту загрузку страницы. */
+  const everOkRef = useRef(false);
+  /** Когда страница начала работать — сторож не должен сработать на старте. */
+  const startedAtRef = useRef(Date.now());
   /** Когда последний раз что-то приходило по SSE (не по REST). */
   const lastStreamAt = useRef(Date.now());
   /** Отпечаток последнего состояния, полученного именно по потоку. */
@@ -94,6 +122,8 @@ export function useTracker(): TrackerData {
   /** Обновление state: заодно ловим сдвиг часов сервера. */
   const applyState = useCallback((next: TrackerState) => {
     if (!mountedRef.current) return;
+    lastOkRef.current = Date.now();
+    everOkRef.current = true;
     setState(next);
     setLastSyncAt(Date.now());
     setBooting(false);
@@ -155,7 +185,11 @@ export function useTracker(): TrackerData {
       setEvents(eventsRes.value);
       ok = true;
     }
-    if (ok) setLastSyncAt(Date.now());
+    if (ok) {
+      lastOkRef.current = Date.now();
+      everOkRef.current = true;
+      setLastSyncAt(Date.now());
+    }
     return ok;
   }, [applyState]);
 
@@ -168,7 +202,12 @@ export function useTracker(): TrackerData {
       const ok = await refreshAll();
       if (!mountedRef.current) return;
       if (!ok) {
-        setLink((prev) => (prev === 'online' ? prev : 'offline'));
+        // Пока не получили ничего ни разу, называть себя «на связи» нельзя,
+        // даже если поток событий отрапортовал об открытии: именно на этом
+        // экран телевизора и застревал в «подключении» навсегда.
+        setLink((prev) =>
+          everOkRef.current && prev === 'online' ? prev : 'offline',
+        );
         retry = setTimeout(attempt, 5000);
       }
     };
@@ -196,6 +235,16 @@ export function useTracker(): TrackerData {
       }
     };
 
+    /** Поток не открылся за отведённое время — считаем попытку неудачной. */
+    let openDeadline: ReturnType<typeof setTimeout> | undefined;
+
+    const retryLater = () => {
+      es?.close();
+      es = null;
+      if (reconnect) clearTimeout(reconnect);
+      reconnect = setTimeout(connect, RECONNECT_MS);
+    };
+
     const connect = () => {
       if (closed) return;
       // Куку сессии (§11) EventSource отправляет сам: поток всегда с того же
@@ -203,8 +252,18 @@ export function useTracker(): TrackerData {
       // EventSource не умел слать Authorization вовсе.
       es = new EventSource(apiUrl('/api/stream'));
 
+      // EventSource умеет зависнуть в CONNECTING навсегда: ни onopen, ни
+      // onerror. Для экрана это выглядело как вечное «подключение».
+      if (openDeadline) clearTimeout(openDeadline);
+      openDeadline = setTimeout(() => {
+        if (closed || !es || es.readyState === EventSource.OPEN) return;
+        setLink('offline');
+        retryLater();
+      }, STREAM_OPEN_MS);
+
       es.onopen = () => {
         if (closed) return;
+        if (openDeadline) clearTimeout(openDeadline);
         lastStreamAt.current = Date.now();
         setLink('online');
         // При переподключении могли пропустить события — дочитываем по REST.
@@ -215,6 +274,7 @@ export function useTracker(): TrackerData {
         const next = parse<TrackerState>((ev as MessageEvent<string>).data);
         if (next) {
           lastStreamAt.current = Date.now();
+          lastOkRef.current = Date.now();
           lastStreamSig.current = signature(next);
           setLink('online');
           applyState(next);
@@ -262,12 +322,7 @@ export function useTracker(): TrackerData {
         if (closed) return;
         setLink('offline');
         // readyState CLOSED (2) — браузер сдался, поднимаем руками.
-        if (es && es.readyState === EventSource.CLOSED) {
-          es.close();
-          es = null;
-          if (reconnect) clearTimeout(reconnect);
-          reconnect = setTimeout(connect, RECONNECT_MS);
-        }
+        if (es && es.readyState === EventSource.CLOSED) retryLater();
       };
     };
 
@@ -289,6 +344,7 @@ export function useTracker(): TrackerData {
       closed = true;
       clearInterval(watchdog);
       if (reconnect) clearTimeout(reconnect);
+      if (openDeadline) clearTimeout(openDeadline);
       es?.close();
     };
   }, [applyState, applyUtterance, refreshAll, streamEpoch]);
@@ -364,6 +420,39 @@ export function useTracker(): TrackerData {
       clearInterval(timer);
       window.removeEventListener('pagehide', persist);
     };
+  }, [persist]);
+
+  /*
+   * Последнее средство: перезагрузка страницы.
+   *
+   * Когда сеть встала так, что запросы висят, а не падают, странице уже не
+   * помогут ни повторы, ни новый поток — её сокеты принадлежат ей самой.
+   * Перезагрузка бросает их все разом. Условия срабатывания — в `shouldReload`;
+   * снимок экрана сохраняем заранее, чтобы после перезагрузки не мигать
+   * пустотой. Отметку о перезагрузке читаем один раз: новая загрузка страницы
+   * прочитает её заново и увидит, что попытка уже была.
+   */
+  useEffect(() => {
+    const lastReloadAt = readReloadStamp();
+    const timer = setInterval(() => {
+      if (!mountedRef.current) return;
+      const now = Date.now();
+      const stuck = shouldReload({
+        now,
+        lastOkAt: lastOkRef.current,
+        startedAt: startedAtRef.current,
+        lastReloadAt,
+      });
+      if (!stuck) return;
+      writeReloadStamp(now);
+      try {
+        persist();
+      } catch {
+        // снимок не обязателен
+      }
+      window.location.reload();
+    }, PROBE_EVERY_MS);
+    return () => clearInterval(timer);
   }, [persist]);
 
   return {
