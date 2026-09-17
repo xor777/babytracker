@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { periodsForAge, useChild, useStats } from '../hooks/useStats';
 import {
   averagePerDay,
+  dayBars,
   diaperMarks,
   feedGapFacts,
   observationFacts,
@@ -11,7 +12,7 @@ import {
   temperatureFacts,
   weekStats,
 } from '../lib/summary';
-import type { Avg, DayCell, ObservationFacts } from '../lib/summary';
+import type { Avg, DayCell, FeedGap, ObservationFacts } from '../lib/summary';
 import { stateSubtypes, subtypeAccusative } from '../lib/taxonomy';
 import {
   formatDay,
@@ -21,6 +22,7 @@ import {
   formatNumber,
   formatPerDay,
   formatSignedGrams,
+  formatSpan,
   formatTime,
   formatWeight,
   plural,
@@ -28,9 +30,30 @@ import {
 import { CoverageStrip } from './CoverageStrip';
 import { WeightChart } from './WeightChart';
 import { DayBars } from './DayBars';
-import type { BarDay } from './DayBars';
 import { DiaperDots } from './DiaperDots';
 import type { DiaperDay } from './DiaperDots';
+
+/*
+ * Что берём из суток — по одной записи на каждое число экрана.
+ *
+ * `null` тут значит «за эти сутки такого не записано», и он делает сразу две
+ * вещи: выбрасывает сутки из знаменателя среднего и ставит на графике штриховку
+ * вместо столбца. Поэтому график и среднее обязаны спрашивать ОДНУ И ТУ ЖЕ
+ * функцию, а не две похожие: разошлись они однажды — и сутки, в которые
+ * записали одно взвешивание, оказались на графике кормлений нулём, а в
+ * знаменателе среднего — нет.
+ */
+const pick = {
+  feeds: (c: DayCell) => c.feeds?.total ?? null,
+  breast: (c: DayCell) => c.feeds?.breast ?? null,
+  bottle: (c: DayCell) => c.feeds?.bottle ?? null,
+  volume: (c: DayCell) => c.feeds?.volumeMl ?? null,
+  night: (c: DayCell) => c.nightFeeds,
+  wet: (c: DayCell) => c.diapers?.wet ?? null,
+  dirty: (c: DayCell) => c.diapers?.dirty ?? null,
+  sleep: (c: DayCell) => c.sleep?.totalMin ?? null,
+  sleepSessions: (c: DayCell) => c.sleep?.sessions ?? null,
+};
 
 /**
  * «Сводка» — страница, с которой врач на осмотре получает ответы.
@@ -60,15 +83,15 @@ export function StatsScreen() {
   const cells = s.cells;
   const avg = useMemo(
     () => ({
-      feeds: averagePerDay(cells, (c) => c.feeds?.total ?? null),
-      breast: averagePerDay(cells, (c) => c.feeds?.breast ?? null),
-      bottle: averagePerDay(cells, (c) => c.feeds?.bottle ?? null),
-      volume: averagePerDay(cells, (c) => c.feeds?.volumeMl ?? null),
-      night: averagePerDay(cells, (c) => c.nightFeeds),
-      wet: averagePerDay(cells, (c) => c.diapers?.wet ?? null),
-      dirty: averagePerDay(cells, (c) => c.diapers?.dirty ?? null),
-      sleep: averagePerDay(cells, (c) => c.sleep?.totalMin ?? null),
-      sleepSessions: averagePerDay(cells, (c) => c.sleep?.sessions ?? null),
+      feeds: averagePerDay(cells, pick.feeds),
+      breast: averagePerDay(cells, pick.breast),
+      bottle: averagePerDay(cells, pick.bottle),
+      volume: averagePerDay(cells, pick.volume),
+      night: averagePerDay(cells, pick.night),
+      wet: averagePerDay(cells, pick.wet),
+      dirty: averagePerDay(cells, pick.dirty),
+      sleep: averagePerDay(cells, pick.sleep),
+      sleepSessions: averagePerDay(cells, pick.sleepSessions),
     }),
     [cells],
   );
@@ -104,19 +127,12 @@ export function StatsScreen() {
   // Ориентиры сервер считает на возраст (§10.1) — берём самые свежие.
   const norms = cells[cells.length - 1]?.norms;
 
-  const bars = (pick: (c: DayCell) => number | null) =>
-    cells.map<BarDay>((c) => {
-      // Сутки без записей (и сутки, про которые мы не знаем) — не ноль, а пробел.
-      const blank = c.recorded === false || c.recorded === null;
-      return { date: c.date, primary: blank ? null : pick(c) };
-    });
-
   // Подгузники рисуются штуками, а не длиной: два пересекающихся ряда с сервера
   // раскладываются на непересекающиеся кучки, чтобы знаков вышло ровно столько,
-  // сколько подгузников сменили (см. diaperMarks).
+  // сколько подгузников сменили (см. diaperMarks). Сутки без записей о
+  // подгузниках дают null — штриховку, а не ноль.
   const diaperDays = cells.map<DiaperDay>((c) => ({
     date: c.date,
-    blank: c.recorded === false || c.recorded === null,
     marks: diaperMarks(c.diapers),
   }));
 
@@ -237,16 +253,17 @@ export function StatsScreen() {
           <Lead
             value={avg.feeds}
             unit="кормлений в сутки"
-            empty="Кормлений за период не записано."
+            empty="За завершённые сутки периода кормлений не записано."
           />
 
           {avg.feeds ? (
             <>
               <DayBars
-                days={bars((c) => c.feeds?.total ?? 0)}
+                days={dayBars(cells, pick.feeds)}
                 norm={norms?.feeds}
                 tone="var(--t-feed)"
                 unit="раз"
+                kind="о кормлении"
                 gapNote
               />
               <div className="split split--4">
@@ -263,18 +280,37 @@ export function StatsScreen() {
                 <Fact
                   label="ночью"
                   value={formatPerDay(avg.night?.value ?? null)}
-                  hint={avg.night ? 'в сутки, 00:00–06:00' : 'считать не по чему'}
+                  // Знаменатель тут свой: ночные считаются по сырым событиям, и
+                  // обрезанная лента может оставить их меньше, чем суток с
+                  // кормлениями. Два средних с разными знаменателями бок о бок
+                  // читаются как доля — поэтому знаменатель написан.
+                  hint={
+                    avg.night ? `в сутки, 00:00–06:00 · ${denom(avg.night)}` : 'считать не по чему'
+                  }
                 />
                 <Fact
                   label="самый длинный промежуток"
-                  value={gap ? formatMinutes(gap.maxMin) : '—'}
+                  value={gap.longest ? formatMinutes(gap.longest.minutes) : '—'}
                   hint={
-                    gap
-                      ? `${formatDay(gap.fromAt)}, ${formatTime(gap.fromAt)} → ${formatTime(gap.toAt)}`
-                      : 'нужны два кормления в записанных сутках подряд'
+                    gap.longest
+                      ? formatSpan(gap.longest.fromAt, gap.longest.toAt)
+                      : 'нужны два кормления подряд в сутках с записанными кормлениями'
                   }
                 />
               </div>
+              {/* Перерыв длиннее суток — не наблюдение, а пробел в записях, и в
+                  «самый длинный промежуток» он не идёт. Но и молчать о нём
+                  нельзя: он в дневнике есть, и врач должен знать, что здесь
+                  просто не записывали. Ни оценки, ни вывода — только границы. */}
+              {gap.breaks.length > 0 ? (
+                <p className="card__note">
+                  {gap.breaks.length === 1
+                    ? 'В дневнике есть перерыв в записях о кормлении длиннее суток: '
+                    : `В дневнике есть ${gap.breaks.length} ${plural(gap.breaks.length, 'перерыв', 'перерыва', 'перерывов')} в записях о кормлении длиннее суток, самый долгий — `}
+                  {longestBreak(gap.breaks)}. В «самый длинный промежуток» такие перерывы не
+                  входят: это пробел в записях, а не наблюдение.
+                </p>
+              ) : null}
               {avg.volume ? (
                 <p className="card__note">
                   Объём называли не всегда. Там, где называли, — в среднем{' '}
@@ -311,7 +347,7 @@ export function StatsScreen() {
                   hint={denom(avg.dirty)}
                 />
               </div>
-              <DiaperDots days={diaperDays} norm={norms?.wetDiapers} />
+              <DiaperDots days={diaperDays} norm={norms?.wetDiapers} gapNote />
               <p className="card__note">
                 Знак — подгузник: сколько сменили, столько и знаков. Мокрые — снизу,
                 грязные — сверху, а тот, что был и мокрым, и грязным, стоит между ними
@@ -321,7 +357,7 @@ export function StatsScreen() {
               </p>
             </>
           ) : (
-            <p className="chart-empty">Подгузников за период не записано.</p>
+            <p className="chart-empty">За завершённые сутки периода подгузников не записано.</p>
           )}
         </section>
 
@@ -342,9 +378,11 @@ export function StatsScreen() {
                 </span>
               </div>
               <DayBars
-                days={bars((c) => c.sleep?.totalMin ?? 0)}
+                days={dayBars(cells, pick.sleep)}
                 tone="var(--t-sleep)"
                 format={(v) => formatMinutes(v)}
+                kind="о сне"
+                gapNote
               />
               <div className="split">
                 <Fact
@@ -352,7 +390,7 @@ export function StatsScreen() {
                   value={sleep.longest ? formatMinutes(sleep.longest.minutes) : '—'}
                   hint={
                     sleep.longest
-                      ? `${formatDay(sleep.longest.startedAt)}, ${formatTime(sleep.longest.startedAt)} → ${formatTime(sleep.longest.endedAt)}`
+                      ? formatSpan(sleep.longest.startedAt, sleep.longest.endedAt)
                       : 'завершённых отрезков за период не записано'
                   }
                 />
@@ -370,7 +408,7 @@ export function StatsScreen() {
               ) : null}
             </>
           ) : (
-            <p className="chart-empty">Сна за период не записано.</p>
+            <p className="chart-empty">За завершённые сутки периода сна не записано.</p>
           )}
         </section>
 
@@ -507,7 +545,20 @@ export function StatsScreen() {
                     </p>
                   ) : (
                     <div className="weeks__grid">
-                      <Cell label="вес" value={formatSignedGrams(r.weightDeltaG)} />
+                      {/* Прибавка почти никогда не укладывается ровно в неделю:
+                          взвешивают раз в несколько дней, и точка отсчёта —
+                          последнее взвешивание ДО недели. «−36 г» в строке
+                          «2-я неделя» без срока читается как «за эту неделю»,
+                          а на деле это разница за тринадцать суток. Срок и есть
+                          знаменатель этого числа, и он обязан стоять рядом. */}
+                      <Cell
+                        label={
+                          r.weightSpanDays
+                            ? `вес, за ${r.weightSpanDays} ${plural(r.weightSpanDays, 'сутки', 'суток', 'суток')}`
+                            : 'вес'
+                        }
+                        value={formatSignedGrams(r.weightDeltaG)}
+                      />
                       <Cell label="кормлений" value={formatPerDay(r.feeds?.value ?? null)} />
                       <Cell label="мокрых" value={formatPerDay(r.wet?.value ?? null)} />
                       <Cell label="грязных" value={formatPerDay(r.dirty?.value ?? null)} />
@@ -522,8 +573,8 @@ export function StatsScreen() {
             </div>
             <p className="card__note">
               Всё, кроме веса, — в среднем за сутки, и только по тем суткам недели, где
-              записи есть. Вес — разница между последним взвешиванием недели и последним
-              до неё.
+              записи этого рода есть. Вес — разница между последним взвешиванием недели и
+              последним до неё; за сколько суток она набралась, написано рядом.
             </p>
           </section>
         ) : null}
@@ -584,6 +635,12 @@ function rangeOf(cells: DayCell[]): string {
   const from = formatDayShort(cells[0].startMs);
   const to = formatDayShort(cells[cells.length - 1].startMs);
   return from === to ? from : `${from} — ${to}`;
+}
+
+/** «14 сентября, 13:00 → 15 сентября, 19:06 (30 ч 6 мин)» — самый долгий из перерывов. */
+function longestBreak(breaks: FeedGap[]): string {
+  const b = breaks.reduce((a, x) => (x.minutes > a.minutes ? x : a));
+  return `${formatSpan(b.fromAt, b.toAt)} (${formatMinutes(b.minutes)})`;
 }
 
 /** Даты отрезков подписью: дни жизни отвечают врачу, даты — сверке с записями. */

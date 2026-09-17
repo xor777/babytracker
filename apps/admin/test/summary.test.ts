@@ -20,14 +20,22 @@ import {
   averagePerDay,
   buildWindow,
   coverage,
+  dayBars,
   diaperMarks,
   feedGapFacts,
   sleepFacts,
+  weekStats,
   weeks,
   weightFacts,
 } from '../src/lib/summary';
 import type { DayCell } from '../src/lib/summary';
-import { formatMinutes, formatPerDay, formatSignedGrams, localDateKey } from '../src/lib/format';
+import {
+  formatMinutes,
+  formatPerDay,
+  formatSignedGrams,
+  formatSpan,
+  localDateKey,
+} from '../src/lib/format';
 import type { DailyStats, TrackerEvent } from '../src/types';
 
 /* ------------------------------------------------------------------ *
@@ -112,6 +120,26 @@ test('длительность между нулём и минутой не пе
   assert.equal(formatMinutes(0), '0 мин');
   assert.equal(formatMinutes(1), '1 мин');
   assert.equal(formatMinutes(505), '8 ч 25 мин');
+});
+
+test('подпись отрезка называет дату конца, когда она другая', () => {
+  // Боевой случай: «14 сентября, 13:00 → 19:06» стояло рядом со значением
+  // «30 ч 6 мин». Подпись и значение противоречили друг другу, и подпись
+  // читалась как шесть часов.
+  assert.equal(
+    formatSpan(local(2026, 9, 14, 13, 0), local(2026, 9, 15, 19, 6)),
+    '14 сентября, 13:00 → 15 сентября, 19:06',
+  );
+  // Ночной сон рвался ровно так же: 8 ч 25 мин с подписью «22:10 → 06:35».
+  assert.equal(
+    formatSpan(local(2026, 9, 15, 22, 10), local(2026, 9, 16, 6, 35)),
+    '15 сентября, 22:10 → 16 сентября, 06:35',
+  );
+  // А внутри одних суток вторая дата — шум: её не должно быть.
+  assert.equal(
+    formatSpan(local(2026, 9, 14, 13, 0), local(2026, 9, 14, 19, 6)),
+    '14 сентября, 13:00 → 19:06',
+  );
 });
 
 test('прибавка веса печатается со знаком, и крошечная не выглядит нулевой', () => {
@@ -309,6 +337,89 @@ test('среднее не округляется внутри: округляе�
   assert.ok(avg);
   assert.equal(avg.value, 25 / 3);
   assert.equal(formatPerDay(avg.value), '8,3');
+});
+
+/* ================================================================== *
+ * 3.4. Покрытие ПО РОДУ событий
+ *
+ * `recorded` отвечает на вопрос «вели ли в эти сутки дневник», а не «записали
+ * ли кормления». Решения о кормлениях, подгузниках и сне принимаются по своему
+ * роду — иначе сутки, в которые записали одно взвешивание, попадают на график
+ * кормлений нулём, а в знаменатель среднего не попадают вовсе: график и число
+ * под ним начинают считать записанными разные сутки.
+ * ================================================================== */
+
+/** Боевое окно 2–16 сентября: 2-го только взвесили, 11-го — только подгузники. */
+function mixedWindow(): DayCell[] {
+  const days: DailyStats[] = [];
+  for (let i = 14; i >= 0; i--) {
+    const ms = local(2026, 9, 16 - i);
+    if (i === 14) days.push(day(ms, { weightG: 4620 }));
+    else if (i === 5) days.push(day(ms, { diapers: { wet: 4, dirty: 1, total: 5 } }));
+    else if (i === 4)
+      days.push(
+        day(ms, {
+          feeds: { total: 8 },
+          diapers: { wet: 2, dirty: 3, total: 5 },
+          sleep: { totalMin: 413, sessions: 5 },
+        }),
+      );
+    else if (i === 3) days.push(day(ms, { feeds: { total: 6 }, diapers: { wet: 3, total: 3 } }));
+    else if (i === 0)
+      days.push(day(ms, { feeds: { total: 5 }, diapers: { wet: 3, total: 3 } })); // сегодня
+    else days.push(day(ms));
+  }
+  const events = [
+    ev('measure', local(2026, 9, 2, 12, 0), { subtype: 'weight', value_num: 4620 }),
+    ev('diaper', local(2026, 9, 11, 9, 0), { subtype: 'wet' }),
+    ev('feed', local(2026, 9, 12, 8, 0)),
+    ev('feed', local(2026, 9, 13, 8, 0)),
+    ev('feed', local(2026, 9, 16, 8, 0)),
+  ];
+  return buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
+}
+
+test('сутки с одним взвешиванием: дневник вели, а кормлений не записано', () => {
+  const first = mixedWindow()[0];
+  assert.equal(first.date, '2026-09-02');
+  assert.equal(first.recorded, true, 'для полноты дневника эти сутки записаны');
+  assert.equal(first.feeds, null, 'а для кормлений это такой же пробел, как пустые сутки');
+  assert.equal(first.diapers, null);
+  assert.equal(first.sleep, null);
+  assert.equal(first.nightFeeds, null, 'ночные кормления тут считать не по чему');
+});
+
+test('график, среднее и знаменатель под ним считают записанными одни и те же сутки', () => {
+  const cells = mixedWindow();
+  const todayKey = localDateKey(NOW);
+
+  // Сутки, за которые записано именно это. Список явный: сверять `dayBars`
+  // с `averagePerDay` их же формулой значило бы проверять тавтологию.
+  const cases = [
+    { pick: (c: DayCell) => c.feeds?.total ?? null, days: ['2026-09-12', '2026-09-13'] },
+    {
+      pick: (c: DayCell) => c.diapers?.wet ?? null,
+      days: ['2026-09-11', '2026-09-12', '2026-09-13'],
+    },
+    { pick: (c: DayCell) => c.sleep?.totalMin ?? null, days: ['2026-09-12'] },
+  ];
+
+  for (const { pick, days } of cases) {
+    const drawn = dayBars(cells, pick)
+      .filter((b) => b.primary !== null && b.date !== todayKey)
+      .map((b) => b.date);
+    assert.deepEqual(drawn, days, 'столбцы стоят ровно за эти сутки');
+    assert.equal(averagePerDay(cells, pick)?.days, days.length, 'и знаменатель — ровно они же');
+  }
+});
+
+test('на графике кормлений сутки с одним взвешиванием — штриховка, а не ноль', () => {
+  const bars = dayBars(mixedWindow(), (c) => c.feeds?.total ?? null);
+  assert.equal(bars[0].date, '2026-09-02');
+  assert.equal(bars[0].primary, null, 'ноль тут означал бы «кормили ноль раз» — этого никто не записывал');
+  assert.equal(bars[9].date, '2026-09-11', 'и 11-е, где записали только подгузники, — тоже');
+  assert.equal(bars[9].primary, null);
+  assert.equal(bars[10].primary, 8, 'а сутки с кормлениями рисуются как есть');
 });
 
 /* ================================================================== *
@@ -561,6 +672,22 @@ test('вес: без даты рождения возраст на взвеши�
   assert.ok(f.recent, 'а прибавка считается и без даты рождения');
 });
 
+test('прибавка за неделю едет вместе со сроком, за который набралась', () => {
+  // Боевой случай: взвешивали 2-го, 12-го и 15-го. «−36 г» в строке «2-я
+  // неделя» — это разница не за неделю, а за тринадцать суток, и без срока
+  // рядом она читается как недельная.
+  const days: DailyStats[] = [];
+  for (let i = 14; i >= 0; i--) days.push(day(local(2026, 9, 16 - i)));
+  const cells = buildWindow({ days, events: [], eventsKnown: true, birthMs: BIRTH, now: NOW });
+  const rows = weekStats(weeks(cells), [W(2, 4620), W(12, 4528), W(15, 4584)]);
+
+  assert.equal(rows[0].weightDeltaG, null, 'в первой неделе взвешивание одно — разницы нет');
+  assert.equal(rows[0].weightSpanDays, null);
+  assert.equal(rows[1].weightDeltaG, -36, 'последнее в неделе минус последнее до неё');
+  assert.equal(rows[1].weightSpanDays, 13, 'и набралась она за тринадцать суток, а не за семь');
+  assert.equal(formatSignedGrams(rows[1].weightDeltaG), '−36 г');
+});
+
 test('вес: измерения приходят вперемешку — порядок восстанавливается', () => {
   const f = weightFacts([W(15, 4980), W(2, 4620), W(5, 4290)], BIRTH);
   assert.ok(f);
@@ -651,7 +778,13 @@ test('сон: отрезки старше окна не учитываются',
 
 test('промежуток через незаписанные сутки — это дыра в дневнике, а не голод', () => {
   const days = [];
-  for (let i = 7; i >= 0; i--) days.push(day(local(2026, 9, 16 - i)));
+  for (let i = 7; i >= 0; i--) {
+    const ms = local(2026, 9, 16 - i);
+    // Сутки в том виде, в каком их отдаёт сервер: где кормления записаны, там их счёт.
+    if (i === 7) days.push(day(ms, { feeds: { total: 1 } }));
+    else if (i === 1) days.push(day(ms, { feeds: { total: 2 } }));
+    else days.push(day(ms));
+  }
   const events = [
     ev('feed', local(2026, 9, 9, 20, 0)),
     ev('feed', local(2026, 9, 15, 8, 0)),
@@ -660,13 +793,17 @@ test('промежуток через незаписанные сутки — э
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
   const gaps = feedGapFacts(events, cells);
 
-  assert.ok(gaps);
-  assert.equal(gaps.maxMin, 240, 'только те 4 часа, что мы действительно наблюдали');
+  assert.equal(gaps.longest?.minutes, 240, 'только те 4 часа, что мы действительно наблюдали');
   assert.equal(gaps.count, 1, 'шестисуточный «промежуток» не засчитан');
+  assert.equal(gaps.breaks.length, 1, 'но и не потерян: это перерыв в записях');
+  assert.equal(gaps.breaks[0].minutes, 6 * 24 * 60 - 12 * 60, 'с 9-го 20:00 по 15-е 8:00');
 });
 
 test('промежуток через полночь между записанными сутками засчитывается', () => {
-  const days = [day(local(2026, 9, 15)), day(local(2026, 9, 16))];
+  const days = [
+    day(local(2026, 9, 15), { feeds: { total: 1 } }),
+    day(local(2026, 9, 16), { feeds: { total: 2 } }),
+  ];
   const events = [
     ev('feed', local(2026, 9, 15, 23, 0)),
     ev('feed', local(2026, 9, 16, 4, 30)),
@@ -674,36 +811,131 @@ test('промежуток через полночь между записанн
   ];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
   const gaps = feedGapFacts(events, cells);
-  assert.equal(gaps?.maxMin, 330, '23:00 → 4:30 — пять с половиной часов');
-  assert.equal(gaps?.count, 2);
+  assert.equal(gaps.longest?.minutes, 330, '23:00 → 4:30 — пять с половиной часов');
+  assert.equal(gaps.count, 2);
+  assert.deepEqual(gaps.breaks, []);
 });
 
 test('дубль разбора промежутком не считается', () => {
-  const days = [day(local(2026, 9, 16))];
+  const days = [day(local(2026, 9, 16), { feeds: { total: 3 } })];
   const t = local(2026, 9, 16, 8, 0);
   const events = [ev('feed', t), ev('feed', t + 20_000), ev('feed', local(2026, 9, 16, 11, 0))];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
   const gaps = feedGapFacts(events, cells);
-  assert.equal(gaps?.count, 1);
-  assert.equal(gaps?.maxMin, 180);
+  assert.equal(gaps.count, 1);
+  assert.equal(gaps.longest?.minutes, 180);
 });
 
 test('одно кормление — промежутков ещё нет', () => {
-  const days = [day(local(2026, 9, 16))];
+  const days = [day(local(2026, 9, 16), { feeds: { total: 1 } })];
   const events = [ev('feed', local(2026, 9, 16, 8, 0))];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
-  assert.equal(feedGapFacts(events, cells), null);
+  const gaps = feedGapFacts(events, cells);
+  assert.equal(gaps.longest, null);
+  assert.equal(gaps.count, 0);
+  assert.deepEqual(gaps.breaks, []);
+});
+
+test('промежуток длиннее суток — это перерыв в записях, а не наблюдение', () => {
+  // Боевой случай. 14-го записали 4 кормления, 15-го — 3: оба дня записаны
+  // ПО КОРМЛЕНИЯМ, проверка записанных суток их пропускает. Но между последним
+  // 14-го и первым 15-го — 30 ч 6 мин, и это значит только одно: дневник вели
+  // не сплошь. Врач прочитал бы «тридцать часов без еды» как факт.
+  const days = [
+    day(local(2026, 9, 13), { feeds: { total: 1 } }),
+    day(local(2026, 9, 14), { feeds: { total: 2 } }),
+    day(local(2026, 9, 15), { feeds: { total: 1 } }),
+  ];
+  const events = [
+    ev('feed', local(2026, 9, 13, 20, 25)),
+    ev('feed', local(2026, 9, 14, 7, 25)),
+    ev('feed', local(2026, 9, 14, 13, 0)),
+    ev('feed', local(2026, 9, 15, 19, 6)),
+  ];
+  const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
+  const gaps = feedGapFacts(events, cells);
+
+  assert.equal(gaps.longest?.minutes, 660, 'самый длинный из наблюдённых — 11 ч');
+  assert.equal(formatMinutes(660), '11 ч');
+  assert.equal(gaps.count, 2, 'тридцатичасовой в счёт промежутков не пошёл');
+
+  // Но и не пропал: карточка обязана назвать его границами, с датами.
+  assert.equal(gaps.breaks.length, 1);
+  assert.equal(gaps.breaks[0].minutes, 30 * 60 + 6);
+  assert.equal(
+    formatSpan(gaps.breaks[0].fromAt, gaps.breaks[0].toAt),
+    '14 сентября, 13:00 → 15 сентября, 19:06',
+  );
+});
+
+test('ровно сутки — ещё промежуток, сутки и минута — уже перерыв', () => {
+  const days = [
+    day(local(2026, 9, 14), { feeds: { total: 1 } }),
+    day(local(2026, 9, 15), { feeds: { total: 1 } }),
+    day(local(2026, 9, 16), { feeds: { total: 1 } }),
+  ];
+  const exact = [ev('feed', local(2026, 9, 14, 9, 0)), ev('feed', local(2026, 9, 15, 9, 0))];
+  const over = [ev('feed', local(2026, 9, 14, 9, 0)), ev('feed', local(2026, 9, 15, 9, 1))];
+  const cells = buildWindow({
+    days,
+    events: exact,
+    eventsKnown: true,
+    birthMs: BIRTH,
+    now: NOW,
+  });
+
+  assert.equal(feedGapFacts(exact, cells).longest?.minutes, 24 * 60);
+  assert.deepEqual(feedGapFacts(exact, cells).breaks, []);
+  assert.equal(feedGapFacts(over, cells).longest, null);
+  assert.equal(feedGapFacts(over, cells).breaks.length, 1);
+});
+
+test('сутки, записанные одними подгузниками, промежуток через себя не пропускают', () => {
+  // 11-го записали только подгузники: кормлений в этих сутках нет, и
+  // промежуток с 10-го по 12-е — не наблюдение, а дыра в дневнике.
+  const days = [
+    day(local(2026, 9, 10), { feeds: { total: 1 } }),
+    day(local(2026, 9, 11), { diapers: { wet: 4, total: 4 } }),
+    day(local(2026, 9, 12), { feeds: { total: 2 } }),
+  ];
+  const events = [
+    ev('feed', local(2026, 9, 10, 20, 0)),
+    ev('diaper', local(2026, 9, 11, 9, 0), { subtype: 'wet' }),
+    ev('feed', local(2026, 9, 12, 8, 0)),
+    ev('feed', local(2026, 9, 12, 11, 0)),
+  ];
+  const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
+  const gaps = feedGapFacts(events, cells);
+
+  assert.equal(cells[1].recorded, true, 'дневник 11-го вели');
+  assert.equal(cells[1].feeds, null, 'но кормлений в нём не записано');
+  assert.equal(gaps.longest?.minutes, 180, 'остались только те 3 часа 12-го');
+  assert.equal(gaps.breaks.length, 1, 'а 36 часов через 11-е названы перерывом в записях');
+});
+
+test('кормление, которого нет в суточной сводке, промежутка не создаёт', () => {
+  // Лента событий и сводка сервера разъехались: событие успело записаться
+  // между двумя запросами. Сутки, про которые сервер говорит «кормлений 0»,
+  // записанными по кормлениям не считаются — иначе карточка промежутков
+  // говорила бы о сутках, которые график показывает штриховкой.
+  const days = [day(local(2026, 9, 15), { feeds: { total: 1 } }), day(local(2026, 9, 16))];
+  const events = [ev('feed', local(2026, 9, 15, 20, 0)), ev('feed', local(2026, 9, 16, 6, 0))];
+  const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
+
+  assert.equal(cells[1].recorded, true, 'запись за эти сутки есть');
+  assert.equal(cells[1].feeds, null, 'а в сводке кормлений за них нет');
+  assert.equal(feedGapFacts(events, cells).longest, null, 'десять часов не заработаны');
 });
 
 test('удалённое кормление не растягивает промежуток', () => {
-  const days = [day(local(2026, 9, 16))];
+  const days = [day(local(2026, 9, 16), { feeds: { total: 2 } })];
   const events = [
     ev('feed', local(2026, 9, 16, 8, 0)),
     ev('feed', local(2026, 9, 16, 10, 0), { deleted_at: new Date(NOW).toISOString() }),
     ev('feed', local(2026, 9, 16, 12, 0)),
   ];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
-  assert.equal(feedGapFacts(events, cells)?.maxMin, 240, '8:00 → 12:00 напрямую');
+  assert.equal(feedGapFacts(events, cells).longest?.minutes, 240, '8:00 → 12:00 напрямую');
 });
 
 /* ================================================================== *
@@ -711,7 +943,7 @@ test('удалённое кормление не растягивает пром
  * ================================================================== */
 
 test('ночные кормления считаются по границе 00:00–06:00', () => {
-  const days = [day(local(2026, 9, 15))];
+  const days = [day(local(2026, 9, 15), { feeds: { total: 5 } })];
   const events = [
     ev('feed', local(2026, 9, 15, 0, 5)),
     ev('feed', local(2026, 9, 15, 3, 40)),
@@ -725,10 +957,51 @@ test('ночные кормления считаются по границе 00:
 });
 
 test('записанные сутки без ночных кормлений — это ноль, а не пропуск', () => {
-  const days = [day(local(2026, 9, 15))];
+  const days = [day(local(2026, 9, 15), { feeds: { total: 1 } })];
   const events = [ev('feed', local(2026, 9, 15, 10, 0))];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
   assert.equal(cells[0].nightFeeds, 0);
+});
+
+test('сутки без записанных кормлений в знаменатель ночных не идут', () => {
+  // Боевой случай целиком: окно 15 суток, кормления записаны за четверо,
+  // ночное среди них одно. На экране стояло «ночью 0,1 в сутки» рядом с
+  // «5,3 кормлений в сутки по записям за 4 суток» — два средних с разными
+  // знаменателями бок о бок, и «0,1 из 5,3» читается как доля.
+  const spec: Array<[number, number, number]> = [
+    // [день, кормлений за сутки, из них ночных]
+    [12, 8, 0],
+    [13, 6, 1],
+    [14, 4, 0],
+    [15, 3, 0],
+  ];
+  const days: DailyStats[] = [];
+  const events: TrackerEvent[] = [];
+  for (let i = 14; i >= 0; i--) {
+    const d = 16 - i;
+    const row = spec.find(([n]) => n === d);
+    days.push(row ? day(local(2026, 9, d), { feeds: { total: row[1] } }) : day(local(2026, 9, d)));
+    if (!row) continue;
+    for (let k = 0; k < row[1]; k++) {
+      events.push(ev('feed', local(2026, 9, d, k < row[2] ? 3 : 9, k)));
+    }
+  }
+  const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
+
+  const blank = cells.filter((c) => !c.recorded);
+  assert.equal(blank.length, 11, 'одиннадцать суток окна дневник не вели вовсе');
+  for (const c of blank) assert.equal(c.nightFeeds, null, 'и ночных кормлений в них не считали');
+
+  const night = averagePerDay(cells, (c) => c.nightFeeds);
+  const feeds = averagePerDay(cells, (c) => c.feeds?.total ?? null);
+  assert.ok(night);
+  assert.equal(night.total, 1);
+  assert.equal(night.days, 4, 'делим на сутки с кормлениями');
+  assert.equal(night.days, feeds?.days, 'знаменатель тот же, что у кормлений рядом');
+  assert.equal(formatPerDay(night.value), '0,3');
+
+  // Прежняя формула: то же одно кормление, делённое на все завершённые сутки.
+  assert.equal(formatPerDay(1 / 14), '0,1', 'вот что стояло на экране');
 });
 
 /* ================================================================== *
@@ -782,16 +1055,18 @@ test('переход на летнее время не сбивает шаг п�
       days: cells.map((c) => c.date),
       recorded: cells.map((c) => c.recorded),
       gapCount: g.count,
-      maxMin: g.maxMin,
+      maxMin: g.longest && g.longest.minutes,
+      breaks: g.breaks.map((b) => b.minutes),
     }));
     `,
   );
   const got = JSON.parse(out);
   assert.deepEqual(got.days, ['2026-03-28', '2026-03-29', '2026-03-30']);
   assert.deepEqual(got.recorded, [true, true, true]);
-  assert.equal(got.gapCount, 2, 'оба промежутка прошли проверку записанных суток');
+  assert.equal(got.gapCount, 1, 'проверку записанных суток прошёл один промежуток');
   // 23:00 → 04:00 в сутки, потерявшие час: календарно пять часов, реально четыре.
-  assert.equal(got.maxMin, 1740, 'а самый длинный — 29 ч, со второго по третье');
+  assert.equal(got.maxMin, 240, 'и это ровно те четыре часа, что ребёнок прожил');
+  assert.deepEqual(got.breaks, [1740], 'а 29 ч со второго по третье — перерыв в записях');
 });
 
 test('в сутки перевода часов пробел в дневнике всё так же рвёт промежуток', () => {
@@ -827,7 +1102,13 @@ test('в сутки перевода часов пробел в дневнике
   );
   const got = JSON.parse(out);
   assert.deepEqual(got.recorded, [true, false, true], '29-е осталось пустым');
-  assert.equal(got.gaps, null, 'через пробел промежуток не считается и в сутки перевода часов');
+  assert.equal(
+    got.gaps.longest,
+    null,
+    'через пробел промежуток не считается и в сутки перевода часов',
+  );
+  assert.equal(got.gaps.count, 0);
+  assert.equal(got.gaps.breaks.length, 1, 'зато перерыв в записях назван');
 });
 
 test('обратный перевод часов (25-часовые сутки) тоже не ломает шаг', () => {
@@ -861,17 +1142,22 @@ test('обратный перевод часов (25-часовые сутки) 
       days: cells.map((c) => c.date),
       recorded: cells.map((c) => c.recorded),
       gapCount: g.count,
+      maxMin: g.longest && g.longest.minutes,
+      breaks: g.breaks.map((b) => b.minutes),
     }));
     `,
   );
   const got = JSON.parse(out);
   assert.deepEqual(got.days, ['2026-10-24', '2026-10-25', '2026-10-26']);
   assert.deepEqual(got.recorded, [true, true, true]);
-  assert.equal(got.gapCount, 2);
+  assert.equal(got.gapCount, 1);
+  // 22:00 → 05:00 в сутки, получившие лишний час: календарно семь, реально восемь.
+  assert.equal(got.maxMin, 480, 'считаем прожитое время, а не деления календаря');
+  assert.deepEqual(got.breaks, [27 * 60], 'а 27 ч со второго по третье — перерыв в записях');
 });
 
 test('событие в 00:30 относится к новым суткам, а не к прошедшим', () => {
-  const days = [day(local(2026, 9, 15)), day(local(2026, 9, 16))];
+  const days = [day(local(2026, 9, 15)), day(local(2026, 9, 16), { feeds: { total: 1 } })];
   const events = [ev('feed', local(2026, 9, 16, 0, 30))];
   const cells = buildWindow({ days, events, eventsKnown: true, birthMs: BIRTH, now: NOW });
   assert.equal(cells[0].recorded, false, '15-е осталось пустым');

@@ -36,6 +36,21 @@ export function formatDayShort(ms: number): string {
   return dayShortFmt.format(new Date(ms));
 }
 
+/**
+ * «14 сентября, 13:00 → 19:06», а через полночь — «14 сентября, 13:00 →
+ * 15 сентября, 19:06».
+ *
+ * Дата конца обязательна ровно тогда, когда она другая, и это не украшение.
+ * Подпись без неё показывала «14 сентября, 13:00 → 19:06» рядом со значением
+ * «30 ч 6 мин»: подпись и значение противоречили друг другу, и читалась подпись
+ * как шесть часов. Ночной сон с 22:10 до 6:35 врал ровно так же.
+ */
+export function formatSpan(fromMs: number, toMs: number): string {
+  const head = `${formatDay(fromMs)}, ${formatTime(fromMs)}`;
+  const sameDay = startOfLocalDay(fromMs) === startOfLocalDay(toMs);
+  return sameDay ? `${head} → ${formatTime(toMs)}` : `${head} → ${formatDay(toMs)}, ${formatTime(toMs)}`;
+}
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }

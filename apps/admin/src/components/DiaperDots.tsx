@@ -5,19 +5,22 @@ import { formatDayShort, localDateKey, parseTs, plural } from '../lib/format';
 export interface DiaperDay {
   date: string;
   /**
-   * Кучки за сутки, уже непересекающиеся (`diaperMarks`). `null` — подгузников
-   * за эти сутки не записано. Это записанный ноль, а не пробел: см. `blank`.
+   * Кучки за сутки, уже непересекающиеся (`diaperMarks`).
+   *
+   * `null` — **подгузников за эти сутки не записано**, и рисуется штриховка.
+   * Раньше здесь было два признака, `marks` и отдельный `blank` («за сутки нет
+   * ни одной записи вообще»), и сутки, в которые записали только взвешивание,
+   * получали чёрточку нуля: экран утверждал «сменили ноль подгузников» там, где
+   * их просто не записывали. Признак один, потому что и вопрос один.
    */
   marks: DiaperMarks | null;
-  /** Про эти сутки мы не знаем ничего: ни одной записи (или лента не доехала). */
-  blank: boolean;
 }
 
 interface Props {
   days: DiaperDay[];
   /** Ориентир «6+ мокрых» — подписанный референс, а не оценка. */
   norm?: NormRange | null;
-  /** Пояснить штриховку под графиком. На странице это нужно один раз. */
+  /** Пояснить штриховку под графиком. */
   gapNote?: boolean;
 }
 
@@ -62,7 +65,8 @@ export function DiaperDots({ days: input, norm, gapNote }: Props) {
   // Сводка приходит от свежих к старым, а время на графике всегда течёт вправо.
   const days = [...input].sort((a, b) => a.date.localeCompare(b.date));
   const todayKey = localDateKey(Date.now());
-  const gaps = days.filter((d) => d.blank).length;
+  const gaps = days.filter((d) => d.marks == null).length;
+  const zeros = days.filter((d) => d.marks != null && d.marks.total === 0).length;
 
   const maxTotal = Math.max(0, ...days.map((d) => d.marks?.total ?? 0));
   const normMin = norm?.min ?? 0;
@@ -114,9 +118,9 @@ export function DiaperDots({ days: input, norm, gapNote }: Props) {
               className={isToday ? 'dots__col dots__col--today' : 'dots__col'}
               title={`${when}: ${dayTitle(d)}${isToday ? ' (сутки ещё идут)' : ''}`}
             >
-              {d.blank ? (
+              {d.marks == null ? (
                 <div className="dots__hatch" aria-hidden="true" />
-              ) : d.marks == null ? (
+              ) : d.marks.total === 0 ? (
                 // Записывали, а за сутки ни одного. Настоящий ноль, и он обязан
                 // быть виден: пустое место на его месте читалось бы как пробел.
                 <div className="dots__zero" aria-hidden="true" />
@@ -167,8 +171,9 @@ export function DiaperDots({ days: input, norm, gapNote }: Props) {
 
       {gapNote && gaps > 0 ? (
         <p className="dots__gapnote">
-          Штриховкой — {gaps} {plural(gaps, 'сутки', 'суток', 'суток')} без записей. Это пробел
-          в дневнике, а не ноль. Чёрточка на нуле — записывали, но за сутки ни одного.
+          Штриховкой — {gaps} {plural(gaps, 'сутки', 'суток', 'суток')} без записей о
+          подгузниках. Это пробел в дневнике, а не ноль.
+          {zeros > 0 ? ' Чёрточка на нуле — записывали, но за сутки ни одного.' : ''}
         </p>
       ) : null}
     </div>
@@ -196,9 +201,9 @@ function glyphs(m: DiaperMarks): Glyph[] {
 
 /** Подсказка при наведении. Считать по ней не нужно — она для точных чисел. */
 function dayTitle(d: DiaperDay): string {
-  if (d.blank) return 'записей нет';
   const m = d.marks;
-  if (m == null) return 'подгузников не записано';
+  if (m == null) return 'записей о подгузниках нет';
+  if (m.total === 0) return 'записывали, но за сутки ни одного';
   const parts = [
     `${m.wetOnly + m.both} ${plural(m.wetOnly + m.both, 'мокрый', 'мокрых', 'мокрых')}`,
     `${m.dirtyOnly + m.both} ${plural(m.dirtyOnly + m.both, 'грязный', 'грязных', 'грязных')}`,

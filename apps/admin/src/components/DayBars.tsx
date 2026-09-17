@@ -18,7 +18,15 @@ interface Props {
   unit?: string;
   /** Пересчёт значения для подписи (минуты → часы). */
   format?: (v: number) => string;
-  /** Пояснить штриховку под графиком. На странице это нужно один раз, а не у каждой карточки. */
+  /**
+   * О чём этот график, в предложном падеже: «о кормлении», «о сне».
+   *
+   * Обязателен: штриховка означает «нет записей ЭТОГО рода», а не «нет записей
+   * вовсе», — и подпись, умолчавшая про род, отправляет врача сверять пробелы
+   * с карточкой полноты, где суток без записей совсем другое число.
+   */
+  kind: string;
+  /** Пояснить штриховку под графиком. */
   gapNote?: boolean;
 }
 
@@ -37,7 +45,7 @@ interface Props {
  * чтобы он не съезжал на доли пикселя вместе с viewBox. Сегодняшний день помечен
  * отдельно — сутки ещё не закончились, и сравнивать его с прошедшими нечестно.
  */
-export function DayBars({ days: input, norm, tone, unit, format, gapNote }: Props) {
+export function DayBars({ days: input, norm, tone, unit, format, kind, gapNote }: Props) {
   if (input.length === 0) return <p className="chart-empty">Данных за период пока нет.</p>;
 
   // Сводка приходит от свежих к старым, а время на графике всегда течёт вправо.
@@ -48,6 +56,9 @@ export function DayBars({ days: input, norm, tone, unit, format, gapNote }: Prop
   const normTop = norm?.max ?? norm?.min ?? 0;
   const max = Math.max(1, ...totals, normTop) * 1.15;
   const gaps = days.filter((d) => d.primary == null).length;
+  // Чёрточку на нуле поясняем, только когда она на экране есть. Легенда,
+  // описывающая знак, которого не нарисовано, заставляет его искать.
+  const zeros = days.filter((d) => d.primary === 0).length;
 
   const pct = (v: number) => `${(v / max) * 100}%`;
   const label = (v: number) => (format ? format(v) : `${v}${unit ? ` ${unit}` : ''}`);
@@ -93,7 +104,7 @@ export function DayBars({ days: input, norm, tone, unit, format, gapNote }: Prop
               className={isToday ? 'bars__col bars__col--today' : 'bars__col'}
               title={
                 missing
-                  ? `${when}: записей нет`
+                  ? `${when}: записей ${kind} нет`
                   : `${when}: ${label(d.primary ?? 0)}${isToday ? ' (сутки ещё идут)' : ''}`
               }
             >
@@ -135,8 +146,9 @@ export function DayBars({ days: input, norm, tone, unit, format, gapNote }: Prop
 
       {gapNote && gaps > 0 ? (
         <p className="bars__gapnote">
-          Штриховкой — {gaps} {plural(gaps, 'сутки', 'суток', 'суток')} без записей. Это пробел
-          в дневнике, а не ноль. Чёрточка на нуле — записывали, но за сутки ни одного.
+          Штриховкой — {gaps} {plural(gaps, 'сутки', 'суток', 'суток')} без записей {kind}. Это
+          пробел в дневнике, а не ноль.
+          {zeros > 0 ? ' Чёрточка на нуле — записывали, но за сутки ни одного.' : ''}
         </p>
       ) : null}
     </div>
