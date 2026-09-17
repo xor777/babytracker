@@ -25,19 +25,31 @@ export interface TimeMark {
 }
 
 /**
- * Пачка меток, слипшихся на полосе в одну фигуру.
+ * Знак на полосе суток. **Одно событие — один знак.**
  *
- * Одиночная метка — это тоже пачка из одной: рисуется одним и тем же
- * правилом, просто нулевой длины.
+ * `count` больше единицы бывает только там, где знаки не развести, не соврав
+ * про время (см. `layoutMarks`): тогда знак остаётся один и подписывается
+ * числом. Посчитать события взглядом можно в обоих случаях.
  */
-export interface MarkRun {
-  /** Доля суток — центр первой метки пачки. */
-  from: number;
-  /** Доля суток — центр последней метки пачки. */
-  to: number;
+export interface MarkSlot {
+  /** Доля суток — КУДА нарисован знак. Может не совпасть со временем. */
+  pos: number;
+  /** Сколько событий в знаке. */
   count: number;
+  /** Настоящее время первого и последнего события знака — для подсказки. */
   firstAt: number;
   lastAt: number;
+}
+
+/** Мерки полосы в долях суток: сколько места у знака и куда ему можно. */
+export interface MarkLayout {
+  /** Минимальное расстояние между центрами соседних знаков. */
+  pitch: number;
+  /** Насколько знаку позволено отъехать от своего времени. */
+  maxShift: number;
+  /** Края полосы для центров знаков. */
+  min?: number;
+  max?: number;
 }
 
 export interface DayTimeline {
@@ -115,36 +127,179 @@ export function buildDayTimeline(
 }
 
 /**
- * Склейка меток, которые всё равно налезли бы друг на друга.
+ * Раскладка меток по полосе: **одно событие — один знак**.
  *
- * Сутки на телефоне — это 390 точек, час помещается в шестнадцать. Метка
- * заметного размера занимает получаса, поэтому у новорождённого, который ест
- * пачками, соседние кормления неизбежно слипаются в кашу из полосок. Полоса
- * отвечает на вопрос «какой ритм был за сутки», а не «перечисли мне события»,
- * — поэтому пачку честнее показать одной фигурой от первой метки до последней,
- * чем набором неразличимых чёрточек. Точное число остаётся в легенде и в
- * подсказке, а по журналу его видно поимённо.
+ * Сутки на телефоне — 336 точек, час в них помещается в четырнадцать. Знак
+ * заметного размера занимает почти полчаса, поэтому у новорождённого, который
+ * ест пачками, соседние кормления налезают друг на друга. Раньше такая пачка
+ * рисовалась одной фигурой пошире — и заказчик читал её не как «шесть подряд»,
+ * а как «одна большая отметка»: посчитать кормления взглядом было нельзя.
  *
- * `minGap` — минимальный зазор между центрами меток в долях суток, при котором
- * они ещё читаются раздельно. Он зависит от реальной ширины полосы, поэтому
- * приходит снаружи: на телефоне склеек больше, на широком экране меньше.
+ * Поэтому знаков всегда ровно столько, сколько событий, а налезающие соседи
+ * раздвигаются до просвета `pitch` — порядок сохраняется, пачка остаётся
+ * центром на среднем времени своих событий. Сдвиг в три точки экрана — это
+ * десяток минут на суточной оси, и это честнее кляксы.
  *
- * Слипание считается попарно, а не от начала пачки: пять кормлений с шагом
- * в двадцать минут — это одна непрерывная цепочка, а не пять отдельных фигур.
+ * Но сдвигать бесконечно нельзя, иначе плотная пачка растечётся на полосе в
+ * часы, которых не было. Предел — `maxShift`: дальше пара самых тесных
+ * соседей становится одним знаком с числом (`count`), и посчитать события
+ * по-прежнему можно. Настоящее время при этом не теряется: `firstAt` и
+ * `lastAt` остаются для подсказки.
+ *
+ * Мерки приходят снаружи в долях суток: они зависят от того, сколько точек
+ * досталось полосе на самом деле. На телефоне раздвигать приходится часто,
+ * на широком экране — почти никогда.
  */
-export function clusterMarks(marks: TimeMark[], minGap: number): MarkRun[] {
-  const runs: MarkRun[] = [];
-  for (const m of marks) {
-    const last = runs[runs.length - 1];
-    if (last && minGap > 0 && m.pos - last.to < minGap) {
-      last.to = m.pos;
-      last.lastAt = m.at;
-      last.count += 1;
+export function layoutMarks(marks: TimeMark[], layout: MarkLayout): MarkSlot[] {
+  const { pitch, maxShift, min = 0, max = 1 } = layout;
+  let groups: Group[] = marks.map((m) => ({ at: m.pos, count: 1, firstAt: m.at, lastAt: m.at }));
+
+  // Ширину полосы ещё не измерили — раздвигать не от чего, рисуем как есть.
+  if (groups.length < 2 || !(pitch > 0) || max <= min) return groups.map(slot);
+
+  // Сколько знаков помещается на полосе встык: больше не покажет никакая раскладка.
+  const capacity = Math.floor((max - min) / pitch) + 1;
+
+  for (;;) {
+    if (groups.length > capacity) {
+      groups = mergeTightest(groups, 0, groups.length);
       continue;
     }
-    runs.push({ from: m.pos, to: m.pos, count: 1, firstAt: m.at, lastAt: m.at });
+
+    const { at, blocks } = spread(groups, pitch, min, max);
+    const crowded = blocks.filter(
+      (b) => b.end - b.start > 1 && worstShift(groups, at, b) > maxShift,
+    );
+
+    if (crowded.length === 0) {
+      // Знак у самого края могло поджать границей полосы — это тоже сдвиг.
+      const whole = { start: 0, end: groups.length };
+      if (groups.length < 2 || worstShift(groups, at, whole) <= maxShift) {
+        return groups.map((g, i) => ({ ...slot(g), pos: at[i] }));
+      }
+      groups = mergeTightest(groups, whole.start, whole.end);
+      continue;
+    }
+
+    // По одной самой тесной паре в каждой не уложившейся пачке. С конца —
+    // чтобы уже найденные границы не поехали от слияния слева.
+    for (let k = crowded.length - 1; k >= 0; k--) {
+      groups = mergeTightest(groups, crowded[k].start, crowded[k].end);
+    }
   }
-  return runs;
+}
+
+/** Знак в работе: `at` — среднее время его событий в долях суток. */
+interface Group {
+  at: number;
+  count: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+/** Участок подряд идущих знаков, которые раздвигались вместе. */
+interface Block {
+  start: number;
+  /** За последним. */
+  end: number;
+}
+
+function slot(g: Group): MarkSlot {
+  return { pos: g.at, count: g.count, firstAt: g.firstAt, lastAt: g.lastAt };
+}
+
+/** Самый большой сдвиг знака от своего времени внутри участка. */
+function worstShift(groups: Group[], at: number[], b: Block): number {
+  let worst = 0;
+  for (let i = b.start; i < b.end; i++) worst = Math.max(worst, Math.abs(at[i] - groups[i].at));
+  return worst;
+}
+
+/**
+ * Развести знаки так, чтобы просвет был не меньше `pitch`, а суммарный сдвиг
+ * от настоящих времён — наименьший из возможных.
+ *
+ * Это изотоническая регрессия (PAVA): сдвиг i-го знака на `i * pitch` влево
+ * превращает «между соседями не меньше pitch» в «значения не убывают», а
+ * дальше соседние участки-нарушители сливаются в один и заменяются своим
+ * средним. У такого участка знаки встают ровно через `pitch`, а середина
+ * остаётся на среднем времени его событий — пачка не уезжает ни вправо,
+ * ни влево, она только расправляется.
+ */
+function spread(
+  groups: Group[],
+  pitch: number,
+  min: number,
+  max: number,
+): { at: number[]; blocks: Block[] } {
+  const n = groups.length;
+  const sum: number[] = [];
+  const len: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    let s = groups[i].at - i * pitch;
+    let l = 1;
+    while (sum.length > 0 && sum[sum.length - 1] / len[len.length - 1] > s / l) {
+      s += sum.pop()!;
+      l += len.pop()!;
+    }
+    sum.push(s);
+    len.push(l);
+  }
+
+  const at = new Array<number>(n);
+  const blocks: Block[] = [];
+  let i = 0;
+  for (let b = 0; b < sum.length; b++) {
+    const level = sum[b] / len[b];
+    blocks.push({ start: i, end: i + len[b] });
+    for (let k = 0; k < len[b]; k++, i++) at[i] = level + i * pitch;
+  }
+
+  // Края полосы: пачка у полуночи не имеет права уехать за них. Проход слева
+  // держит начало суток и просвет, проход справа — конец суток, подтягивая
+  // за собой соседей слева.
+  for (let j = 0; j < n; j++) {
+    at[j] = j === 0 ? Math.max(at[j], min) : Math.max(at[j], at[j - 1] + pitch);
+  }
+  for (let j = n - 1; j >= 0; j--) {
+    at[j] = j === n - 1 ? Math.min(at[j], max) : Math.min(at[j], at[j + 1] - pitch);
+  }
+
+  return { at, blocks };
+}
+
+/**
+ * Слить самую тесную пару соседей на участке в один знак с числом.
+ *
+ * Сливается именно пара, а не весь участок: так знаков остаётся столько,
+ * сколько полоса честно выдерживает, и ритм видно даже там, где считать
+ * приходится по подписям.
+ */
+function mergeTightest(groups: Group[], start: number, end: number): Group[] {
+  if (end - start < 2) return groups;
+
+  let best = start;
+  let bestGap = Infinity;
+  for (let i = start; i + 1 < end; i++) {
+    const gap = groups[i + 1].at - groups[i].at;
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+
+  const a = groups[best];
+  const b = groups[best + 1];
+  const count = a.count + b.count;
+  const merged: Group = {
+    // Слитый знак стоит на среднем времени своих событий, а не «где-то между».
+    at: (a.at * a.count + b.at * b.count) / count,
+    count,
+    firstAt: a.firstAt,
+    lastAt: b.lastAt,
+  };
+  return [...groups.slice(0, best), merged, ...groups.slice(best + 2)];
 }
 
 /** Последнее по времени событие нужного типа — «когда в последний раз…». */

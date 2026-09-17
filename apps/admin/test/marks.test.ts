@@ -1,89 +1,154 @@
 /**
- * Склейка меток на полосе суток.
+ * Полоса суток целиком: от событий дневника до знаков на экране.
  *
- * Сутки на телефоне — 390 точек, и метка заметного размера занимает получаса.
- * Кормления новорождённого идут пачками, поэтому вопрос не «показать каждое»,
- * а «не превратить пачку в неразличимую кашу из чёрточек».
+ * Заказчик смотрит полосу с телефона и считает по ней события глазами.
+ * Раньше близкие кормления склеивались в одну фигуру пошире — и «шесть подряд»
+ * читалось как «одна большая отметка», а два близких подгузника — как один
+ * треугольник крупнее соседних. Здесь проверяется именно то, что он видит:
+ * сходится ли число знаков с числом событий в легенде.
  */
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 
-import { clusterMarks } from '../src/lib/timeline';
-import type { TimeMark } from '../src/lib/timeline';
+import { buildDayTimeline, layoutMarks } from '../src/lib/timeline';
+import type { MarkSlot } from '../src/lib/timeline';
+import type { TrackerEvent } from '../src/types';
 
+const DAY_START = Date.parse('2026-09-16T00:00:00.000Z');
 const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
-const T0 = Date.parse('2026-09-15T00:00:00.000Z');
 
-/** Метка через `min` минут после начала суток. */
-function mark(min: number): TimeMark {
-  return { at: T0 + min * MINUTE, pos: (min * MINUTE) / DAY, label: '' };
+/** Полоса на телефоне: 336 точек на сутки. Те же числа, что в DayStrip.tsx. */
+const PHONE = { pitch: 11 / 336, maxShift: 4 / 336 };
+/** Та же полоса на узком экране: 280 точек. Раздвигать становится некуда. */
+const NARROW = { pitch: 11 / 280, maxShift: 4 / 280 };
+
+let seq = 0;
+
+function event(type: string, hh: number, mm: number, extra: Partial<TrackerEvent> = {}): TrackerEvent {
+  return {
+    id: ++seq,
+    type,
+    started_at: new Date(DAY_START + (hh * 60 + mm) * MINUTE).toISOString(),
+    ...extra,
+  };
 }
 
-/** Порог, при котором склеиваются метки ближе `min` минут друг к другу. */
-function gapOf(min: number): number {
-  return (min * MINUTE) / DAY;
+/** Настоящий день 16 сентября: пятнадцать кормлений и семь подгузников. */
+const FEEDS: [number, number][] = [
+  [0, 19],
+  [2, 59],
+  [4, 59],
+  [8, 15],
+  [9, 15],
+  [12, 16],
+  [14, 11],
+  [15, 13],
+  [17, 55],
+  [18, 35],
+  [19, 33],
+  [20, 1],
+  [20, 43],
+  [21, 48],
+  [22, 50],
+];
+const DIAPERS: [number, number][] = [
+  [1, 10],
+  [5, 20],
+  [9, 40],
+  [13, 5],
+  [17, 30],
+  [20, 55],
+  [21, 20],
+];
+
+function realDay(): TrackerEvent[] {
+  return [
+    ...FEEDS.map(([h, m]) => event('feed', h, m)),
+    ...DIAPERS.map(([h, m]) => event('diaper', h, m)),
+  ];
 }
 
-test('пустая дорожка — ни одной фигуры', () => {
-  assert.deepEqual(clusterMarks([], gapOf(45)), []);
+/** Сколько событий обещают знаки — это число и стоит в легенде полосы. */
+function total(slots: MarkSlot[]): number {
+  return slots.reduce((sum, s) => sum + s.count, 0);
+}
+
+test('настоящий день: пятнадцать кормлений — пятнадцать знаков', () => {
+  const day = buildDayTimeline(realDay(), DAY_START, DAY_START + 12 * 60 * MINUTE);
+  const slots = layoutMarks(day.feeds, PHONE);
+
+  assert.equal(slots.length, 15, 'знаков на полосе меньше, чем кормлений в легенде');
+  assert.equal(total(slots), 15);
 });
 
-test('одиночная метка — пачка нулевой длины, а не особый случай', () => {
-  const runs = clusterMarks([mark(400)], gapOf(45));
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].count, 1);
-  assert.equal(runs[0].from, runs[0].to);
+test('вечерняя пачка кормлений — семь знаков, а не колбаса', () => {
+  // 17:55, 18:35, 19:33, 20:01, 20:43, 21:48, 22:50 — именно на этот кусок
+  // полосы заказчик и жаловался.
+  const day = buildDayTimeline(realDay(), DAY_START, DAY_START + 12 * 60 * MINUTE);
+  const evening = layoutMarks(day.feeds, PHONE).filter((s) => s.firstAt >= DAY_START + 17 * 60 * MINUTE);
+
+  assert.equal(evening.length, 7);
+  assert.equal(total(evening), 7);
 });
 
-test('редкие кормления остаются отдельными фигурами', () => {
-  // Три часа между кормлениями — на полосе это сантиметр, склеивать нечего.
-  const runs = clusterMarks([mark(0), mark(180), mark(360)], gapOf(45));
-  assert.equal(runs.length, 3);
-});
+test('два подгузника подряд — два одинаковых знака', () => {
+  // 20:55 и 21:20: раньше на их месте был один треугольник заметно крупнее
+  // остальных, и заказчик читал его как одно событие.
+  const day = buildDayTimeline(realDay(), DAY_START, DAY_START + 12 * 60 * MINUTE);
+  const slots = layoutMarks(day.diapers, PHONE);
 
-test('пачка с промежутком в 20 минут склеивается в одну фигуру', () => {
-  const runs = clusterMarks([mark(390), mark(410), mark(430)], gapOf(45));
-  assert.equal(runs.length, 1);
+  assert.equal(slots.length, 7);
   assert.deepEqual(
-    { count: runs[0].count, first: runs[0].firstAt, last: runs[0].lastAt },
-    { count: 3, first: T0 + 390 * MINUTE, last: T0 + 430 * MINUTE },
+    slots.map((s) => s.count),
+    [1, 1, 1, 1, 1, 1, 1],
+    'знак с числом означал бы, что пару не удалось развести',
   );
 });
 
-test('слипание считается попарно: цепочка не рвётся на середине', () => {
-  // Пять кормлений с шагом 20 минут — это восемьдесят минут подряд. Если бы
-  // расстояние мерилось от начала пачки, цепочка развалилась бы на куски.
-  const runs = clusterMarks([mark(0), mark(20), mark(40), mark(60), mark(80)], gapOf(45));
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].count, 5);
+test('удалённое событие на полосу не попадает', () => {
+  const events = [
+    event('feed', 8, 0),
+    event('feed', 12, 0, { deleted_at: '2026-09-16T13:00:00.000Z' }),
+    event('feed', 16, 0),
+  ];
+  const day = buildDayTimeline(events, DAY_START, DAY_START + 20 * 60 * MINUTE);
+  const slots = layoutMarks(day.feeds, PHONE);
+
+  assert.equal(total(slots), 2);
 });
 
-test('пачка кончается там, где пошёл настоящий промежуток', () => {
-  const runs = clusterMarks([mark(0), mark(20), mark(200), mark(220)], gapOf(45));
+test('редкие кормления полоса не трогает вовсе', () => {
+  const events = [event('feed', 7, 0), event('feed', 11, 0), event('feed', 15, 0)];
+  const day = buildDayTimeline(events, DAY_START, DAY_START + 20 * 60 * MINUTE);
+  const slots = layoutMarks(day.feeds, PHONE);
+
+  slots.forEach((s, i) => {
+    assert.ok(Math.abs(s.pos - day.feeds[i].pos) < 1e-12, `знак ${i} сдвинули без нужды`);
+  });
+});
+
+test('на узком экране число событий всё равно сходится', () => {
+  // Места меньше, часть знаков становится общими — но сумма по подписям
+  // обязана остаться той же, иначе легенда и полоса разойдутся.
+  const day = buildDayTimeline(realDay(), DAY_START, DAY_START + 12 * 60 * MINUTE);
+  const slots = layoutMarks(day.feeds, NARROW);
+
+  assert.equal(total(slots), 15);
+  assert.ok(slots.length >= 12, `знаков осталось всего ${slots.length} — полоса схлопнулась зря`);
+});
+
+test('в подсказке остаётся настоящее время, даже если знак сдвинули', () => {
+  const day = buildDayTimeline(realDay(), DAY_START, DAY_START + 12 * 60 * MINUTE);
+  const slots = layoutMarks(day.feeds, PHONE);
+  const real = day.feeds.map((m) => m.at);
+
   assert.deepEqual(
-    runs.map((r) => r.count),
-    [2, 2],
+    slots.map((s) => s.firstAt),
+    real,
+    'знаки разошлись со временами событий',
   );
-});
-
-test('на широком экране порог меньше — та же пачка расходится на метки', () => {
-  // Тот же день в браузере на большом мониторе: места хватает всем.
-  const marks = [mark(390), mark(410), mark(430)];
-  assert.equal(clusterMarks(marks, gapOf(15)).length, 3);
-});
-
-test('нулевой порог не склеивает ничего', () => {
-  // Пока ширина полосы не измерена, склейка должна выключаться, а не
-  // схлопывать все сутки в одну фигуру.
-  const runs = clusterMarks([mark(0), mark(0), mark(1)], 0);
-  assert.equal(runs.length, 3);
-});
-
-test('дубль разбора не ломает пачку', () => {
-  // Два одинаковых времени — обычное дело: «покормила» и следом «грудью».
-  const runs = clusterMarks([mark(100), mark(100)], gapOf(45));
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].count, 2);
-  assert.equal(runs[0].from, runs[0].to);
+  assert.deepEqual(
+    slots.map((s) => s.lastAt),
+    real,
+  );
 });

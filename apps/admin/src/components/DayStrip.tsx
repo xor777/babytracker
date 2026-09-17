@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
-import type { DayTimeline, MarkRun, TimeMark } from '../lib/timeline';
-import { clusterMarks } from '../lib/timeline';
+import type { DayTimeline, MarkLayout, MarkSlot, TimeMark } from '../lib/timeline';
+import { layoutMarks } from '../lib/timeline';
 import { formatMinutes, formatTime, plural } from '../lib/format';
 
 interface Props {
@@ -14,14 +14,23 @@ interface Props {
 const HOUR_TICKS = [0, 6, 12, 18, 24];
 
 /**
- * Размер метки и минимальный просвет между соседними — в точках экрана.
- * MARK_PX держится заодно с `--mark` в styles.css: там метка рисуется, здесь
- * по ней считается, какие метки пришлось бы рисовать друг на друге.
+ * Размер знака и минимальный просвет между соседними — в точках экрана.
+ * MARK_PX держится заодно с `--mark` в styles.css: там знак рисуется, здесь
+ * по нему считается, какие знаки пришлось бы рисовать друг на друге.
  * Просвет нужен отдельно: без него «не слиплись» означало бы «соприкоснулись
  * боками», а это на полосе выглядит одной кляксой.
  */
 const MARK_PX = 8;
 const GAP_PX = 3;
+
+/**
+ * Насколько знаку позволено отъехать от своего времени ради просвета.
+ *
+ * Половина знака — ровно то расстояние, на котором знак ещё НАКРЫВАЕТ свою
+ * минуту: время остаётся под ним, а не рядом с ним. Дальше сдвигать — врать,
+ * поэтому пачка, которая не укладывается, становится одним знаком с числом.
+ */
+const MAX_SHIFT_PX = MARK_PX / 2;
 
 /** Пока ширина не измерена, считаем по телефону: полоса проектируется от 390 px. */
 const FALLBACK_WIDTH_PX = 390;
@@ -34,10 +43,10 @@ const FALLBACK_WIDTH_PX = 390;
  * они бы растягивались вместе с холстом.
  *
  * Кормления и подгузники различаются прежде всего ФОРМОЙ, а не цветом:
- * кормление — круглое (пачка вытягивается в капсулу), подгузник — угловатый
- * клин вниз (пачка превращается в трапецию). Цвет только поддерживает.
- * Так метки читаются в темноте, на убавленной яркости и у тех, кто плохо
- * различает близкие оттенки, — а именно в этих условиях полосу и смотрят.
+ * кормление — круглое, подгузник — угловатый клин вниз. Цвет только
+ * поддерживает. Так знаки читаются в темноте, на убавленной яркости и у тех,
+ * кто плохо различает близкие оттенки, — а именно в этих условиях полосу и
+ * смотрят.
  *
  * Пустые сутки тоже выглядят осмысленно: ось часов на месте, и видно, что записей
  * пока нет, — для двухнедельного ребёнка это нормальное состояние, а не ошибка.
@@ -46,7 +55,7 @@ export function DayStrip({ timeline, compact }: Props) {
   const { sleeps, feeds, diapers, nowPos } = timeline;
   const pct = (v: number) => `${Math.max(0, Math.min(100, v * 100))}%`;
   const empty = sleeps.length === 0 && feeds.length === 0 && diapers.length === 0;
-  const [ref, minGap] = useMinGap();
+  const [ref, layout] = useMarkLayout();
 
   return (
     <div className="strip" ref={ref}>
@@ -67,7 +76,7 @@ export function DayStrip({ timeline, compact }: Props) {
       <MarkRow
         marks={feeds}
         kind="feed"
-        minGap={minGap}
+        layout={layout}
         pct={pct}
         one="кормление"
         few="кормления"
@@ -76,7 +85,7 @@ export function DayStrip({ timeline, compact }: Props) {
       <MarkRow
         marks={diapers}
         kind="diaper"
-        minGap={minGap}
+        layout={layout}
         pct={pct}
         one="подгузник"
         few="подгузника"
@@ -115,7 +124,7 @@ export function DayStrip({ timeline, compact }: Props) {
 interface MarkRowProps {
   marks: TimeMark[];
   kind: 'feed' | 'diaper';
-  minGap: number;
+  layout: MarkLayout;
   pct: (v: number) => string;
   one: string;
   few: string;
@@ -123,32 +132,48 @@ interface MarkRowProps {
 }
 
 /**
- * Дорожка меток одного вида. Пачка рисуется тем же элементом, что и одиночка,
- * только шире: круг вытягивается в капсулу, клин — в трапецию. Один элемент на
- * пачку вместо трёх слипшихся палочек.
+ * Дорожка знаков одного вида: сколько событий, столько и знаков одинакового
+ * размера. Считать их можно взглядом — за этим полосу и смотрят.
+ *
+ * Там, где знаки не развести, не соврав про время, остаётся один знак с
+ * числом над ним. Строчка для числа появляется только на такой дорожке:
+ * в обычные сутки подписей нет и полоса прежней высоты.
  */
-function MarkRow({ marks, kind, minGap, pct, one, few, many }: MarkRowProps) {
-  const runs = clusterMarks(marks, minGap);
+function MarkRow({ marks, kind, layout, pct, one, few, many }: MarkRowProps) {
+  const slots = layoutMarks(marks, layout);
+  const counted = slots.some((s) => s.count > 1);
+
   return (
-    <div className="strip__row strip__row--marks" data-kind={kind}>
-      {runs.map((r) => (
-        <div
-          key={r.firstAt}
-          className="strip__mark"
-          // Метка стоит центром на своём времени, поэтому элемент шире пролёта
-          // ровно на одну метку и сдвинут влево на половину (сдвиг — в CSS).
-          style={{ left: pct(r.from), width: `calc(${pct(r.to - r.from)} + var(--mark))` }}
-          title={runTitle(r, one, few, many)}
-        />
+    <div
+      className="strip__row strip__row--marks"
+      data-kind={kind}
+      data-counted={counted ? '1' : undefined}
+    >
+      {slots.map((s, i) => (
+        <Fragment key={`${s.firstAt}-${i}`}>
+          <div
+            className="strip__mark"
+            // Знак стоит центром на своей позиции: сдвиг влево на половину — в CSS.
+            style={{ left: pct(s.pos) }}
+            title={slotTitle(s, one, few, many)}
+          />
+          {s.count > 1 ? (
+            <span className="strip__count" style={{ left: pct(s.pos) }} aria-hidden="true">
+              {s.count}
+            </span>
+          ) : null}
+        </Fragment>
       ))}
     </div>
   );
 }
 
-function runTitle(r: MarkRun, one: string, few: string, many: string): string {
-  const name = plural(r.count, one, few, many);
-  if (r.count === 1) return `${capitalize(one)} в ${formatTime(r.firstAt)}`;
-  return `${r.count} ${name} · ${formatTime(r.firstAt)} – ${formatTime(r.lastAt)}`;
+/** Подсказка. Знак мог сдвинуться ради просвета, время в подсказке — настоящее. */
+function slotTitle(s: MarkSlot, one: string, few: string, many: string): string {
+  const name = plural(s.count, one, few, many);
+  if (s.count === 1) return `${capitalize(one)} в ${formatTime(s.firstAt)}`;
+  if (s.firstAt === s.lastAt) return `${s.count} ${name} в ${formatTime(s.firstAt)}`;
+  return `${s.count} ${name} · ${formatTime(s.firstAt)} – ${formatTime(s.lastAt)}`;
 }
 
 function capitalize(s: string): string {
@@ -156,12 +181,11 @@ function capitalize(s: string): string {
 }
 
 /**
- * Порог склейки в долях суток: он зависит от того, сколько точек досталось
- * полосе на самом деле. На 390 px склеек много, на широком экране почти нет,
- * и обе картинки правильные — метки склеиваются ровно тогда, когда иначе
- * налезли бы друг на друга.
+ * Мерки раскладки в долях суток: они зависят от того, сколько точек досталось
+ * полосе на самом деле. На телефоне знаки приходится раздвигать часто, на
+ * широком экране — почти никогда, и обе картинки правильные.
  */
-function useMinGap(): [RefObject<HTMLDivElement | null>, number] {
+function useMarkLayout(): [RefObject<HTMLDivElement | null>, MarkLayout] {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
 
@@ -178,5 +202,5 @@ function useMinGap(): [RefObject<HTMLDivElement | null>, number] {
   }, []);
 
   const px = width > 0 ? width : FALLBACK_WIDTH_PX;
-  return [ref, (MARK_PX + GAP_PX) / px];
+  return [ref, { pitch: (MARK_PX + GAP_PX) / px, maxShift: MAX_SHIFT_PX / px }];
 }
