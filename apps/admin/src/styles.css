@@ -1378,80 +1378,184 @@ button {
 
 /* ============================================================
    Недели жизни — тренд, ради которого врач и открывает страницу
+
+   Было по пять ячеек на каждую неделю: чтобы сравнить кормления между
+   неделями, взгляд прыгал через весь блок. Но раздел читают вдоль одной
+   величины, а не поперёк одной недели, — поэтому таблица, где тренд идёт
+   сверху вниз по столбцу.
    ============================================================ */
 
-.weeks__row + .weeks__row {
-  margin-top: var(--g4);
-  padding-top: var(--g4);
-  border-top: 1px solid var(--line);
+/* Прибавка веса: единственная величина, заслужившая спарклайн. */
+.gain {
+  margin-bottom: var(--g5);
 }
 
-.weeks__head {
+.gain__head {
   display: flex;
   align-items: baseline;
-  gap: var(--g2);
-  margin-bottom: var(--g2);
-}
-
-.weeks__name {
-  font-size: var(--s3);
-  font-weight: 650;
-  color: var(--text);
-}
-
-.weeks__span {
-  font-weight: 400;
-  color: var(--text-3);
-}
-
-.weeks__days {
-  margin-left: auto;
-  font-size: var(--s1);
-  color: var(--text-3);
-}
-
-.weeks__grid {
-  /* Ячеек пять, и в один ряд они не встают: на 390 px это по 62 px,
-     где «кормлений» рвётся на «кормлен/ий». Сетка сама решает, сколько
-     колонок влезло.
-
-     Нижняя граница колонки задана и в пикселях, и в em. em здесь не
-     украшение: системное увеличение шрифта в Android умножает кегль,
-     но НЕ пиксельные ширины — поэтому колонка, заданная только в px,
-     остаётся прежней, а текст в ней перестаёт помещаться. С `max()`
-     колонка растёт вместе с буквами, и сетка сама роняет ряд с трёх
-     колонок до двух, когда трёх уже мало. */
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(max(88px, 5.2em), 1fr));
   gap: var(--g3);
 }
 
-.weeks__cell {
-  min-width: 0;
-  padding-top: var(--g2);
-  border-top: 1px solid var(--line-strong);
+.gain__name {
+  font-size: var(--s3);
+  color: var(--text);
 }
 
-.weeks__value {
-  font-size: var(--s4);
+.gain__value {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: var(--s5);
   font-weight: 640;
-  line-height: 1.15;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1;
   color: var(--text);
-  white-space: nowrap;
 }
 
-.weeks__label {
-  margin-top: 3px;
-  font-size: var(--s1);
-  line-height: 1.25;
+.gain__unit {
+  margin-left: 0.24em;
+  font-size: 0.62em;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-2);
+}
+
+.gain__note {
+  margin-top: var(--g1);
+  font-size: var(--s2);
+  line-height: 1.45;
   color: var(--text-3);
 }
 
-.weeks__empty {
+.gain__plot {
+  position: relative;
+  display: flex;
+  gap: 3px;
+  height: 56px;
+  margin-top: var(--g3);
+}
+
+.gain__col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.gain__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--t-measure);
+}
+
+.gain__gap {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(45deg, var(--hatch) 0 2px, transparent 2px 5px);
+}
+
+/* Нулевая линия: потеря рисуется вниз, и без линии её было бы не отличить
+   от прибавки. Поверх столбиков — она граница, а не фон. */
+.gain__zero {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid var(--line-strong);
+  pointer-events: none;
+}
+
+.gain__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+/* --- таблица недель --- */
+
+/* Колонки шириной по содержимому, а полоса прокручивается: при системном
+   увеличении шрифта пять столбцов в 390 px не встают, и лучше отдать
+   последний за край, чем слепить числа друг с другом. */
+.scroller {
+  overflow-x: auto;
+  margin: 0 calc(var(--g4) * -1);
+  padding: 0 var(--g4);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+
+  /* Тень у края появляется сама и только тогда, когда за краем что-то есть:
+     две «шторки» цвета фона прокручиваются вместе с содержимым и закрывают
+     тень, пока таблица целиком на виду. Без этого при крупном шрифте
+     столбец уезжает за край молча. */
+  background:
+    linear-gradient(to right, var(--bg) 40%, transparent) left center / 24px 100% no-repeat
+      local,
+    linear-gradient(to left, var(--bg) 40%, transparent) right center / 24px 100% no-repeat
+      local,
+    radial-gradient(farthest-side at 0 50%, var(--line-strong), transparent) left center /
+      9px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--line-strong), transparent) right center /
+      9px 100% no-repeat scroll;
+}
+
+.scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.wtable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.wtable th,
+.wtable td {
+  padding: 10px 0;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.wtable th + th,
+.wtable td + td {
+  padding-left: var(--g3);
+}
+
+.wtable thead th {
+  padding-bottom: 6px;
+  font-size: var(--s1);
+  font-weight: 500;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.wtable tbody th,
+.wtable tbody td {
+  border-bottom: 1px solid var(--line);
+}
+
+.wtable tbody td {
+  font-size: var(--s3);
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.wtable th:first-child {
+  text-align: left;
   font-size: var(--s2);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Сколько суток недели записано и какие это числа — подписью под номером,
+   а не отдельными столбцами: столбцов и так пять. */
+.wtable__sub {
+  display: block;
+  font-size: var(--s1);
+  font-weight: 400;
   color: var(--text-3);
 }
 

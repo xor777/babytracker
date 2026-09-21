@@ -28,6 +28,7 @@ import {
   plural,
 } from '../lib/format';
 import { CoverageStrip } from './CoverageStrip';
+import { WeekGain } from './WeekGain';
 import { WeightChart } from './WeightChart';
 import { DayBars } from './DayBars';
 import { DiaperDots } from './DiaperDots';
@@ -527,63 +528,56 @@ export function StatsScreen() {
             <div className="card__head">
               <h2 className="card__title">По неделям жизни</h2>
             </div>
-            <div className="weeks">
-              {byWeek.map((r) => (
-                <div className="weeks__row" key={r.week.index}>
-                  <div className="weeks__head">
-                    <span className="weeks__name">
-                      {r.week.label}
-                      {/* Крайние недели окно захватывает не целиком, и «5 из 5»
-                          без дат читалось бы как полная неделя. Даты снимают
-                          вопрос, не занимая отдельной строки. */}
-                      <span className="weeks__span"> · {rangeOf(r.week.cells)}</span>
-                    </span>
-                    <span className="weeks__days">
-                      {r.week.recorded} из {r.week.total}{' '}
-                      {plural(r.week.total, 'суток', 'суток', 'суток')}
-                    </span>
-                  </div>
-                  {r.week.recorded === 0 ? (
-                    <p className="weeks__empty">За эту неделю в дневнике ничего нет.</p>
-                  ) : r.week.cells.every((c) => c.today) ? (
-                    // Неделя состоит из одних сегодняшних суток: средних за сутки
-                    // тут быть не может, и строка прочерков без объяснения читалась
-                    // бы как «данных нет».
-                    <p className="weeks__empty">
-                      Неделя только началась — сутки ещё идут, средних за них пока нет.
-                    </p>
-                  ) : (
-                    <div className="weeks__grid">
-                      {/* Прибавка почти никогда не укладывается ровно в неделю:
-                          взвешивают раз в несколько дней, и точка отсчёта —
-                          последнее взвешивание ДО недели. «−36 г» в строке
-                          «2-я неделя» без срока читается как «за эту неделю»,
-                          а на деле это разница за тринадцать суток. Срок и есть
-                          знаменатель этого числа, и он обязан стоять рядом. */}
-                      <Cell
-                        label={
-                          r.weightSpanDays
-                            ? `вес, за ${r.weightSpanDays} ${plural(r.weightSpanDays, 'сутки', 'суток', 'суток')}`
-                            : 'вес'
-                        }
-                        value={formatSignedGrams(r.weightDeltaG)}
-                      />
-                      <Cell label="кормлений" value={formatPerDay(r.feeds?.value ?? null)} />
-                      <Cell label="мокрых" value={formatPerDay(r.wet?.value ?? null)} />
-                      <Cell label="грязных" value={formatPerDay(r.dirty?.value ?? null)} />
-                      <Cell
-                        label="сна"
-                        value={r.sleepMin ? formatHours(r.sleepMin.value) : '—'}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
+            {/* Спарклайн прибавки, дальше таблица.
+
+                Раньше на каждую неделю приходилось пять ячеек, и чтобы
+                сравнить кормления между неделями, взгляд прыгал через весь
+                блок. Раздел же существует ради тренда — его читают вдоль
+                одной величины, а не поперёк одной недели. В таблице тренд
+                идёт сверху вниз по столбцу, не отрываясь.
+
+                Вес из таблицы ушёл в спарклайн: он единственный, кто заметно
+                меняется от недели к неделе, и единственный, кому ноль
+                что-то разделяет. */}
+            <WeekGain weeks={byWeek} />
+
+            <div className="scroller">
+              <table className="wtable">
+                <thead>
+                  <tr>
+                    <th scope="col">неделя</th>
+                    <th scope="col">кормлений</th>
+                    <th scope="col">мокрых</th>
+                    <th scope="col">грязных</th>
+                    <th scope="col">сна</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byWeek.map((r) => (
+                    <tr key={r.week.index}>
+                      <th scope="row">
+                        {r.week.label}
+                        {/* Крайние недели окно захватывает не целиком, и «5 из 5»
+                            без дат читалось бы как полная неделя. */}
+                        <span className="wtable__sub">
+                          {r.week.recorded} из {r.week.total} суток
+                        </span>
+                        <span className="wtable__sub">{rangeOf(r.week.cells)}</span>
+                      </th>
+                      <td>{formatPerDay(r.feeds?.value ?? null)}</td>
+                      <td>{formatPerDay(r.wet?.value ?? null)}</td>
+                      <td>{formatPerDay(r.dirty?.value ?? null)}</td>
+                      <td>{r.sleepMin ? formatHours(r.sleepMin.value) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
             <p className="card__note">
-              Всё, кроме веса, — в среднем за сутки, и только по тем суткам недели, где
-              записи этого рода есть. Вес — разница между последним взвешиванием недели и
-              последним до неё; за сколько суток она набралась, написано рядом.
+              Числа в таблице — в среднем за сутки, и только по тем суткам недели, где
+              записи этого рода есть. Прибавка тоже в сутки, и это не мелочь: взвешивают
+              не по расписанию, у одной недели разница набрана за шесть суток, у другой
+              за двенадцать. Не поделив на срок, столбики нельзя было бы ставить рядом.
             </p>
           </section>
         ) : null}
@@ -641,9 +635,19 @@ export function StatsScreen() {
 /** «18–22 авг» — какие именно сутки недели попали в период. */
 function rangeOf(cells: DayCell[]): string {
   if (cells.length === 0) return '';
-  const from = formatDayShort(cells[0].startMs);
-  const to = formatDayShort(cells[cells.length - 1].startMs);
-  return from === to ? from : `${from} — ${to}`;
+  const fromMs = cells[0].startMs;
+  const toMs = cells[cells.length - 1].startMs;
+  const from = formatDayShort(fromMs);
+  const to = formatDayShort(toMs);
+  if (from === to) return from;
+
+  // Внутри одного месяца название пишется один раз: «2 — 8 сент.», а не
+  // «2 сент. — 8 сент.». Это не только короче — в таблице недель первый
+  // столбец задаёт ширину всем остальным, и повторённый месяц стоил
+  // сорока пикселей, из-за которых при крупном шрифте за край уезжал
+  // целый столбец «сна».
+  const sameMonth = new Date(fromMs).getMonth() === new Date(toMs).getMonth();
+  return sameMonth ? `${new Date(fromMs).getDate()} — ${to}` : `${from} — ${to}`;
 }
 
 /** «14 сентября, 13:00 → 15 сентября, 19:06 (30 ч 6 мин)» — самый долгий из перерывов. */
@@ -694,15 +698,6 @@ function Fact({ label, value, hint, big }: FactProps) {
       <div className="substat__label">{label}</div>
       <div className={big ? 'substat__value substat__value--big' : 'substat__value'}>{value}</div>
       {hint ? <div className="substat__hint">{hint}</div> : null}
-    </div>
-  );
-}
-
-function Cell({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="weeks__cell">
-      <div className="weeks__value">{value}</div>
-      <div className="weeks__label">{label}</div>
     </div>
   );
 }
