@@ -1,131 +1,164 @@
 /* ============================================================
    ANDREYTRACKER · /dash — рабочая админка для телефона.
 
-   Родня телевизионному дашборду: тёмный фон, циан/пурпур, моноширинные цифры.
-   Но это инструмент, а не витрина: плотность выше, свечения почти нет,
-   всё нажимаемое — не меньше 44 px. Проектируется от 390 px.
+   Бумага, а не приборная панель. Ни одной карточки: разделы отбиты
+   линейкой и воздухом, потому что страница→карточка→плитка — это три
+   уровня рамок, и именно они шумели.
+
+   ПРАВИЛО ЦВЕТА. Цвет живёт только внутри графиков и называет там тип
+   записи: сон синий, кормления оранжевые, подгузники зелёные, вес
+   красный. Текст, числа, подписи, вкладки и весь хром — чёрно-белые.
+   Так цветные пятна собираются в два-три места на экран, а вокруг них
+   тишина. Оценки цвет не выносит: он говорит «что это», а не «хорошо
+   ли это», — поэтому он уместен и в «Сводке», которую показывают врачу.
+
+   «Происходит прямо сейчас» отмечено не цветом, а формой: чернильная
+   риска и жирное начертание. Будь оно цветом — пришлось бы отнять
+   один тон у типов, и цвет перестал бы значить время.
+
+   Палитра взята у цветика-семицветика из шапки. Другого источника
+   цвета в приложении нет.
+
+   Плотность выше витрины: это инструмент. Всё нажимаемое — не меньше
+   44 px. Проектируется от 390 px, проверяется на 360.
    ============================================================ */
 
 :root {
   --sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif;
+
+  /* Моноширинный остался ровно для двух мест, где важна сама ФОРМА знака:
+     код сопряжения и идентификаторы. Числа его не используют — в нём
+     запятая получает полную ширину, и «4,53 кг» читается как «4 , 5 3». */
   --mono:
     ui-monospace, 'SF Mono', SFMono-Regular, 'Roboto Mono', 'DejaVu Sans Mono', Menlo,
     Consolas, monospace;
 
-  /* Не чистый чёрный: на телефоне в руках мягкий фон читается спокойнее,
-     а выгорание OLED здесь не проблема — экран не висит сутками. */
-  --bg: #070b0e;
-  --bg-card: #0c1319;
-  --bg-sunken: #060a0d;
-  --bg-input: #101a21;
-  --bg-hover: #142029;
+  /* --- Ночь. Не чистый чёрный: на телефоне в руках мягкий фон
+         читается спокойнее, а выгорание OLED здесь не проблема. --- */
+  --bg: #0f0f11;
+  --bg-card: #0f0f11;
+  --bg-sunken: #1c1c20;
+  --bg-input: #1a1a1f;
+  --bg-hover: #26262c;
 
-  --line: rgba(122, 190, 212, 0.14);
-  --line-strong: rgba(122, 190, 212, 0.28);
+  --line: rgba(228, 228, 233, 0.15);
+  --line-strong: rgba(228, 228, 233, 0.34);
 
-  --text: #dbeaf0;
-  --text-2: #93b0bd;
-  --text-3: #62808d;
+  --text: #e4e4e9;
+  --text-2: #94949e;
+  --text-3: #6a6a74;
 
-  --cyan: #3fe9ff;
-  --violet: #a273ff;
-  --amber: #ffb43c;
-  --green: #4df0a9;
-  --red: #ff6b7a;
+  /* Крупная заливка читается тяжелее текста того же тона. Поэтому у
+     нейтральной графики — клеток полноты, фона полосы — свой тон,
+     а не цвет текста: иначе экран превращается в шахматную доску. */
+  --graph: #8b8b96;
 
-  /* Тон типа события (§10.2) — одинаковый в ленте, редакторе и сводке. */
-  --t-sleep: #a273ff;
-  --t-feed: #3fe9ff;
-  --t-diaper: #5ad1b0;
-  --t-measure: #ffb43c;
-  --t-meds: #7f9cff;
-  --t-symptom: #ff8f9c;
-  --t-activity: #9fd356;
-  --t-note: #8fa6b0;
+  /* Чем отмечено «сейчас». Обязан отличаться от всех цветов типов. */
+  --now: var(--text);
 
-  --radius: 12px;
+  /* Тон типа события (§10.2). Живёт только в графиках. */
+  --t-sleep: #5b96f0;
+  --t-feed: #ffa53d;
+  --t-diaper: #4fc084;
+  --t-measure: #ff6a4f;
+  /* Остальные типы в графики не попадают — в списках и на фишках они
+     нейтральны, как и всё остальное вне графиков. */
+  --t-meds: var(--text-2);
+  --t-symptom: var(--text-2);
+  --t-activity: var(--text-2);
+  --t-note: var(--text-2);
+
+  /* Служебные состояния интерфейса — не данные о ребёнке. */
+  --warn-text: #ffcf8a;
+  --warn-bg: rgba(255, 176, 60, 0.13);
+  --warn-line: rgba(255, 176, 60, 0.3);
+  --red: #ff6a4f;
+  --danger-line: rgba(255, 106, 79, 0.36);
+
+  --bg-blur: rgba(15, 15, 17, 0.9);
+  --bg-elevated: #1f1f25;
+  --text-quote: #d7d7de;
+  --on-accent: #0f0f11;
+  --scrim: rgba(0, 0, 0, 0.66);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --hatch: rgba(228, 228, 233, 0.16);
+
+  /* Скругление осталось только у нажимаемого: кнопок, полей, фишек.
+     У разделов его нет — там, где нет коробки, нечего скруглять. */
+  --radius: 10px;
   --radius-sm: 8px;
+
+  /* Восемь ступеней кегля вместо двадцати пяти, семь отступов вместо
+     двадцати — и все отступы кратны четырём. Размер, которого нет в
+     этом списке, — это ошибка, а не тонкая настройка. */
+  --s1: 11px;
+  --s2: 13px;
+  --s3: 15px;
+  --s4: 17px;
+  --s5: 21px;
+  --s6: 28px;
+  --s7: 38px;
+  --s8: 60px;
+
+  --g1: 4px;
+  --g2: 8px;
+  --g3: 12px;
+  --g4: 16px;
+  --g5: 24px;
+  --g6: 32px;
+  --g7: 48px;
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-
-  /* Производные токены: всё, что раньше было зашито числом прямо в правиле.
-     Светлая тема переопределяет только их — правила остаются общими. */
-  --bg-blur: rgba(7, 11, 14, 0.92);
-  --bg-elevated: #16232c;
-  --text-quote: #cfe0ea;
-  --on-accent: #04141a;
-  --cyan-hi: #6befff;
-  --tint: rgba(122, 190, 212, 0.07);
-  --tint-soft: rgba(122, 190, 212, 0.04);
-  --accent-line: rgba(63, 233, 255, 0.35);
-  --accent-ring: rgba(63, 233, 255, 0.16);
-  --accent-wash: rgba(63, 233, 255, 0.08);
-  --warn-text: #ffd79a;
-  --warn-bg: rgba(255, 180, 60, 0.12);
-  --warn-line: rgba(255, 180, 60, 0.32);
-  --danger-line: rgba(255, 107, 122, 0.35);
-  --sleep-wash: rgba(162, 115, 255, 0.15);
-  --scrim: rgba(2, 5, 7, 0.72);
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
 
 /* ============================================================
-   Светлая тема.
-
-   Это не инверсия тёмной: на белом нужны другие акценты (циан #3fe9ff
-   на белом нечитаем), другие границы и настоящие тени вместо свечений.
-   Сами правила ниже общие — тема меняет только токены.
+   День. Не инверсия ночи: насыщенный тон на белом и тот же тон на
+   почти-чёрном — разные цвета по восприятию, поэтому оба набора
+   подобраны отдельно. Сами правила ниже общие.
    ============================================================ */
 
 .theme-light {
-  --bg: #eef1f4;
+  --bg: #ffffff;
   --bg-card: #ffffff;
-  --bg-sunken: #e6ebef;
+  --bg-sunken: #f1f1f4;
   --bg-input: #ffffff;
-  --bg-hover: #e3e9ee;
+  --bg-hover: #f1f1f4;
 
-  --line: rgba(14, 42, 58, 0.14);
-  --line-strong: rgba(14, 42, 58, 0.26);
+  --line: rgba(42, 42, 47, 0.13);
+  --line-strong: rgba(42, 42, 47, 0.3);
 
-  --text: #10222c;
-  --text-2: #4a6270;
-  --text-3: #748b98;
+  --text: #2a2a2f;
+  --text-2: #75757e;
+  --text-3: #a9a9b2;
 
-  --cyan: #0b7f96;
-  --violet: #6b40c0;
-  --amber: #96580a;
-  --green: #0e7a52;
-  --red: #c0392b;
+  --graph: #5c5c67;
+  --now: var(--text);
 
-  --t-sleep: #6b40c0;
-  --t-feed: #0b7f96;
-  --t-diaper: #0e7a52;
-  --t-measure: #96580a;
-  --t-meds: #3c4bbd;
-  --t-symptom: #b23a4c;
-  --t-activity: #5a7614;
-  --t-note: #5c7280;
+  --t-sleep: #2563c9;
+  --t-feed: #f2820c;
+  --t-diaper: #2f9e5b;
+  --t-measure: #e8402a;
+  --t-meds: var(--text-2);
+  --t-symptom: var(--text-2);
+  --t-activity: var(--text-2);
+  --t-note: var(--text-2);
 
-  --bg-blur: rgba(238, 241, 244, 0.92);
-  --bg-elevated: #ffffff;
-  --text-quote: #22333e;
-  --on-accent: #ffffff;
-  --cyan-hi: #0a6f83;
-  --tint: rgba(11, 127, 150, 0.07);
-  --tint-soft: rgba(11, 127, 150, 0.045);
-  --accent-line: rgba(11, 127, 150, 0.4);
-  --accent-ring: rgba(11, 127, 150, 0.22);
-  --accent-wash: rgba(11, 127, 150, 0.09);
   --warn-text: #8a4f06;
-  --warn-bg: rgba(200, 120, 10, 0.12);
-  --warn-line: rgba(150, 88, 10, 0.32);
-  --danger-line: rgba(192, 57, 43, 0.35);
-  --sleep-wash: rgba(107, 64, 192, 0.13);
-  --scrim: rgba(20, 32, 40, 0.42);
-  --shadow: 0 10px 28px rgba(16, 34, 44, 0.18);
+  --warn-bg: rgba(200, 120, 10, 0.1);
+  --warn-line: rgba(150, 88, 10, 0.3);
+  --red: #c62d17;
+  --danger-line: rgba(198, 45, 23, 0.34);
+
+  --bg-blur: rgba(255, 255, 255, 0.92);
+  --bg-elevated: #ffffff;
+  --text-quote: #3d3d44;
+  --on-accent: #ffffff;
+  --scrim: rgba(24, 24, 28, 0.4);
+  --shadow: 0 10px 28px rgba(20, 20, 26, 0.16);
+  --hatch: rgba(42, 42, 47, 0.14);
 }
 
 *,
@@ -144,16 +177,19 @@ figure {
 
 html {
   background: var(--bg);
-  /* Высота липкой шапки. Под ней останавливаются заголовки дня. */
-  --chrome: 106px;
-  scroll-padding-top: calc(var(--chrome) + 30px);
+  /* Высота липкой шапки: 14 отступа + 34 строка имени + 16 отступа +
+     38 вкладки + 1 линейка + 5 на подчёркивание и округления = 108.
+     Под этой отметкой останавливаются заголовки дня в журнале и
+     полоска «нет сети»; ошибись здесь — и они уедут под шапку. */
+  --chrome: 108px;
+  scroll-padding-top: calc(var(--chrome) + 28px);
 }
 
 body {
   margin: 0;
   font-family: var(--sans);
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: var(--s3);
+  line-height: 1.45;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -177,13 +213,16 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
+/* Числа везде табличные: столбец времени в журнале и подряд идущие
+   длительности должны выстраиваться по разрядам, иначе их приходится
+   читать, вместо того чтобы сравнивать взглядом. */
 .mono {
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 .sr-only {
@@ -195,16 +234,6 @@ button {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
-}
-
-/* На светлой теме плоские карточки сливаются с фоном — нужна лёгкая тень. */
-.theme-light .group,
-.theme-light .card,
-.theme-light .hero,
-.theme-light .lastcard,
-.theme-light .jlist,
-.theme-light .empty {
-  box-shadow: 0 1px 2px rgba(16, 34, 44, 0.06), 0 1px 1px rgba(16, 34, 44, 0.04);
 }
 
 /* ============================================================
@@ -221,10 +250,9 @@ button {
   position: sticky;
   top: 0;
   z-index: 40;
-  padding: calc(var(--safe-top) + 10px) 14px 0;
+  padding: calc(var(--safe-top) + 14px) var(--g4) 0;
   background: var(--bg-blur);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--line);
 }
 
 .topbar__row {
@@ -236,20 +264,30 @@ button {
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
+/* Цветик-семицветик — единственное место во всём приложении, где
+   цветов больше одного. Он ничего не значит: он просто есть.
+   Отсюда же взята иконка на домашнем экране. */
+.brand__flower {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
 .brand__name {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  font-size: var(--s5);
+  font-weight: 700;
+  letter-spacing: -0.02em;
   white-space: nowrap;
 }
 
 .brand__age {
-  font-size: 12px;
+  font-size: var(--s2);
   color: var(--text-3);
   white-space: nowrap;
 }
@@ -262,11 +300,11 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  margin-right: -6px;
-  border-radius: 10px;
-  color: var(--text-2);
+  width: 40px;
+  height: 40px;
+  margin-right: -8px;
+  border-radius: var(--radius);
+  color: var(--text-3);
   transition: background 120ms ease;
 }
 
@@ -275,42 +313,37 @@ button {
 }
 
 .icon-btn[data-busy='true'] {
-  color: var(--cyan);
+  color: var(--text);
 }
 
-/* --- сегментированный переключатель экранов --- */
+/* --- переключатель экранов: подчёркивание, а не «таблетка» --- */
 
 .segmented {
   display: flex;
-  gap: 2px;
-  margin: 10px 0 8px;
-  padding: 3px;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  gap: var(--g5);
+  margin-top: var(--g4);
+  border-bottom: 1px solid var(--line);
 }
 
 .segmented__item {
-  flex: 1;
-  height: 38px;
-  border-radius: 7px;
-  font-size: 14px;
-  font-weight: 550;
-  color: var(--text-2);
-  transition:
-    background 140ms ease,
-    color 140ms ease;
+  min-height: 38px;
+  padding: 0 0 10px;
+  font-size: var(--s3);
+  font-weight: 600;
+  color: var(--text-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 140ms ease;
 }
 
 .segmented__item[aria-selected='true'] {
-  background: var(--bg-hover);
   color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--line-strong);
+  border-bottom-color: var(--text);
 }
 
 .main {
   flex: 1;
-  padding: 0 12px calc(var(--safe-bottom) + 40px);
+  padding: 0 var(--g4) calc(var(--safe-bottom) + var(--g7));
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
@@ -324,10 +357,10 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 10px 0;
+  margin: var(--g3) 0;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  font-size: 13.5px;
+  font-size: var(--s2);
   background: var(--warn-bg);
   border: 1px solid var(--warn-line);
   color: var(--warn-text);
@@ -336,51 +369,65 @@ button {
 .banner__btn {
   margin-left: auto;
   flex: none;
-  min-height: 32px;
+  min-height: 34px;
   padding: 0 12px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 550;
+  border-radius: var(--radius-sm);
+  font-size: var(--s2);
+  font-weight: 600;
   color: var(--warn-text);
   border: 1px solid var(--warn-line);
 }
 
 .banner--quiet {
   color: var(--text-2);
-  background: var(--tint);
+  background: var(--bg-sunken);
   border-color: var(--line);
 }
 
 .placeholder {
-  padding: 46px 20px;
+  padding: var(--g7) var(--g5);
   text-align: center;
   color: var(--text-3);
-  font-size: 14px;
+  font-size: var(--s3);
 }
 
 .placeholder__big {
   display: block;
-  margin-bottom: 6px;
-  font-size: 15px;
+  margin-bottom: var(--g2);
+  font-size: var(--s3);
   color: var(--text-2);
+}
+
+.offline {
+  position: sticky;
+  top: calc(var(--safe-top) + var(--chrome));
+  z-index: 25;
+  margin: 0 calc(var(--g4) * -1);
+  padding: 8px var(--g4);
+  font-size: var(--s2);
+  text-align: center;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-line);
 }
 
 /* ============================================================
    Фильтры
+
+   Намеренно НЕ липкие: вместе с шапкой они съедали четверть экрана
+   телефона, а выставляют их один раз. Лента важнее.
    ============================================================ */
 
-/* Фильтры намеренно НЕ липкие: вместе с шапкой они съедали четверть экрана телефона,
-   а выставляют их один раз. Лента важнее. */
 .filters {
-  margin: 0 -12px;
-  padding: 8px 0;
+  margin: 0 calc(var(--g4) * -1);
+  padding: var(--g3) 0 var(--g2);
   border-bottom: 1px solid var(--line);
 }
 
 .chiprow {
   display: flex;
-  gap: 6px;
-  padding: 0 12px;
+  gap: 7px;
+  padding: 0 var(--g4);
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -391,21 +438,23 @@ button {
 }
 
 .chiprow + .chiprow {
-  margin-top: 6px;
+  margin-top: 7px;
 }
 
+/* Фишка выбранного типа заливается чернилами, а не цветом типа:
+   цвет работает в графиках, а здесь тип называет слово. */
 .chip {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 34px;
-  padding: 0 11px;
-  border-radius: 17px;
-  font-size: 13px;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 999px;
+  font-size: var(--s2);
   white-space: nowrap;
   color: var(--text-2);
-  background: var(--bg-card);
+  background: none;
   border: 1px solid var(--line);
   transition:
     background 120ms ease,
@@ -415,77 +464,1229 @@ button {
 
 .chip[aria-pressed='true'] {
   color: var(--bg);
-  background: var(--chip-on, var(--cyan));
-  border-color: transparent;
+  background: var(--text);
+  border-color: var(--text);
   font-weight: 600;
 }
 
 .chip__dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--chip-on, var(--text-3));
+  background: var(--text-3);
 }
 
 .chip[aria-pressed='true'] .chip__dot {
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg);
+  opacity: 0.55;
 }
 
 .chip--ghost {
-  background: transparent;
+  background: none;
 }
 
 .filters__meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px 0;
-  font-size: 12px;
+  gap: var(--g2);
+  padding: var(--g3) var(--g4) 0;
+  font-size: var(--s2);
   color: var(--text-3);
 }
 
 /* ============================================================
-   Лента
+   Раздел. Линейка и воздух вместо рамки.
+   ============================================================ */
+
+.card {
+  padding-top: var(--g5);
+}
+
+.card + .card,
+.card + .empty,
+.empty + .card {
+  margin-top: var(--g5);
+  border-top: 1px solid var(--line);
+}
+
+.card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--g2);
+  margin-bottom: var(--g3);
+}
+
+/* Заголовок раздела строчными: капслок с разрядкой в мелком кегле
+   читается по буквам, а не словом. */
+.card__title {
+  font-size: var(--s2);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.card__aside {
+  margin-left: auto;
+  font-size: var(--s2);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.card__note {
+  margin-top: var(--g3);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.footnote {
+  margin: var(--g5) 0 0;
+  padding-top: var(--g4);
+  border-top: 1px solid var(--line);
+  font-size: var(--s2);
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Числа
+
+   Единица измерения всегда мельче и тише числа и никогда не
+   моноширинная. Раньше «кг» шло тем же кеглем и весом, что само
+   число, и спорило с ним.
+   ============================================================ */
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: var(--g3);
+}
+
+.metric__value {
+  flex: none;
+  white-space: nowrap;
+  font-size: var(--s7);
+  font-weight: 640;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+}
+
+/* Подпись прижата вправо и выровнена по правому краю: раньше она
+   стояла впритык к числу в остатке ширины, и «+159 г от неё»
+   рвалось так, что «неё» оставалось одно на строке. */
+.metric__unit {
+  margin-left: auto;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.metric__quiet {
+  color: var(--text-3);
+}
+
+/* Знаменатель и происхождение числа — строкой под ним, во всю ширину.
+   Рядом с числом им доставалось меньше двухсот пикселей, и фраза
+   рвалась на «+159 г от» и одинокое «неё». */
+.metric__note {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* --- факт: строка во всю ширину ---
+
+   Именно это чинит переносы. Раньше четыре факта стояли сеткой 2×2,
+   каждому доставалось по 170 px, и подпись «на 2,0 % ниже веса при
+   рождении (−92 г) · 12 сентября, возраст 10 дней» занимала четыре
+   строки с разрывом посреди фразы. Теперь строке дана вся ширина. */
+
+.split {
+  margin-top: var(--g4);
+}
+
+.substat {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 0 var(--g3);
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+
+.substat__label {
+  grid-column: 1;
+  font-size: var(--s3);
+  color: var(--text);
+}
+
+.substat__value {
+  grid-column: 2;
+  justify-self: end;
+  white-space: nowrap;
+  font-size: var(--s4);
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+}
+
+.substat__value--big {
+  font-size: var(--s5);
+}
+
+.substat__hint {
+  grid-column: 1 / -1;
+  margin-top: var(--g1);
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Обзор: что сейчас
+   ============================================================ */
+
+.hero {
+  padding-top: var(--g5);
+}
+
+.hero__state {
+  display: flex;
+  align-items: center;
+  gap: var(--g2);
+  font-size: var(--s3);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Точка состояния — чернильная: «сейчас» отмечено формой, а не цветом. */
+.hero__state::before {
+  content: '';
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--now);
+}
+
+.hero__timer {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  margin-top: var(--g3);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  line-height: 1;
+}
+
+.hero__hm {
+  font-size: var(--s8);
+  font-weight: 640;
+  letter-spacing: -0.04em;
+}
+
+.hero__sec {
+  font-size: calc(var(--s8) * 0.34);
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.hero__sub {
+  margin-top: var(--g3);
+  font-size: var(--s3);
+  color: var(--text-2);
+}
+
+.hero__pending {
+  margin-top: var(--g3);
+  font-size: var(--s2);
+  color: var(--text-3);
+}
+
+/* --- «когда в последний раз» ---
+
+   Было три карточки в ряд по ~110 px на 390 px, и «назад · 19:00» в
+   них не помещалось. Стало три строки во всю ширину: время выстроено
+   в столбец справа, и его сравнивают взглядом, не читая. */
+
+.lastrow {
+  margin-top: var(--g5);
+  border-top: 1px solid var(--line);
+}
+
+.lastcard {
+  display: flex;
+  align-items: baseline;
+  gap: var(--g3);
+  min-height: 44px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.lastcard__label {
+  flex: none;
+  width: 104px;
+  font-size: var(--s3);
+  color: var(--text);
+}
+
+.lastcard__value {
+  min-width: 0;
+  font-size: var(--s3);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.lastcard[data-ongoing='yes'] .lastcard__value {
+  color: var(--now);
+  font-weight: 650;
+}
+
+.lastcard__sub {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--s3);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.lastcard__empty {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--s2);
+  color: var(--text-3);
+}
+
+/* --- итоги суток --- */
+
+.tiles {
+  display: flex;
+  gap: var(--g3);
+}
+
+/* Плитка без коробки: только линейка сверху. Три вложенные рамки
+   (страница → карточка → плитка) и создавали основной шум. */
+.tile {
+  flex: 1;
+  min-width: 0;
+  padding-top: var(--g3);
+  border-top: 2px solid var(--line-strong);
+}
+
+.tile__value {
+  font-size: var(--s6);
+  font-weight: 640;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.tile__label {
+  margin-top: 5px;
+  font-size: var(--s2);
+  line-height: 1.3;
+  color: var(--text-2);
+}
+
+/* Уточнения вынесены из плиток в одну строку под ними: в колонке
+   шириной в треть экрана «3 мокрых · 0 грязных» переносилось и
+   ломало высоту всего ряда. */
+.tiles__note {
+  margin-top: var(--g3);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.overview__norm {
+  margin-top: var(--g5);
+}
+
+.overview__norm-label {
+  font-size: var(--s2);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* ============================================================
+   Полоса суток
+   ============================================================ */
+
+.strip {
+  position: relative;
+  padding-top: 2px;
+
+  /* Размер знака. Держится заодно с MARK_PX в DayStrip.tsx: там по нему
+     считается, какие знаки налезли бы друг на друга и как их развести. */
+  --mark: 8px;
+}
+
+.strip__row {
+  position: relative;
+}
+
+.strip__row--sleep {
+  height: 30px;
+  background: var(--bg-sunken);
+}
+
+.strip__sleep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--t-sleep);
+}
+
+/* Идущий сон — тот же цвет сна, но с растворяющимся правым краем:
+   он всё-таки сон, а что он не кончился, видно по тому, как он тает,
+   и по риске «сейчас». Другим цветом он значил бы другой тип. */
+.strip__sleep--open {
+  background: linear-gradient(
+    90deg,
+    var(--t-sleep) 45%,
+    color-mix(in srgb, var(--t-sleep) 22%, transparent)
+  );
+}
+
+.strip__now {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--now);
+}
+
+/* Дорожка кормлений жмётся к полосе сна, дорожка подгузников — к оси
+   часов: между ними зазор больше, чем внутри, поэтому это две ленты,
+   а не полосатая рябь из одинаковых чёрточек. */
+.strip__row--marks[data-kind='feed'] {
+  height: var(--mark);
+  margin-top: 5px;
+}
+
+.strip__row--marks[data-kind='diaper'] {
+  height: var(--mark);
+  margin-top: 6px;
+}
+
+/* Все знаки одного размера — и одиночный, и подписанный числом. Разный
+   размер читался бы как разная величина события, а её на полосе нет. */
+.strip__mark {
+  position: absolute;
+  top: 0;
+  width: var(--mark);
+  height: var(--mark);
+  margin-left: calc(var(--mark) / -2);
+}
+
+.strip__row--marks[data-kind='feed'] .strip__mark {
+  background: var(--t-feed);
+  border-radius: 999px;
+}
+
+/* Подгузник — угловатый клин вниз, к оси часов. Клин ещё и легче
+   кружка по «количеству краски»: дорожка подгузников выходит тише
+   кормлений даже в обесцвеченном виде. */
+.strip__row--marks[data-kind='diaper'] .strip__mark {
+  background: var(--t-diaper);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.strip__row--marks[data-counted='1'] {
+  margin-top: 13px;
+}
+
+.strip__count {
+  position: absolute;
+  bottom: calc(100% + 1px);
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.strip__axis {
+  position: relative;
+  height: 15px;
+  margin-top: var(--g1);
+}
+
+.strip__tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: var(--s1);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.strip__tick:first-child {
+  transform: none;
+}
+
+.strip__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--g1) var(--g4);
+  margin-top: var(--g3);
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.strip__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Ключ легенды повторяет ФОРМУ метки, а не только её цвет:
+   сопоставлять легенду с полосой нужно по силуэту. */
+.strip__key::before {
+  content: '';
+  flex: none;
+  width: 9px;
+  height: 9px;
+}
+
+.strip__key[data-kind='sleep']::before {
+  width: 12px;
+  height: 8px;
+  background: var(--t-sleep);
+}
+
+.strip__key[data-kind='feed']::before {
+  border-radius: 999px;
+  background: var(--t-feed);
+}
+
+.strip__key[data-kind='diaper']::before {
+  width: 10px;
+  height: 8px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  background: var(--t-diaper);
+}
+
+.strip__hint {
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Столбцы по дням
+   ============================================================ */
+
+.bars {
+  margin-top: var(--g3);
+}
+
+.bars__plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 96px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bars__band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: currentColor;
+  opacity: 0.08;
+  border-top: 1px dashed currentColor;
+  border-bottom: 1px dashed currentColor;
+  pointer-events: none;
+}
+
+.bars__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed currentColor;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bars__col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bars__fill {
+  width: 100%;
+}
+
+/* Сегодняшние сутки ещё идут — столбик бледнее, а не другого цвета:
+   другой цвет значил бы другой тип записи, а не незаконченные сутки. */
+.bars__col--today .bars__fill {
+  opacity: 0.42;
+}
+
+/* Пробел в записях — штриховка во всю высоту. Не ноль: нулевая
+   высота утверждала бы, что в эти сутки ребёнок не спал. */
+.bars__gap {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+/* Настоящий ноль — тонкая черта у основания: он записан, и он факт. */
+.bars__zero {
+  width: 100%;
+  height: 2px;
+}
+
+.bars__gapnote,
+.bars__bandnote {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.bars__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Подгузники по дням
+   ============================================================ */
+
+.dots {
+  margin-top: var(--g3);
+}
+
+.dots__plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 96px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dots__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--t-diaper);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.dots__col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+}
+
+.dots__col--today {
+  opacity: 0.42;
+}
+
+.dots__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dots__dot--wet {
+  background: var(--t-diaper);
+}
+
+/* Грязный — тот же знак, но заполненный наполовину другим тоном:
+   один подгузник может быть и мокрым, и грязным сразу, и это должно
+   читаться как один предмет с двумя признаками, а не как два. */
+.dots__dot--dirty {
+  background: var(--t-measure);
+}
+
+.dots__dot--both {
+  background: linear-gradient(to top, var(--t-diaper) 50%, var(--t-measure) 50%);
+}
+
+.dots__dot--unknown {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.dots__hatch {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.dots__zero {
+  width: 100%;
+  height: 2px;
+  background: var(--t-diaper);
+}
+
+.dots__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.dots__note,
+.dots__gapnote {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.dots__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--g1) var(--g4);
+  margin: var(--g3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.dots__legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ============================================================
+   Вес
+   ============================================================ */
+
+.weight {
+  display: block;
+  width: 100%;
+  height: 140px;
+  margin-top: var(--g3);
+  overflow: visible;
+}
+
+.weight__base,
+.weight__axis {
+  font-size: var(--s1);
+  font-variant-numeric: tabular-nums;
+  fill: var(--text-3);
+}
+
+.chart-empty {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Ориентир под числом
+
+   Подписанный референс, а не оценка: полоса показывает, где проходит
+   общеизвестный ориентир, и не красит его ни в зелёный, ни в красный.
+   ============================================================ */
+
+.meter {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin-top: var(--g2);
+  overflow: visible;
+}
+
+.meter__status {
+  margin-top: 6px;
+  font-size: var(--s2);
+  color: var(--text-2);
+}
+
+.meter__status[data-tone='off'] {
+  color: var(--text-2);
+}
+
+.meter__note {
+  margin-top: var(--g1);
+  font-size: var(--s1);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Полнота дневника
+
+   Раздел стоит раньше всех чисел и отвечает на вопрос, без которого
+   остальные числа не читаются: за сколько суток записи вообще есть.
+   Три состояния клетки — «есть», «нет», «неизвестно» — различаются
+   формой, а не цветом: цветом здесь оценивают, а оценок на странице
+   нет. И серым, а не цветом типа: наличие записи — это не тип записи.
+   ============================================================ */
+
+.cover__strip {
+  display: flex;
+  gap: 3px;
+  margin: 2px 0 var(--g3);
+}
+
+.cover__cell {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  background: var(--graph);
+}
+
+.cover__cell[data-state='off'] {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 5px
+  );
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* Неизвестно — пусто в пунктире. Это не «нет»: за краем выгрузки мы
+   не знаем ничего, и любая заливка тут была бы утверждением. */
+.cover__cell[data-state='unknown'] {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.cover__cell[data-today='yes'] {
+  outline: 2px solid var(--now);
+  outline-offset: 2px;
+}
+
+.cover__text {
+  font-size: var(--s2);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.cover__legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px var(--g4);
+  margin-top: var(--g3);
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.cover__key {
+  width: 13px;
+  height: 13px;
+  background: var(--graph);
+}
+
+.cover__key[data-state='off'] {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 5px
+  );
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.cover__key[data-state='unknown'] {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+/* ============================================================
+   Наблюдения — то, что родители увидели, и когда
+
+   Намеренно НЕЙТРАЛЬНО: ни красного, ни предупреждающей иконки, ни
+   выделенного фона. Цветовая тревога — это оценка, а оценивает здесь
+   врач, и страница не должна подсказывать ему ответ раньше, чем он
+   посмотрит на ребёнка.
+   ============================================================ */
+
+.obs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.obs__row + .obs__row {
+  margin-top: var(--g3);
+  padding-top: var(--g3);
+  border-top: 1px solid var(--line);
+}
+
+.obs__line {
+  margin: 0;
+  font-size: var(--s3);
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.obs__hint {
+  margin: var(--g1) 0 0;
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Недели жизни — тренд, ради которого врач и открывает страницу
+   ============================================================ */
+
+.weeks__row + .weeks__row {
+  margin-top: var(--g4);
+  padding-top: var(--g4);
+  border-top: 1px solid var(--line);
+}
+
+.weeks__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--g2);
+  margin-bottom: var(--g2);
+}
+
+.weeks__name {
+  font-size: var(--s3);
+  font-weight: 650;
+  color: var(--text);
+}
+
+.weeks__span {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.weeks__days {
+  margin-left: auto;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.weeks__grid {
+  display: flex;
+  gap: var(--g3);
+}
+
+.weeks__cell {
+  flex: 1;
+  min-width: 0;
+  padding-top: var(--g2);
+  border-top: 1px solid var(--line-strong);
+}
+
+.weeks__value {
+  font-size: var(--s4);
+  font-weight: 640;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.weeks__label {
+  margin-top: 3px;
+  font-size: var(--s1);
+  line-height: 1.25;
+  color: var(--text-3);
+}
+
+.weeks__empty {
+  font-size: var(--s2);
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Журнал: плоская лента, строка = событие
    ============================================================ */
 
 .dayhead {
   position: sticky;
-  top: calc(var(--safe-top) + var(--chrome, 106px));
+  top: calc(var(--safe-top) + var(--chrome));
   z-index: 20;
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin: 14px -12px 8px;
-  padding: 7px 12px;
+  gap: var(--g2);
+  margin: var(--g5) calc(var(--g4) * -1) 0;
+  padding: var(--g2) var(--g4);
   background: var(--bg-blur);
   backdrop-filter: blur(10px);
 }
 
 .dayhead__title {
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  font-size: var(--s4);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* Раньше заголовок целиком гнался в капслок, и «сегодня» приходило из
+   dayTitle() строчными. Капслока больше нет — поднимаем одну букву.
+   Именно первую букву, а не `capitalize`: для дней старше позавчера
+   заголовок это «2 сентября», и `capitalize` сделал бы «2 Сентября». */
+.dayhead__title::first-letter {
   text-transform: uppercase;
-  color: var(--cyan);
 }
 
 .dayhead__date {
-  font-size: 12px;
+  font-size: var(--s2);
   color: var(--text-3);
 }
 
 .dayhead__count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--s2);
   color: var(--text-3);
 }
 
-.group {
-  margin-bottom: 8px;
-  background: var(--bg-card);
+.group,
+.jlist {
+  background: none;
+  border: none;
+}
+
+.jrow {
+  position: relative;
+  border-top: 1px solid var(--line);
+}
+
+.jrow__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--g3);
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 0;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.jrow__head:active {
+  background: var(--bg-hover);
+}
+
+.jrow__time {
+  flex: none;
+  width: 42px;
+  padding-top: 2px;
+  font-size: var(--s2);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* Тип различается ФОРМОЙ знака, а не цветом: цветной значок у каждой
+   строки превращал ленту в рябь из разноцветных точек. */
+.jrow__icon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+/* Текст записи больше не обрезается многоточием: строке дана вся
+   ширина, и вторая строка дешевле, чем «Сон, ночной — завер…». */
+.jrow__text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--s3);
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.jrow__text--said {
+  color: var(--text-2);
+}
+
+/* Пометка «стоит развернуть»: спокойная, но глаз за неё цепляется.
+   Это данные о ребёнке — тревожный цвет здесь неуместен. */
+.jrow--check::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--g4) * -1);
+  /* Отступ сверху и снизу: без него несколько помеченных строк подряд
+     сливаются в одну длинную полосу и читаются как одна запись. */
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: var(--text-2);
+}
+
+.jrow__flag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: var(--s1);
+  font-weight: 700;
+  color: var(--text-2);
+  border: 1px solid var(--line-strong);
+}
+
+.jrow__chev {
+  flex: none;
+  width: 14px;
+  padding-top: 2px;
+  text-align: center;
+  font-size: var(--s1);
+  color: var(--text-3);
+}
+
+.jrow--open {
+  background: var(--bg-sunken);
+}
+
+.jrow--deleted .jrow__text {
+  text-decoration: line-through;
+  color: var(--text-3);
+}
+
+.jrow--busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* --- разворот --- */
+
+.jdet {
+  padding: 0 0 14px 70px;
+}
+
+.jdet__said {
+  font-size: var(--s3);
+  line-height: 1.45;
+  color: var(--text-quote);
+}
+
+.jdet__said--none {
+  color: var(--text-3);
+}
+
+.jdet__warn,
+.jdet__note {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.jdet__line {
+  margin-top: var(--g2);
+  font-size: var(--s2);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.jdet__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px var(--g3);
+  margin-top: var(--g3);
+  font-size: var(--s2);
+  color: var(--text-3);
+}
+
+.jdet__meta dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.jdet__touched {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--g3);
+  padding: var(--g2) var(--g3);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
+  font-size: var(--s2);
+  color: var(--text);
+}
+
+.jdet__touched-open {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--s2);
+  color: var(--text-2);
+}
+
+.jdet__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--g2);
+  margin-top: var(--g3);
+}
+
+.jbtn {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--s2);
+  font-weight: 600;
+  color: var(--text-2);
+  background: none;
+  border: 1px solid var(--line);
+}
+
+.jbtn--accent {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.jbtn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 /* ============================================================
@@ -531,7 +1732,8 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .sheet,
-  .sheet-backdrop {
+  .sheet-backdrop,
+  .toast {
     animation: none;
   }
 }
@@ -540,7 +1742,7 @@ button {
   flex: none;
   width: 36px;
   height: 4px;
-  margin: 8px auto 2px;
+  margin: var(--g2) auto 2px;
   border-radius: 2px;
   background: var(--line-strong);
 }
@@ -550,27 +1752,28 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 14px 10px;
+  padding: 6px var(--g4) var(--g3);
   border-bottom: 1px solid var(--line);
 }
 
 .sheet__title {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: var(--s4);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .sheet__id {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--s1);
   color: var(--text-3);
 }
 
 .sheet__close {
   margin-left: auto;
-  width: 36px;
-  height: 36px;
-  margin-right: -8px;
-  border-radius: 9px;
+  width: 40px;
+  height: 40px;
+  margin-right: -10px;
+  border-radius: var(--radius);
   color: var(--text-2);
   font-size: 20px;
   line-height: 1;
@@ -580,16 +1783,16 @@ button {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 14px 16px;
+  padding: var(--g4);
   -webkit-overflow-scrolling: touch;
 }
 
-/* Ошибка обязана жить внутри листа: на телефоне он занимает почти весь экран,
-   и баннер под ним человеку просто не виден. */
+/* Ошибка обязана жить внутри листа: на телефоне он занимает почти
+   весь экран, и баннер под ним человеку просто не виден. */
 .sheet__alert {
   flex: none;
-  padding: 10px 14px;
-  font-size: 13.5px;
+  padding: var(--g3) var(--g4);
+  font-size: var(--s2);
   color: var(--warn-text);
   background: var(--warn-bg);
   border-top: 1px solid var(--warn-line);
@@ -598,29 +1801,27 @@ button {
 .sheet__foot {
   flex: none;
   display: flex;
-  gap: 8px;
-  padding: 10px 14px calc(var(--safe-bottom) + 12px);
+  gap: var(--g2);
+  padding: var(--g3) var(--g4) calc(var(--safe-bottom) + var(--g3));
   border-top: 1px solid var(--line);
   background: var(--bg-card);
 }
 
 .field + .field {
-  margin-top: 14px;
+  margin-top: var(--g4);
 }
 
 .field__label {
   display: block;
   margin-bottom: 6px;
-  font-size: 11.5px;
+  font-size: var(--s2);
   font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .field__row {
   display: flex;
-  gap: 8px;
+  gap: var(--g2);
 }
 
 .field__row > * {
@@ -629,69 +1830,66 @@ button {
 
 .field__hint {
   margin-top: 5px;
-  font-size: 12px;
+  font-size: var(--s2);
   color: var(--text-3);
 }
 
 .input {
   width: 100%;
-  min-height: 44px;
-  padding: 0 11px;
+  min-height: 46px;
+  padding: 0 12px;
   border-radius: var(--radius-sm);
   background: var(--bg-input);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--s3);
 }
 
 textarea.input {
-  padding: 10px 11px;
-  min-height: 70px;
+  padding: var(--g3) 12px;
+  min-height: 74px;
   resize: vertical;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .input:focus {
-  border-color: var(--line-strong);
+  border-color: var(--text);
   outline: none;
-  box-shadow: 0 0 0 2px var(--accent-ring);
+  box-shadow: 0 0 0 2px var(--line);
 }
 
 .input--time {
-  font-family: var(--mono);
-  font-size: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 .chipgrid {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
 }
 
 .chipgrid .chip {
   min-height: 40px;
-  padding: 0 13px;
 }
 
 .said-quote {
-  margin-top: 4px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
+  margin-top: var(--g1);
+  padding: var(--g3);
   background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--violet);
-  font-size: 14px;
+  border-left: 2px solid var(--line-strong);
+  font-size: var(--s3);
+  line-height: 1.45;
   color: var(--text-quote);
 }
 
 .meta-list {
-  margin-top: 14px;
-  padding-top: 12px;
+  margin-top: var(--g4);
+  padding-top: var(--g3);
   border-top: 1px solid var(--line);
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 5px 12px;
-  font-size: 12.5px;
+  gap: 5px var(--g3);
+  font-size: var(--s2);
   color: var(--text-3);
 }
 
@@ -699,7 +1897,7 @@ textarea.input {
   margin: 0;
   color: var(--text-2);
   text-align: right;
-  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- кнопки --- */
@@ -710,13 +1908,13 @@ textarea.input {
   justify-content: center;
   gap: 6px;
   min-height: 46px;
-  padding: 0 16px;
-  border-radius: 10px;
-  font-size: 15px;
+  padding: 0 var(--g4);
+  border-radius: var(--radius);
+  font-size: var(--s3);
   font-weight: 600;
   border: 1px solid var(--line-strong);
   color: var(--text);
-  background: var(--bg-input);
+  background: none;
   transition:
     background 120ms ease,
     opacity 120ms ease;
@@ -733,19 +1931,27 @@ textarea.input {
 
 .btn--primary {
   flex: 1;
-  color: var(--on-accent);
-  background: var(--cyan);
-  border-color: transparent;
+  color: var(--bg);
+  background: var(--text);
+  border-color: var(--text);
 }
 
 .btn--primary:active {
-  background: var(--cyan-hi);
+  opacity: 0.85;
+  background: var(--text);
 }
 
 .btn--danger {
   color: var(--red);
   border-color: var(--danger-line);
-  background: transparent;
+  background: none;
+}
+
+.btn--sm {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: var(--s2);
+  flex: none;
 }
 
 /* ============================================================
@@ -754,18 +1960,18 @@ textarea.input {
 
 .toast {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(var(--safe-bottom) + 14px);
+  left: var(--g3);
+  right: var(--g3);
+  bottom: calc(var(--safe-bottom) + var(--g4));
   z-index: 70;
   display: flex;
   align-items: center;
   gap: 10px;
   max-width: 460px;
   margin: 0 auto;
-  padding: 11px 12px;
-  border-radius: 11px;
-  font-size: 14px;
+  padding: var(--g3);
+  border-radius: var(--radius);
+  font-size: var(--s3);
   color: var(--text);
   background: var(--bg-elevated);
   border: 1px solid var(--line-strong);
@@ -776,1059 +1982,13 @@ textarea.input {
 .toast__btn {
   margin-left: auto;
   flex: none;
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--cyan);
-  border: 1px solid var(--accent-line);
-}
-
-/* ============================================================
-   Сводка
-   ============================================================ */
-
-.card {
-  margin-bottom: 10px;
-  padding: 13px 14px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.card__head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.card__title {
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-
-.card__aside {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-.metric {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.metric__value {
-  /* Не сжимается и не переносится: «4,79 кг» — это одно число, и разрыв
-     посреди него читается как два. Подпись рядом ужимается первой. */
-  flex: none;
-  white-space: nowrap;
-  font-family: var(--mono);
-  font-size: 32px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  color: var(--tone, var(--text));
-}
-
-.metric__unit {
-  min-width: 0;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.meter {
-  display: block;
-  width: 100%;
-  height: 26px;
-  margin-top: 9px;
-  overflow: visible;
-}
-
-.meter__status {
-  margin-top: 5px;
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-
-.meter__status[data-tone='off'] {
-  color: var(--warn-text);
-}
-
-.meter__note {
-  margin-top: 3px;
-  font-size: 11.5px;
-  line-height: 1.35;
-  color: var(--text-3);
-}
-
-.split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.substat {
-  padding: 10px 11px 11px;
   border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-}
-
-.substat__label {
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.substat__value {
-  margin-top: 2px;
-  font-family: var(--mono);
-  font-size: 22px;
+  font-size: var(--s3);
   font-weight: 600;
-  line-height: 1.1;
-  color: var(--tone, var(--text));
-}
-
-.substat__hint {
-  margin-top: 2px;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.footnote {
-  margin: 14px 2px 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Полнота дневника
-
-   Карточка стоит раньше всех чисел и отвечает на вопрос, без которого
-   остальные числа не читаются: за сколько суток записи вообще есть.
-   Три состояния клетки — «есть», «нет», «неизвестно» — различаются формой,
-   а не цветом: цветом здесь оценивают, а оценок на странице нет.
-   ============================================================ */
-
-.cover {
-  border-left: 3px solid var(--accent-line);
-}
-
-.cover__strip {
-  display: flex;
-  gap: 3px;
-  margin: 2px 0 10px;
-}
-
-.cover__cell {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-  border-radius: 3px;
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-line);
-}
-
-.cover__cell[data-state='on'] {
-  background: var(--cyan);
-  border-color: var(--cyan);
-  opacity: 0.85;
-}
-
-/* Записей нет — штриховка. Тот же знак, что и на графиках ниже: один смысл
-   должен выглядеть одинаково, иначе полосу и столбцы приходится читать по
-   отдельным легендам. */
-.cover__cell[data-state='off'] {
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    var(--line-strong) 3px,
-    var(--line-strong) 4px
-  );
-  border: 1px solid var(--line);
-}
-
-/* Неизвестно — пусто в пунктире. Это не «нет»: за краем выгрузки мы не знаем
-   ничего, и любая заливка тут была бы утверждением. */
-.cover__cell[data-state='unknown'] {
-  background: transparent;
-  border: 1px dotted var(--line-strong);
-}
-
-.cover__cell[data-today='yes'] {
-  outline: 1px solid var(--accent-ring);
-  outline-offset: 1px;
-}
-
-.cover__text {
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-2);
-}
-
-.cover__legend {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px 10px;
-  margin-top: 9px;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.cover__key {
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  background: var(--cyan);
-  border: 1px solid var(--cyan);
-  opacity: 0.85;
-}
-
-.cover__key[data-state='off'] {
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    var(--line-strong) 3px,
-    var(--line-strong) 4px
-  );
-  border: 1px solid var(--line);
-  opacity: 1;
-}
-
-.cover__key[data-state='unknown'] {
-  background: transparent;
-  border: 1px dotted var(--line-strong);
-  opacity: 1;
-}
-
-/* ============================================================
-   Наблюдения — то, что родители увидели, и когда
-
-   Намеренно НЕЙТРАЛЬНО: ни красного, ни предупреждающей иконки, ни
-   выделенного фона. Цветовая тревога — это оценка, а оценивает здесь врач,
-   и страница не должна подсказывать ему ответ раньше, чем он посмотрит
-   на ребёнка. Визуально это такой же факт, как «сна 14 ч в сутки».
-   ============================================================ */
-
-.obs {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.obs__row + .obs__row {
-  margin-top: 11px;
-  padding-top: 11px;
-  border-top: 1px solid var(--tint);
-}
-
-.obs__line {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.4;
-  color: var(--text-1);
-}
-
-.obs__hint {
-  margin: 3px 0 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Недели жизни — тренд, ради которого врач и открывает страницу
-   ============================================================ */
-
-.weeks__row + .weeks__row {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--tint);
-}
-
-.weeks__head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 7px;
-}
-
-.weeks__name {
-  font-size: 13px;
-  font-weight: 650;
   color: var(--text);
-}
-
-.weeks__span {
-  font-weight: 400;
-  color: var(--text-3);
-}
-
-.weeks__days {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.weeks__grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
-}
-
-.weeks__cell {
-  min-width: 0;
-  padding: 7px 4px 6px;
-  text-align: center;
-  border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-}
-
-.weeks__value {
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.15;
-  color: var(--text);
-}
-
-.weeks__label {
-  margin-top: 2px;
-  font-size: 10.5px;
-  line-height: 1.2;
-  color: var(--text-3);
-}
-
-.weeks__empty {
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-/* Четыре факта в карточке ложатся сеткой 2x2 — на 390 px это единственная
-   раскладка, в которой подписи не рвутся посреди слова. */
-.split {
-  margin-top: 12px;
-}
-
-.substat__value--big {
-  font-size: 30px;
-}
-
-/* ============================================================
-   Десктоп: шире, две колонки в сводке. Телефон остаётся главным.
-   ============================================================ */
-
-@media (min-width: 760px) {
-  body {
-    font-size: 15px;
-  }
-
-  .main {
-    max-width: 960px;
-    padding: 0 20px 60px;
-  }
-
-  .topbar {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
-
-  .segmented {
-    max-width: 320px;
-  }
-
-  .filters {
-    top: calc(var(--safe-top) + 95px);
-    margin: 0 -20px;
-  }
-
-  .chiprow {
-    padding: 0 20px;
-    flex-wrap: wrap;
-  }
-
-  .dayhead {
-    margin-left: -20px;
-    margin-right: -20px;
-    padding-left: 20px;
-    padding-right: 20px;
-  }  .sheet {
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    top: 50%;
-    width: min(560px, calc(100vw - 48px));
-    transform: translate(-50%, -50%);
-    border-radius: 14px;
-    border: 1px solid var(--line-strong);
-    max-height: 86svh;
-    /* На десктопе лист центрируется трансформом — анимация сдвига его бы сломала. */
-    animation-name: fade-in;
-  }
-
-  .stats-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 10px;
-    align-items: start;
-  }
-
-  .stats-grid > .card--wide {
-    grid-column: 1 / -1;
-  }
-}
-
-/* ============================================================
-   Обзор: что сейчас и что было сегодня
-   ============================================================ */
-
-.hero {
-  margin: 12px 0 10px;
-  padding: 18px 16px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--tone, var(--cyan));
-  border-radius: var(--radius);
-}
-
-.hero__state {
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--tone, var(--cyan));
-}
-
-.hero__timer {
-  display: flex;
-  align-items: baseline;
-  gap: 2px;
-  margin-top: 4px;
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.hero__hm {
-  font-size: 46px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-}
-
-.hero__sec {
-  font-size: 20px;
-  color: var(--text-3);
-}
-
-.hero__sub {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.hero__pending {
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid var(--line);
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-/* --- «когда в последний раз» --- */
-
-.lastrow {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.lastcard {
-  min-width: 0;
-  padding: 10px 10px 11px;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-}
-
-.lastcard__label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--tone, var(--text-2));
-}
-
-.lastcard__value {
-  margin-top: 4px;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.lastcard__sub,
-.lastcard__empty {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  font-family: var(--mono);
-}
-
-.lastcard__empty {
-  margin-top: 6px;
-  font-family: var(--sans);
-  line-height: 1.3;
-}
-
-/* --- плитки итогов суток --- */
-
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.tile {
-  min-width: 0;
-  padding: 10px 10px 11px;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-}
-
-.tile__value {
-  font-family: var(--mono);
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.05;
-  letter-spacing: -0.02em;
-  color: var(--tone, var(--text));
-}
-
-.tile__label {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--text-2);
-  line-height: 1.25;
-}
-
-.tile__hint {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.overview__norm {
-  margin-top: 14px;
-}
-
-.overview__norm-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
-.card__note {
-  margin-top: 9px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Полоса суток
-   ============================================================ */
-
-.strip {
-  position: relative;
-  padding-top: 2px;
-
-  /* Размер знака. Держится заодно с MARK_PX в DayStrip.tsx: там по нему
-     считается, какие знаки налезли бы друг на друга и как их развести. */
-  --mark: 8px;
-}
-
-.strip__row {
-  position: relative;
-  width: 100%;
-}
-
-.strip__row--sleep {
-  height: 26px;
-  border-radius: 5px;
-  background: var(--bg-sunken);
-  box-shadow: inset 0 0 0 1px var(--line);
-  overflow: hidden;
-}
-
-.strip__sleep {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  min-width: 2px;
-  background: var(--t-sleep);
-  opacity: 0.75;
-  border-radius: 2px;
-}
-
-.strip__sleep--open {
-  background: linear-gradient(90deg, var(--t-sleep), rgba(162, 115, 255, 0.35));
-}
-
-.strip__now {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--text);
-  opacity: 0.9;
-}
-
-/* Дорожка кормлений жмётся к полосе сна, дорожка подгузников — к оси часов:
-   между ними зазор больше, чем внутри, поэтому это две ленты, а не полосатая
-   рябь из одинаковых чёрточек. */
-.strip__row--marks[data-kind='feed'] {
-  height: var(--mark);
-  margin-top: 4px;
-}
-
-.strip__row--marks[data-kind='diaper'] {
-  height: var(--mark);
-  margin-top: 6px;
-}
-
-/* Все знаки одного размера — и одиночный, и подписанный числом. Разный размер
-   читался бы как разная величина события, а её на полосе нет. */
-.strip__mark {
-  position: absolute;
-  top: 0;
-  width: var(--mark);
-  height: var(--mark);
-  /* Сдвиг влево на половину ставит знак центром на свою позицию. */
-  margin-left: calc(var(--mark) / -2);
-}
-
-/* Кормление — круглое. */
-.strip__row--marks[data-kind='feed'] .strip__mark {
-  background: var(--t-feed);
-  border-radius: 999px;
-}
-
-/* Подгузник — угловатый клин вниз, к оси часов. Клин ещё и легче кружка по
-   «количеству краски»: дорожка подгузников выходит тише кормлений даже в
-   обесцвеченном виде. */
-.strip__row--marks[data-kind='diaper'] .strip__mark {
-  background: var(--t-diaper);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-}
-
-/* Число событий над знаком — только там, где знаки не развести, не соврав про
-   время. Дорожке тогда нужна строчка сверху; правило идёт после отступов по
-   видам и перебивает их. В обычные сутки подписей нет, и полоса прежняя. */
-.strip__row--marks[data-counted='1'] {
-  margin-top: 13px;
-}
-
-.strip__count {
-  position: absolute;
-  bottom: calc(100% + 1px);
-  transform: translateX(-50%);
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.strip__row--marks[data-kind='feed'] .strip__count {
-  color: var(--t-feed);
-}
-
-.strip__row--marks[data-kind='diaper'] .strip__count {
-  color: var(--t-diaper);
-}
-
-.strip__axis {
-  position: relative;
-  height: 14px;
-  margin-top: 3px;
-}
-
-.strip__tick {
-  position: absolute;
-  top: 0;
-  transform: translateX(-50%);
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text-3);
-}
-
-.strip__tick:first-child {
-  transform: none;
-}
-
-.strip__legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.strip__key {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* Ключ легенды повторяет ФОРМУ метки, а не только её цвет: сопоставлять
-   легенду с полосой нужно по силуэту — иначе легенда сама держится на паре
-   близких оттенков и не помогает. */
-.strip__key::before {
-  content: '';
-  flex: none;
-  width: 9px;
-  height: 9px;
-}
-
-.strip__key[data-kind='sleep']::before {
-  width: 12px;
-  height: 7px;
-  border-radius: 2px;
-  background: var(--t-sleep);
-}
-
-.strip__key[data-kind='feed']::before {
-  border-radius: 999px;
-  background: var(--t-feed);
-}
-
-.strip__key[data-kind='diaper']::before {
-  width: 10px;
-  height: 8px;
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-  background: var(--t-diaper);
-}
-
-.strip__hint {
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Столбцы по дням
-   ============================================================ */
-
-.bars {
-  margin-top: 4px;
-}
-
-.bars__plot {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 96px;
-  padding: 0 1px;
-  border-bottom: 1px solid var(--line);
-}
-
-.bars__band {
-  position: absolute;
-  left: 0;
-  right: 0;
-  background: currentColor;
-  opacity: 0.1;
-  border-top: 1px dashed currentColor;
-  border-bottom: 1px dashed currentColor;
-  pointer-events: none;
-}
-
-.bars__line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 0;
-  border-top: 1px dashed currentColor;
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-.bars__col {
-  position: relative;
-  flex: 1;
-  min-width: 3px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  border-radius: 2px 2px 0 0;
-}
-
-.bars__col--today {
-  background: var(--tint);
-}
-
-.bars__fill {
-  width: 100%;
-  min-height: 2px;
-  border-radius: 2px 2px 0 0;
-  opacity: 0.85;
-}
-
-.bars__col--today .bars__fill {
-  opacity: 0.6;
-}
-
-/* Сутки без записей: штриховка во всю высоту. Не столбец нулевой высоты —
-   тот означал бы «ноль», а это совсем другое утверждение. */
-.bars__gap {
-  height: 100%;
-  border-radius: 2px 2px 0 0;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    var(--line-strong) 3px,
-    var(--line-strong) 4px
-  );
-  opacity: 0.7;
-}
-
-/* Записали, а за сутки ни одного: настоящий ноль, и он обязан быть виден. */
-.bars__zero {
-  height: 3px;
-  width: 100%;
-  border-radius: 2px;
-  opacity: 0.9;
-}
-
-.bars__gapnote {
-  margin-top: 7px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--text-3);
-}
-
-.bars__axis {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.bars__bandnote {
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Подгузники: точка на каждый подгузник
-
-   Не столбец: у столбца читается длина, а врачу нужно число. Здесь
-   считать нечего — сколько сменили, столько и знаков. Геометрию
-   (шаг, размер, зазор пятёрок) считает DiaperDots и кладёт инлайном:
-   она зависит от числа суток на экране и от самого плодовитого дня.
-   ============================================================ */
-
-.dots {
-  margin-top: 4px;
-}
-
-.dots__plot {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  padding: 0 1px;
-  border-bottom: 1px solid var(--line);
-}
-
-/* Ориентир — черта в зазоре под шестым знаком, а не оценка. */
-.dots__line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 0;
-  border-top: 1px dashed var(--t-diaper);
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-.dots__col {
-  position: relative;
-  flex: 1;
-  min-width: 3px;
-  height: 100%;
-  border-radius: 2px 2px 0 0;
-}
-
-.dots__col--today {
-  background: var(--tint);
-}
-
-/* Знак подгузника. Размер и место приходят инлайном — здесь только облик. */
-.dots__dot {
-  display: inline-block;
-  flex: none;
-  border-radius: 50%;
-}
-
-.dots__col .dots__dot {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.dots__dot--wet {
-  background: var(--t-diaper);
-}
-
-/* Грязный — квадрат: цвета мало, форма читается и в оттенках серого. */
-.dots__dot--dirty {
-  background: var(--t-measure);
-  border-radius: 2px;
-}
-
-/*
- * И мокрый, и грязный — ОДИН знак на один подгузник, но двух цветов.
- * Низ зелёный, верх оранжевый: знак лежит на стыке кучек, и оба отрезка —
- * зелёный снизу и оранжевый сверху — проходят сквозь него, не разрываясь.
- */
-.dots__dot--both {
-  background: linear-gradient(to top, var(--t-diaper) 50%, var(--t-measure) 50%);
-}
-
-/* Подгузник записан, а мокрый он или грязный — не разобрали. Пустой знак: он
-   занимает своё место в счёте, но ничего не утверждает. */
-.dots__dot--unknown {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--text-3);
-}
-
-/* Сутки без записей: штриховка во всю высоту. Не ноль — «мы не знаем». */
-.dots__hatch {
-  height: 100%;
-  border-radius: 2px 2px 0 0;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    var(--line-strong) 3px,
-    var(--line-strong) 4px
-  );
-  opacity: 0.7;
-}
-
-/* Записали, а за сутки ни одного: настоящий ноль, и он обязан быть виден. */
-.dots__zero {
-  position: absolute;
-  bottom: 0;
-  left: 15%;
-  right: 15%;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--t-diaper);
-  opacity: 0.9;
-}
-
-.dots__axis {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.dots__note {
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.dots__legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.dots__legend li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.dots__legend .dots__dot {
-  width: 9px;
-  height: 9px;
-}
-
-/* Та же поправка на «квадрат кажется крупнее», что и на графике. */
-.dots__legend .dots__dot--dirty {
-  width: 8px;
-  height: 8px;
-}
-
-.dots__gapnote {
-  margin-top: 7px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--text-3);
-}
-
-/* ============================================================
-   Вес
-   ============================================================ */
-
-.weight {
-  display: block;
-  width: 100%;
-  height: 132px;
-  margin-top: 6px;
-  overflow: visible;
-}
-
-.weight__base {
-  font-family: var(--mono);
-  font-size: 8.5px;
-  fill: var(--text-3);
-}
-
-.weight__axis {
-  font-family: var(--mono);
-  font-size: 9px;
-  fill: var(--text-3);
-}
-
-.metric__quiet {
-  color: var(--text-3);
-  font-size: 12px;
-}
-
-.chart-empty {
-  margin-top: 8px;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-3);
+  border: 1px solid var(--line-strong);
 }
 
 /* ============================================================
@@ -1836,41 +1996,36 @@ textarea.input {
    ============================================================ */
 
 .empty {
-  margin: 14px 0;
-  padding: 22px 18px 20px;
-  text-align: center;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.empty--inline {
-  padding: 16px;
+  padding: var(--g5) 0;
   text-align: left;
 }
 
+.empty--inline {
+  padding: var(--g5) 0 0;
+}
+
 .empty__mark {
-  width: 42px;
-  height: 42px;
-  margin: 0 auto 10px;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--g3);
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   font-size: 18px;
-  color: var(--cyan);
-  background: var(--accent-wash);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
+  color: var(--text-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
 }
 
 .empty__title {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: var(--s4);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .empty__text {
-  margin-top: 8px;
-  font-size: 13.5px;
+  margin-top: var(--g2);
+  font-size: var(--s3);
   line-height: 1.5;
   color: var(--text-2);
 }
@@ -1878,326 +2033,8 @@ textarea.input {
 .empty__actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-@media (min-width: 760px) {
-  .hero__hm {
-    font-size: 54px;
-  }
-
-  .lastrow {
-    gap: 10px;
-  }
-
-  .weight {
-    height: 170px;
-  }
-
-  .bars__plot {
-    height: 130px;
-  }
-}
-
-/* ============================================================
-   Журнал: плоская лента, строка = событие
-   ============================================================ */
-
-.jlist {
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.jrow {
-  position: relative;
-}
-
-.jrow + .jrow {
-  border-top: 1px solid var(--tint);
-}
-
-.jrow__head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  min-height: 44px;
-  padding: 9px 10px 9px 12px;
-  text-align: left;
-  transition: background 120ms ease;
-}
-
-.jrow__head:active {
-  background: var(--bg-hover);
-}
-
-.jrow__time {
-  flex: none;
-  width: 42px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-3);
-}
-
-.jrow__icon {
-  flex: none;
-  width: 16px;
-  text-align: center;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--tone, var(--text-3));
-}
-
-.jrow__text {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  line-height: 1.3;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.jrow__text--said {
-  color: var(--text-2);
-  font-style: italic;
-}
-
-/* Пометка «стоит развернуть»: спокойная, но глаз за неё цепляется.
-   Это данные о ребёнке — тревожный цвет здесь неуместен. */
-.jrow--check::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--amber);
-  opacity: 0.75;
-}
-
-.jrow__flag {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--amber);
-  background: var(--warn-bg);
-}
-
-.jrow__chev {
-  flex: none;
-  width: 14px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.jrow--open {
-  background: var(--tint-soft);
-}
-
-.jrow--deleted .jrow__text {
-  text-decoration: line-through;
-  color: var(--text-3);
-}
-
-.jrow--busy {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-/* --- разворот --- */
-
-.jdet {
-  padding: 2px 12px 13px 63px;
-}
-
-.jdet__said {
-  font-size: 14px;
-  line-height: 1.35;
-  color: var(--text-quote);
-}
-
-.jdet__said--none {
-  color: var(--text-3);
-  font-style: italic;
-}
-
-.jdet__warn {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--amber);
-}
-
-.jdet__note {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-2);
-}
-
-.jdet__line {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-3);
-}
-
-.jdet__meta {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 3px 10px;
-  margin-top: 9px;
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-
-.jdet__meta dd {
-  margin: 0;
-  text-align: right;
-  color: var(--text-2);
-  font-family: var(--mono);
-}
-
-.jdet__touched {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 42px;
-  margin-top: 8px;
-  padding: 8px 11px;
-  text-align: left;
-  border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  font-size: 13.5px;
-  color: var(--text);
-}
-
-.jdet__touched-open {
-  margin-left: auto;
-  flex: none;
-  font-size: 12.5px;
-  color: var(--cyan);
-}
-
-.jdet__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.jbtn {
-  min-height: 40px;
-  padding: 0 14px;
-  border-radius: 9px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-2);
-  background: var(--bg-input);
-  border: 1px solid var(--line);
-}
-
-.jbtn--accent {
-  color: var(--cyan);
-  border-color: var(--accent-line);
-}
-
-.jbtn[disabled] {
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-@media (max-width: 374px) {
-  .jrow__head {
-    gap: 7px;
-    padding-left: 10px;
-  }
-
-  .jrow__time {
-    width: 38px;
-    font-size: 12px;
-  }
-
-  .jrow__text {
-    font-size: 13.5px;
-  }
-
-  .jdet {
-    padding-left: 57px;
-  }
-}
-
-/* ============================================================
-   Офлайн-полоска
-   ============================================================ */
-
-.offline {
-  position: sticky;
-  top: calc(var(--safe-top) + var(--chrome, 106px));
-  z-index: 25;
-  margin: 0;
-  padding: 7px 12px;
-  font-size: 12.5px;
-  text-align: center;
-  color: var(--warn-text);
-  background: var(--warn-bg);
-  border-bottom: 1px solid var(--warn-line);
-}
-
-/* ============================================================
-   Узкие телефоны (360 и уже): крупные числа не должны переноситься
-   ============================================================ */
-
-@media (max-width: 374px) {
-  .hero__hm {
-    font-size: 40px;
-  }
-
-  .metric__value {
-    font-size: 28px;
-  }
-
-  .tile__value {
-    font-size: 20px;
-    white-space: nowrap;
-  }
-
-  .tile__label,
-  .lastcard__label {
-    font-size: 11px;
-  }
-
-  .lastcard__value {
-    font-size: 13px;
-  }
-
-  .lastcard__sub {
-    font-size: 11px;
-  }
-
-  .substat__value {
-    font-size: 19px;
-    white-space: nowrap;
-  }
-
-  .segmented__item {
-    font-size: 13px;
-  }
+  gap: var(--g2);
+  margin-top: var(--g4);
 }
 
 /* ============================================================
@@ -2206,32 +2043,22 @@ textarea.input {
    Поле ввода кода — самое крупное, что есть на экране, и это не
    украшение: набранное сверяют с экраном телевизора, стоя посреди
    комнаты с телефоном в руке. Всё остальное здесь подпись к нему.
-
-   Раньше на этом месте крупно показывался сам код заявки, рядом с
-   кнопкой «Одобрить». Теперь код не показывается вовсе — его набирают,
-   глядя на экран устройства, и только это доказывает, что одобряющий
-   устройство видел.
    ============================================================ */
 
 .devsec {
-  margin: 16px 0 22px;
+  margin: var(--g5) 0 var(--g6);
 }
 
 .devsec__title {
-  margin: 0 0 8px;
-  font-size: 11.5px;
+  margin: 0 0 var(--g3);
+  font-size: var(--s2);
   font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .devcard {
-  margin-bottom: 10px;
-  padding: 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  padding: var(--g4) 0;
+  border-top: 1px solid var(--line);
 }
 
 .devrow__icon {
@@ -2239,19 +2066,18 @@ textarea.input {
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--tint);
-  color: var(--cyan);
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
-/* Поле ввода кода — самое крупное на экране, и по той же причине, по какой
-   раньше крупным был показанный код: его сверяют с экраном телевизора, стоя
-   посреди комнаты с телефоном в руке. Моноширинный шрифт и разрядка нужны,
-   чтобы при сверке не сбиться на восьми одинаково узких буквах. */
+/* Моноширинный шрифт и разрядка нужны, чтобы при сверке не сбиться
+   на восьми одинаково узких буквах. Это один из двух случаев, где
+   моноширинный оправдан: важна форма знака, а не число. */
 .devcode-input {
-  min-height: 58px;
+  min-height: 60px;
   margin-top: 2px;
   font-family: var(--mono);
   font-size: clamp(22px, 8vw, 30px);
@@ -2259,7 +2085,7 @@ textarea.input {
   letter-spacing: 0.14em;
   text-align: center;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--text);
 }
 
 .devcode-input::placeholder {
@@ -2272,15 +2098,14 @@ textarea.input {
 
 .devcard__submit {
   width: 100%;
-  margin-top: 10px;
+  margin-top: var(--g3);
 }
-
 
 .devrow {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 11px 12px;
+  gap: var(--g3);
+  padding: var(--g3) 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -2298,56 +2123,160 @@ textarea.input {
   align-items: center;
   gap: 7px;
   flex-wrap: wrap;
-  font-size: 14.5px;
+  font-size: var(--s3);
   font-weight: 600;
   color: var(--text);
 }
 
 .devrow__badge {
-  padding: 1px 7px;
+  padding: 1px 8px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--s1);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--cyan);
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-line);
+  color: var(--text-2);
+  border: 1px solid var(--line-strong);
 }
 
 .devrow__meta {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--s2);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Подтверждение отзыва встаёт на место кнопки: отозвать не тот телефон
-   легко, а обратно уже не вернёшь — устройство придётся подключать заново. */
+/* Подтверждение отзыва встаёт на место кнопки: отозвать не тот
+   телефон легко, а обратно уже не вернёшь. */
 .devrow__confirm {
   display: flex;
   flex: none;
   gap: 6px;
 }
 
-.btn--sm {
-  min-height: 36px;
-  padding: 0 11px;
-  font-size: 13px;
-  flex: none;
+/* ============================================================
+   Узкие телефоны (360 и уже): крупные числа не должны переноситься
+   ============================================================ */
+
+@media (max-width: 374px) {
+  :root {
+    --s8: 46px;
+    --s7: 32px;
+    --s6: 24px;
+  }
+
+  .main,
+  .topbar {
+    padding-left: var(--g3);
+    padding-right: var(--g3);
+  }
+
+  .lastcard__label {
+    width: 88px;
+  }
+
+  .lastcard__value,
+  .lastcard__sub {
+    font-size: var(--s2);
+  }
+
+  .jrow__time {
+    width: 38px;
+  }
+
+  .jdet {
+    padding-left: 62px;
+  }
+
+  .segmented {
+    gap: var(--g4);
+  }
 }
 
-@media (max-width: 380px) {
-  .devrow {
+/* ============================================================
+   Десктоп: шире, две колонки в сводке. Телефон остаётся главным.
+   ============================================================ */
+
+@media (min-width: 760px) {
+  :root {
+    --s8: 72px;
+  }
+
+  .main {
+    max-width: 960px;
+    padding: 0 var(--g5) var(--g7);
+  }
+
+  .topbar {
+    padding-left: var(--g5);
+    padding-right: var(--g5);
+  }
+
+  .segmented {
+    max-width: 380px;
+  }
+
+  .filters {
+    margin: 0 calc(var(--g5) * -1);
+  }
+
+  .chiprow {
+    padding: 0 var(--g5);
     flex-wrap: wrap;
   }
 
-  .devrow__confirm {
-    width: 100%;
+  .dayhead {
+    margin-left: calc(var(--g5) * -1);
+    margin-right: calc(var(--g5) * -1);
+    padding-left: var(--g5);
+    padding-right: var(--g5);
   }
 
-  .devrow__confirm .btn {
-    flex: 1;
+  .jrow--check::before {
+    left: calc(var(--g5) * -1);
+  }
+
+  .offline {
+    margin: 0 calc(var(--g5) * -1);
+  }
+
+  .sheet {
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    top: 50%;
+    width: min(560px, calc(100vw - 48px));
+    transform: translate(-50%, -50%);
+    border-radius: 14px;
+    border: 1px solid var(--line-strong);
+    max-height: 86svh;
+    /* На десктопе лист центрируется трансформом — анимация сдвига
+       его бы сломала. */
+    animation-name: fade-in;
+  }
+
+  .weight {
+    height: 180px;
+  }
+
+  .bars__plot,
+  .dots__plot {
+    height: 130px;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 var(--g5);
+    align-items: start;
+  }
+
+  .stats-grid > .card--wide {
+    grid-column: 1 / -1;
+  }
+
+  /* В две колонки разделы стоят рядом, и общая линейка сверху у
+     каждого из них честнее, чем разделительная линия между ними. */
+  .stats-grid > .card + .card {
+    margin-top: 0;
   }
 }

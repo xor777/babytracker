@@ -27,7 +27,7 @@ export function CoverageStrip({ coverage: c, truncated, unknownAll }: Props) {
   const { recorded, blank, unknown, total } = c;
 
   return (
-    <section className="card card--wide cover">
+    <section className="card card--wide">
       <div className="card__head">
         <h2 className="card__title">Полнота дневника</h2>
         <span className="card__aside">

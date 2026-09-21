@@ -5,9 +5,9 @@
  *
  *   node tools/make-icons.mjs
  *
- * Мотив взят у иконки навыка Алисы (docs/assets/alice-icon-224.png): тёмный фон,
- * циановый полумесяц, две звёздочки, дуга-колыбель снизу. Это один продукт,
- * и на домашнем экране он должен узнаваться.
+ * Мотив — цветик-семицветик на белом: то же самое, что висит в шапке
+ * приложения. Приложение чёрно-белое, и цветок в нём — единственное место,
+ * где цветов больше одного; на домашнем экране он и опознаётся.
  *
  * Рисуем в единичном квадрате [0..1] с суперсэмплингом — так одна геометрия
  * даёт любой размер без отдельных исходников.
@@ -70,11 +70,28 @@ function encodePng(w, h, rgba) {
 
 // ------------------------------------------------------------------ рисунок
 
-const BG = [0x05, 0x09, 0x0c];
-const CYAN = [0x3f, 0xe9, 0xff];
-const CYAN_SOFT = [0x8f, 0xf3, 0xff];
+const BG = [0xff, 0xff, 0xff];
+const CORE = [0xff, 0xff, 0xff];
 
-const dist = (x, y, cx, cy) => Math.hypot(x - cx, y - cy);
+/**
+ * Семь лепестков, семь цветов — те же, что в шапке приложения.
+ * Порядок по кругу подобран так, чтобы рядом не стояли два соседа по спектру.
+ */
+const PETALS = [
+  [0xf5, 0xc4, 0x00], // жёлтый
+  [0xe8, 0x40, 0x2a], // красный
+  [0x2f, 0x6f, 0xd0], // синий
+  [0x2f, 0x9e, 0x5b], // зелёный
+  [0xf2, 0x82, 0x0c], // оранжевый
+  [0x8a, 0x4f, 0xc4], // фиолетовый
+  [0x49, 0xbd, 0xe0], // голубой
+];
+
+/** Геометрия цветка в долях холста: вынос лепестка от центра и его полуоси. */
+const OFFSET = 0.198; // центр лепестка от центра холста
+const ALONG = 0.152; // полуось вдоль луча
+const ACROSS = 0.094; // полуось поперёк
+const CORE_R = 0.076; // белая сердцевина
 
 /** Наложить цвет с альфой на аккумулятор. */
 function over(acc, color, a) {
@@ -88,54 +105,42 @@ function over(acc, color, a) {
 /**
  * Цвет одной точки. s — масштаб рисунка относительно холста (для maskable
  * рисунок ужимается в безопасную зону, фон остаётся во весь квадрат).
+ * e — ширина сглаживания края в долях холста: зависит от размера картинки,
+ * иначе на 512 край выходит ватным, а на 32 — рваным.
  */
-function sample(x, y, s) {
+function sample(x, y, s, e) {
   // перевод в координаты рисунка
-  const px = 0.5 + (x - 0.5) / s;
-  const py = 0.5 + (y - 0.5) / s;
+  const dx = (x - 0.5) / s;
+  const dy = (y - 0.5) / s;
 
   const acc = [BG[0], BG[1], BG[2]];
 
-  const moonC = [0.455, 0.5];
-  const moonR = 0.3;
-  const cutC = [0.575, 0.415];
-  const cutR = 0.275;
+  for (let k = 0; k < PETALS.length; k++) {
+    const phi = (k * 2 * Math.PI) / PETALS.length;
+    const sin = Math.sin(phi);
+    const cos = Math.cos(phi);
 
-  // мягкое свечение вокруг полумесяца
-  const dm = dist(px, py, moonC[0], moonC[1]);
-  const glow = Math.exp(-(((dm - moonR * 0.92) / 0.085) ** 2));
-  over(acc, CYAN, glow * 0.3);
+    // луч лепестка смотрит вверх и поворачивается на phi (y растёт вниз)
+    const vx = dx - OFFSET * sin;
+    const vy = dy + OFFSET * cos;
+    const along = vx * sin - vy * cos;
+    const across = vx * cos + vy * sin;
 
-  // дуга-колыбель снизу
-  const dc = dist(px, py, 0.5, 0.5);
-  const ang = Math.atan2(py - 0.5, px - 0.5); // y вниз: (0..π) — низ
-  if (ang > 0.2 && ang < Math.PI - 0.2) {
-    const band = 1 - Math.min(1, Math.abs(dc - 0.405) / 0.014);
-    over(acc, CYAN, Math.max(0, band));
+    // f = 1 на границе эллипса; градиент по f переводим в доли холста
+    const f = Math.hypot(along / ALONG, across / ACROSS);
+    over(acc, PETALS[k], Math.min(1, Math.max(0, (1 - f) / (e / ACROSS))));
   }
 
-  // сам полумесяц
-  const inMoon = moonR - dm;
-  const outCut = dist(px, py, cutC[0], cutC[1]) - cutR;
-  const edge = 0.004;
-  const aMoon = Math.min(1, Math.max(0, inMoon / edge)) * Math.min(1, Math.max(0, outCut / edge));
-  over(acc, CYAN, aMoon);
-
-  // звёздочки: четырёхлучевая «астроида»
-  for (const [sx, sy, sr, tone] of [
-    [0.735, 0.295, 0.062, CYAN_SOFT],
-    [0.815, 0.425, 0.034, CYAN],
-  ]) {
-    const ux = Math.abs(px - sx) / sr;
-    const uy = Math.abs(py - sy) / sr;
-    const v = Math.sqrt(ux) + Math.sqrt(uy);
-    over(acc, tone, Math.min(1, Math.max(0, (1.25 - v) / 0.18)));
-  }
+  // сердцевина: лепестки сходятся в центре, и без неё там каша
+  const dc = Math.hypot(dx, dy);
+  over(acc, CORE, Math.min(1, Math.max(0, (CORE_R - dc) / e)));
 
   return acc;
 }
 
 function render(size, { scale = 1, ss = 3 } = {}) {
+  // край шириной примерно в полтора пикселя холста
+  const edge = 1.5 / size;
   const out = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -144,7 +149,12 @@ function render(size, { scale = 1, ss = 3 } = {}) {
       let b = 0;
       for (let sy = 0; sy < ss; sy++) {
         for (let sx = 0; sx < ss; sx++) {
-          const c = sample((x + (sx + 0.5) / ss) / size, (y + (sy + 0.5) / ss) / size, scale);
+          const c = sample(
+            (x + (sx + 0.5) / ss) / size,
+            (y + (sy + 0.5) / ss) / size,
+            scale,
+            edge,
+          );
           r += c[0];
           g += c[1];
           b += c[2];
@@ -164,11 +174,14 @@ function render(size, { scale = 1, ss = 3 } = {}) {
 const JOBS = [
   ['icon-192.png', 192, 1],
   ['icon-512.png', 512, 1],
-  // maskable: система обрежет углы, поэтому рисунок ужимаем в безопасную зону
-  ['icon-maskable-192.png', 192, 0.72],
-  ['icon-maskable-512.png', 512, 0.72],
+  // maskable: система обрежет углы. Цветок и так занимает 70 % холста —
+  // это внутри безопасного круга (80 %), ужимать его нечего, наоборот,
+  // при 0.72 на экране оставалось бы бледное пятнышко посреди белого.
+  ['icon-maskable-192.png', 192, 1.05],
+  ['icon-maskable-512.png', 512, 1.05],
   ['apple-touch-icon.png', 180, 1],
-  ['favicon-32.png', 32, 1],
+  // на 32 px семь лепестков сливаются с краем — рисунок чуть крупнее
+  ['favicon-32.png', 32, 1.12],
 ];
 
 fs.mkdirSync(OUT, { recursive: true });

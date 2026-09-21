@@ -9,8 +9,8 @@
   "start_url": "/dash/#/overview",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#070b0e",
-  "theme_color": "#070b0e",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "categories": [
     "health",
     "lifestyle"

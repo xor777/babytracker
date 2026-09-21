@@ -47,18 +47,20 @@ export function NormMeter({ value, norm, partial, tone }: Props) {
         role="img"
         aria-label={`${value}, ${label}. ${status ?? 'сутки ещё идут'}`}
       >
-        <rect x="0" y="10" width="300" height="6" rx="3" fill="rgba(122,190,212,0.12)" />
+        <rect x="0" y="10" width="300" height="6" fill="var(--bg-sunken)" />
         <rect
           x={bandFrom}
           y="10"
           width={Math.max(2, bandTo - bandFrom)}
           height="6"
           fill={tone}
-          opacity="0.28"
+          opacity="0.22"
         />
-        <rect x="0" y="10" width={valueX} height="6" rx="3" fill={tone} opacity="0.75" />
-        <rect x={Math.max(0, valueX - 1)} y="4" width="2.5" height="18" fill="#dbeaf0" />
-        <rect x={Math.max(0, bandFrom - 0.5)} y="6" width="1" height="14" fill={tone} opacity="0.7" />
+        <rect x="0" y="10" width={valueX} height="6" fill={tone} opacity="0.8" />
+        {/* Риска набранного — чернильная: это «сколько сейчас», а «сейчас»
+            в этом приложении отмечено формой, а не цветом. */}
+        <rect x={Math.max(0, valueX - 1)} y="4" width="2.5" height="18" fill="var(--now)" />
+        <rect x={Math.max(0, bandFrom - 0.5)} y="6" width="1" height="14" fill={tone} opacity="0.75" />
         {max != null ? (
           <rect
             x={Math.min(299, bandTo - 0.5)}

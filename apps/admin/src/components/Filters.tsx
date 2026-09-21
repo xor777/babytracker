@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import type { HistoryFilters } from '../hooks/useHistory';
 import { TYPES } from '../lib/taxonomy';
 import { plural } from '../lib/format';
@@ -49,7 +48,6 @@ export function Filters({ value, onChange, total, phrases, deletedCount }: Props
           className="chip"
           aria-pressed={value.showDeleted}
           onClick={() => onChange({ ...value, showDeleted: !value.showDeleted })}
-          style={{ '--chip-on': 'var(--text-2)' } as CSSProperties}
         >
           Удалённые{deletedCount > 0 && !value.showDeleted ? ` · ${deletedCount}` : ''}
         </button>
@@ -71,7 +69,6 @@ export function Filters({ value, onChange, total, phrases, deletedCount }: Props
             className="chip"
             aria-pressed={value.types.includes(t.id)}
             onClick={() => toggleType(t.id)}
-            style={{ '--chip-on': `var(--t-${t.tone})` } as CSSProperties}
           >
             <span className="chip__dot" aria-hidden="true" />
             {t.short}

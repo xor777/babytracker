@@ -10,6 +10,7 @@ import { OverviewScreen } from './components/OverviewScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { StatsScreen } from './components/StatsScreen';
 import { DevicesScreen } from './components/DevicesScreen';
+import { Flower } from './components/Flower';
 import { useDevices } from './hooks/useDevices';
 import { plural } from './lib/format';
 
@@ -113,6 +114,7 @@ export function App() {
       <header className="topbar">
         <div className="topbar__row">
           <div className="brand">
+            <Flower />
             <span className="brand__name">{child?.name ?? 'ANDREYTRACKER'}</span>
             {child ? (
               <span className="brand__age">

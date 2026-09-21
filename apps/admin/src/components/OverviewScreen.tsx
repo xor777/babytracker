@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import { useOverview } from '../hooks/useOverview';
 import {
   MINUTE,
@@ -15,25 +14,26 @@ import type { TrackerEvent } from '../types';
 
 interface LastCardProps {
   label: string;
-  tone: string;
   event: TrackerEvent | null;
   now: number;
   /** Сон показываем иначе: он может идти прямо сейчас. */
   ongoing?: boolean;
 }
 
-function LastCard({ label, tone, event, now, ongoing }: LastCardProps) {
+function LastCard({ label, event, now, ongoing }: LastCardProps) {
   const at = parseTs(event?.started_at);
   const mins = at != null ? Math.max(0, Math.round((now - at) / MINUTE)) : null;
   // Только что записанное — «только что», а не «0 мин назад»: ноль минут
   // не длительность, а её отсутствие (так же читает это и экран в детской).
   const justNow = mins != null && mins < 1;
-  // Три карточки в ряд на 390 px — это ~110 px на каждую. Всё, что длиннее
-  // «2 ч 7 мин», рассыпается на три строки, поэтому «назад» уехало в подпись.
-  const ago = mins == null ? null : justNow ? 'только что' : formatMinutes(mins);
+  // Строка во всю ширину, а не карточка в треть экрана: раньше на каждую
+  // приходилось ~110 px, и «назад · 19:00» в них переносилось пополам.
+  // Теперь «назад» стоит при своём числе, а время выстроено в столбец справа.
+  const ago =
+    mins == null ? null : justNow ? 'только что' : `${formatMinutes(mins)} назад`;
 
   return (
-    <div className="lastcard" style={{ '--tone': tone } as CSSProperties}>
+    <div className="lastcard" data-ongoing={ongoing ? 'yes' : undefined}>
       <div className="lastcard__label">{label}</div>
       {at == null ? (
         <div className="lastcard__empty">ещё не записывали</div>
@@ -45,9 +45,7 @@ function LastCard({ label, tone, event, now, ongoing }: LastCardProps) {
       ) : (
         <>
           <div className="lastcard__value">{ago}</div>
-          <div className="lastcard__sub">
-            {justNow ? formatTime(at) : `назад · ${formatTime(at)}`}
-          </div>
+          <div className="lastcard__sub">{formatTime(at)}</div>
         </>
       )}
     </div>
@@ -92,14 +90,28 @@ export function OverviewScreen() {
     o.timeline.diapers.length === 0;
   const nothingAtAll = o.events.length === 0;
 
-  // Пока состояния нет — нейтральный акцент: янтарный читался бы как предупреждение,
-  // а «записей ещё не было» у двухнедельного ребёнка это норма, а не проблема.
-  const tone = sinceMs == null ? 'var(--cyan)' : asleep ? 'var(--t-sleep)' : 'var(--amber)';
+  const sessions = o.today?.sleep.sessions ?? 0;
+  const tileNotes: string[] = [];
+  if (diaperCount > 0) {
+    tileNotes.push(
+      `подгузники: ${wet} ${plural(wet, 'мокрый', 'мокрых', 'мокрых')}, ` +
+        `${dirty} ${plural(dirty, 'грязный', 'грязных', 'грязных')}`,
+    );
+  }
+  if (sessions > 0) {
+    tileNotes.push(
+      `сон: ${sessions} ${plural(sessions, 'отрезок', 'отрезка', 'отрезков')}`,
+    );
+  }
 
   return (
     <>
-      {/* --- что происходит прямо сейчас --- */}
-      <section className="hero" style={{ '--tone': tone } as CSSProperties}>
+      {/* --- что происходит прямо сейчас ---
+          Цвета здесь нет намеренно: он работает в графиках и называет там тип
+          записи. «Сейчас» отмечено формой — чернильной точкой и жирной строкой
+          у идущего сна. Янтарный, который был раньше, к тому же читался как
+          предупреждение, а бодрствование — не происшествие. */}
+      <section className="hero">
         {sinceMs == null ? (
           <>
             <div className="hero__state">Пока тихо</div>
@@ -135,15 +147,9 @@ export function OverviewScreen() {
 
       {/* --- когда в последний раз --- */}
       <div className="lastrow">
-        <LastCard label="Кормление" tone="var(--t-feed)" event={o.last.feed} now={o.now} />
-        <LastCard label="Подгузник" tone="var(--t-diaper)" event={o.last.diaper} now={o.now} />
-        <LastCard
-          label="Сон"
-          tone="var(--t-sleep)"
-          event={o.last.sleep}
-          now={o.now}
-          ongoing={asleep}
-        />
+        <LastCard label="Кормление" event={o.last.feed} now={o.now} />
+        <LastCard label="Подгузник" event={o.last.diaper} now={o.now} />
+        <LastCard label="Сон" event={o.last.sleep} now={o.now} ongoing={asleep} />
       </div>
 
       {/* --- ритм суток --- */}
@@ -179,34 +185,31 @@ export function OverviewScreen() {
           </div>
 
           <div className="tiles">
-            <div className="tile" style={{ '--tone': 'var(--t-feed)' } as CSSProperties}>
+            <div className="tile">
               <div className="tile__value">{feedCount}</div>
               <div className="tile__label">
                 {plural(feedCount, 'кормление', 'кормления', 'кормлений')}
               </div>
             </div>
-            <div className="tile" style={{ '--tone': 'var(--t-diaper)' } as CSSProperties}>
+            <div className="tile">
               <div className="tile__value">{diaperCount}</div>
               <div className="tile__label">
                 {plural(diaperCount, 'подгузник', 'подгузника', 'подгузников')}
               </div>
-              {diaperCount > 0 ? (
-                <div className="tile__hint">
-                  {wet} мокрых · {dirty} грязных
-                </div>
-              ) : null}
             </div>
-            <div className="tile" style={{ '--tone': 'var(--t-sleep)' } as CSSProperties}>
+            <div className="tile">
               <div className="tile__value">{formatHours(sleepMin)}</div>
               <div className="tile__label">сна</div>
-              {o.today?.sleep.sessions ? (
-                <div className="tile__hint">
-                  {o.today.sleep.sessions}{' '}
-                  {plural(o.today.sleep.sessions, 'отрезок', 'отрезка', 'отрезков')}
-                </div>
-              ) : null}
             </div>
           </div>
+
+          {/* Уточнения вынесены из плиток в одну строку под ними: в колонке
+              шириной в треть экрана «3 мокрых · 0 грязных» переносилось и
+              тянуло вверх высоту всего ряда. Заодно ушла и неправильная
+              форма: «1 мокрых» вместо «1 мокрый». */}
+          {tileNotes.length > 0 ? (
+            <p className="tiles__note">{tileNotes.join(' · ')}</p>
+          ) : null}
 
           {/* Ориентиры показываем спокойно и только там, где сервер их прислал.
               За неполные сутки вердикт не выносится — об этом сказано выше. */}

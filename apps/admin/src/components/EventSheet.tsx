@@ -147,7 +147,6 @@ export function EventSheet({ event, busy, onClose, onSave, onDelete, onRestore }
                   className="chip"
                   aria-pressed={draft.type === t.id}
                   onClick={() => pickType(t.id)}
-                  style={{ '--chip-on': `var(--t-${t.tone})` } as CSSProperties}
                 >
                   <span className="chip__dot" aria-hidden="true" />
                   {t.label}
@@ -167,7 +166,7 @@ export function EventSheet({ event, busy, onClose, onSave, onDelete, onRestore }
               />
             </label>
           ) : def.subtypes.length ? (
-            <div className="field" style={{ '--chip-on': `var(--t-${def.tone})` } as CSSProperties}>
+            <div className="field">
               <span className="field__label">Подтип</span>
               <div className="chipgrid">
                 <button

@@ -184,17 +184,16 @@ export function StatsScreen() {
             <>
               <div className="metric">
                 <span className="metric__value">{formatWeight(w.last.value)}</span>
-                <span className="metric__unit">
-                  {formatDay(w.last.at)}
-                  <br />
-                  <span className="metric__quiet">
-                    при рождении {formatWeight(w.birth.value)} ·{' '}
-                    {formatSignedGrams(w.fromBirthG)} от неё
-                  </span>
-                </span>
+                <span className="metric__unit">{formatDay(w.last.at)}</span>
               </div>
+              {/* Отдельной строкой во всю ширину, а не в остатке рядом с числом:
+                  там «+159 г от неё» рвалось так, что «неё» оставалось одно. */}
+              <p className="metric__note">
+                при рождении {formatWeight(w.birth.value)} · {formatSignedGrams(w.fromBirthG)}{' '}
+                от неё
+              </p>
 
-              <div className="split split--4">
+              <div className="split">
                 <Fact
                   label="наименьшее взвешивание"
                   value={w.nadir ? formatWeight(w.nadir.point.value) : '—'}
@@ -266,7 +265,7 @@ export function StatsScreen() {
                 kind="о кормлении"
                 gapNote
               />
-              <div className="split split--4">
+              <div className="split">
                 <Fact
                   label="грудь"
                   value={formatPerDay(avg.breast?.value ?? null)}
@@ -371,12 +370,9 @@ export function StatsScreen() {
             <>
               <div className="metric">
                 <span className="metric__value">{formatMinutes(avg.sleep.value)}</span>
-                <span className="metric__unit">
-                  в сутки
-                  <br />
-                  <span className="metric__quiet">{denom(avg.sleep)}</span>
-                </span>
+                <span className="metric__unit">в сутки</span>
               </div>
+              <p className="metric__note">{denom(avg.sleep)}</p>
               <DayBars
                 days={dayBars(cells, pick.sleep)}
                 tone="var(--t-sleep)"
@@ -702,13 +698,14 @@ function Cell({ label, value }: { label: string; value: ReactNode }) {
 function Lead({ value, unit, empty }: { value: Avg | null; unit: string; empty: string }) {
   if (!value) return <p className="chart-empty">{empty}</p>;
   return (
-    <div className="metric">
-      <span className="metric__value">{formatPerDay(value.value)}</span>
-      <span className="metric__unit">
-        {unit}
-        <br />
-        <span className="metric__quiet">{denom(value)}</span>
-      </span>
-    </div>
+    <>
+      <div className="metric">
+        <span className="metric__value">{formatPerDay(value.value)}</span>
+        <span className="metric__unit">{unit}</span>
+      </div>
+      {/* Знаменатель — отдельной строкой во всю ширину: в колонке рядом
+          с числом «по записям за 10 суток» переносилось посреди фразы. */}
+      <p className="metric__note">{denom(value)}</p>
+    </>
   );
 }
