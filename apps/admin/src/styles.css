@@ -723,8 +723,12 @@ button {
 
 .lastcard {
   display: flex;
+  /* При очень крупном шрифте три куска в строку не встают — тогда время
+     съезжает на вторую строку, прижатое вправо, а не ломает «2 ч 40 мин»
+     посреди числа. */
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--g3);
+  gap: var(--g1) var(--g3);
   min-height: 44px;
   padding: 13px 0;
   border-bottom: 1px solid var(--line);
@@ -732,7 +736,7 @@ button {
 
 .lastcard__label {
   flex: none;
-  width: 104px;
+  width: max(104px, 6em);
   font-size: var(--s3);
   color: var(--text);
 }
@@ -767,14 +771,14 @@ button {
 /* --- итоги суток --- */
 
 .tiles {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(96px, 5.4em), 1fr));
   gap: var(--g3);
 }
 
 /* Плитка без коробки: только линейка сверху. Три вложенные рамки
    (страница → карточка → плитка) и создавали основной шум. */
 .tile {
-  flex: 1;
   min-width: 0;
   padding-top: var(--g3);
   border-top: 2px solid var(--line-strong);
@@ -935,6 +939,12 @@ button {
 
 .strip__tick:first-child {
   transform: none;
+}
+
+/* Последняя метка «00» стоит на самом краю: без сдвига половина её
+   уходила за пределы полосы. */
+.strip__tick:last-child {
+  transform: translateX(-100%);
 }
 
 .strip__legend {
@@ -1401,12 +1411,22 @@ button {
 }
 
 .weeks__grid {
-  display: flex;
+  /* Ячеек пять, и в один ряд они не встают: на 390 px это по 62 px,
+     где «кормлений» рвётся на «кормлен/ий». Сетка сама решает, сколько
+     колонок влезло.
+
+     Нижняя граница колонки задана и в пикселях, и в em. em здесь не
+     украшение: системное увеличение шрифта в Android умножает кегль,
+     но НЕ пиксельные ширины — поэтому колонка, заданная только в px,
+     остаётся прежней, а текст в ней перестаёт помещаться. С `max()`
+     колонка растёт вместе с буквами, и сетка сама роняет ряд с трёх
+     колонок до двух, когда трёх уже мало. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(88px, 5.2em), 1fr));
   gap: var(--g3);
 }
 
 .weeks__cell {
-  flex: 1;
   min-width: 0;
   padding-top: var(--g2);
   border-top: 1px solid var(--line-strong);
@@ -1504,9 +1524,11 @@ button {
   background: var(--bg-hover);
 }
 
+/* Ширина в em, а не в пикселях: при системном увеличении шрифта «11:03»
+   в колонке на 42 px разваливалось на «11:0» и «3» — и так в каждой строке. */
 .jrow__time {
   flex: none;
-  width: 42px;
+  width: 3.4em;
   padding-top: 2px;
   font-size: var(--s2);
   font-variant-numeric: tabular-nums;
@@ -1517,7 +1539,7 @@ button {
    строки превращал ленту в рябь из разноцветных точек. */
 .jrow__icon {
   flex: none;
-  width: 16px;
+  width: 1.15em;
   text-align: center;
   font-size: var(--s2);
   line-height: 1.45;
@@ -1570,7 +1592,7 @@ button {
 
 .jrow__chev {
   flex: none;
-  width: 14px;
+  width: 1.1em;
   padding-top: 2px;
   text-align: center;
   font-size: var(--s1);
@@ -1593,8 +1615,12 @@ button {
 
 /* --- разворот --- */
 
+/* Отступ повторяет ширину колонки времени и знака вместе с зазорами,
+   чтобы разворот начинался ровно под текстом строки. Кегль задан здесь
+   только ради основания для em — у всех детей разворота свой. */
 .jdet {
-  padding: 0 0 14px 70px;
+  font-size: var(--s2);
+  padding: 0 0 14px calc(3.4em + 1.15em + var(--g3) * 2);
 }
 
 .jdet__said {
@@ -2180,11 +2206,11 @@ textarea.input {
   }
 
   .jrow__time {
-    width: 38px;
+    width: 3.1em;
   }
 
   .jdet {
-    padding-left: 62px;
+    padding-left: calc(3.1em + 1.15em + var(--g3) * 2);
   }
 
   .segmented {
