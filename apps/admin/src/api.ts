@@ -438,6 +438,58 @@ export async function revokeDevice(id: string): Promise<void> {
   await request(`/api/devices/${encodeURIComponent(id)}/revoke`, { method: 'POST' });
 }
 
+/* ------------------------------------------------------------------
+ * Голоса Алисы (§3.1): чьи обращения к навыку записываются в дневник.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Аккаунт Яндекса или устройство без входа в аккаунт, с которого говорили
+ * с навыком. Сервер запоминает и незнакомых — со статусом `pending`.
+ */
+export interface AliceIdentity {
+  id: number;
+  kind: 'account' | 'device';
+  status: 'trusted' | 'pending';
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /** tofu — первый владелец, enroll — подключён кнопкой, promoted — аккаунт с доверенной колонки. */
+  source: string;
+}
+
+export interface AliceIdentitiesResponse {
+  identities: AliceIdentity[];
+  /** Окно подключения открыто до этого момента; null — закрыто. */
+  enrollOpenUntil: string | null;
+  /** false — сервер пускает всех (ALICE_IDENTITY_CHECK=false), подключать некого. */
+  identityCheck: boolean;
+}
+
+export async function fetchAliceIdentities(signal?: AbortSignal): Promise<AliceIdentitiesResponse> {
+  const payload = await request<any>('/api/alice/identities', { signal });
+  return {
+    identities: Array.isArray(payload?.identities) ? payload.identities : [],
+    enrollOpenUntil: typeof payload?.enrollOpenUntil === 'string' ? payload.enrollOpenUntil : null,
+    identityCheck: payload?.identityCheck !== false,
+  };
+}
+
+/**
+ * Открыть окно подключения: первый незнакомый аккаунт, который заговорит
+ * с навыком, станет доверенным, и окно закроется само.
+ */
+export async function openAliceEnroll(minutes = 10): Promise<void> {
+  await request('/api/alice/enroll', { method: 'POST', body: JSON.stringify({ minutes }) });
+}
+
+export async function closeAliceEnroll(): Promise<void> {
+  await request('/api/alice/enroll', { method: 'DELETE' });
+}
+
+/** Снять доверие: обращения с этого аккаунта снова перестанут записываться. */
+export async function revokeAliceIdentity(id: number): Promise<void> {
+  await request(`/api/alice/identities/${id}`, { method: 'DELETE' });
+}
+
 /**
  * Выход. Сначала сервер гасит сессию, потом стираем офлайн-кэш: обратный
  * порядок оставил бы на телефоне работающее приложение с живой сессией.

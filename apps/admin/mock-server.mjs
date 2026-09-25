@@ -1064,6 +1064,34 @@ const MIME = {
 };
 
 /** Отдаём собранную админку по /dash — так же, как это сделает настоящий сервер. */
+const aliceIdentities = [
+  {
+    id: 1,
+    kind: 'account',
+    status: 'trusted',
+    firstSeenAt: iso(Date.now() - 86_400_000 * 14),
+    lastSeenAt: iso(Date.now() - 3_600_000),
+    source: 'tofu',
+  },
+  {
+    id: 2,
+    kind: 'device',
+    status: 'trusted',
+    firstSeenAt: iso(Date.now() - 86_400_000 * 16),
+    lastSeenAt: iso(Date.now() - 86_400_000 * 13),
+    source: 'api',
+  },
+  {
+    id: 3,
+    kind: 'account',
+    status: 'pending',
+    firstSeenAt: iso(Date.now() - 1_800_000),
+    lastSeenAt: iso(Date.now() - 1_200_000),
+    source: 'api',
+  },
+];
+const aliceEnroll = { until: null, enrolledAt: 0 };
+
 function serveDash(pathname, res) {
   if (!fs.existsSync(DIST)) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -1143,6 +1171,39 @@ const server = http.createServer(async (req, res) => {
       ],
       codeTtlSec: 600,
     });
+  }
+
+  // Голоса Алисы (§3.1). Окно подключения в моке закрывается само через
+  // 15 секунд и «подключает» жену — так видно и таймер, и успех.
+  if (pathname === '/api/alice/identities') {
+    if (aliceEnroll.until && Date.now() >= aliceEnroll.enrolledAt) {
+      const wife = aliceIdentities.find((i) => i.id === 3);
+      wife.status = 'trusted';
+      wife.source = 'enroll';
+      wife.lastSeenAt = iso(Date.now());
+      aliceEnroll.until = null;
+    }
+    return json(res, 200, {
+      identities: aliceIdentities,
+      enrollOpenUntil: aliceEnroll.until,
+      identityCheck: true,
+      knownSkillId: 'mock-skill',
+    });
+  }
+  if (pathname === '/api/alice/enroll') {
+    if (req.method === 'POST') {
+      aliceEnroll.until = iso(Date.now() + 600_000);
+      aliceEnroll.enrolledAt = Date.now() + 15_000;
+      return json(res, 202, { enrollOpenUntil: aliceEnroll.until });
+    }
+    aliceEnroll.until = null;
+    return json(res, 200, { enrollOpenUntil: null });
+  }
+  const aliceRevoke = pathname.match(/^\/api\/alice\/identities\/(\d+)$/);
+  if (aliceRevoke && req.method === 'DELETE') {
+    const row = aliceIdentities.find((i) => i.id === Number(aliceRevoke[1]));
+    if (row) row.status = 'pending';
+    return json(res, 200, { identity: row ?? null });
   }
 
   if (/^\/api\/(devices|auth)\//.test(pathname) && req.method === 'POST') {

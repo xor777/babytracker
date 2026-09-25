@@ -262,7 +262,7 @@ const say = (app: Awaited<ReturnType<typeof makeTestApp>>['app'], fields: Identi
 const textOf = (res: { json: () => unknown }): string =>
   (res.json() as { response: { text: string } }).response.text;
 
-const UNKNOWN_RE = /не подключено/;
+const UNKNOWN_RE = /не подключ[её]н/;
 
 test('ГЛАВНОЕ: вторая колонка того же аккаунта работает без ручного добавления', async (t) => {
   const h = await makeTestApp();
@@ -321,7 +321,9 @@ test('чужой аккаунт отклоняется отличимой фра
   const text = textOf(alien);
   assert.match(text, UNKNOWN_RE, 'по голосу должно быть понятно, что делать');
   assert.notEqual(text, 'Извините, сейчас не могу ответить.', 'это не сбой сервера');
-  assert.match(text, /админк|подключени/i, 'в ответе есть подсказка');
+  // Подсказка называет кнопку, которая ЕСТЬ в админке (DevicesScreen.tsx):
+  // прежний ответ отсылал «в раздел устройств», где подтвердить было нечего.
+  assert.match(text, /«Подключить новый голос»/, 'в ответе есть подсказка');
 
   // событий чужого аккаунта в базе быть не должно
   assert.equal(queryEvents(h.db, { type: 'sleep' }).length, 1, 'записан только владелец');

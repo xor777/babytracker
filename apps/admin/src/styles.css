@@ -2269,6 +2269,14 @@ textarea.input {
   margin-top: var(--g3);
 }
 
+/* Окно подключения голоса Алисы открыто: главное — сколько ещё ждать. */
+.devcard__lead {
+  margin: 0;
+  font-size: var(--s3);
+  font-weight: 600;
+  color: var(--text);
+}
+
 .devrow {
   display: flex;
   align-items: center;

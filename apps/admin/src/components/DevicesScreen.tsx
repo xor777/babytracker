@@ -9,7 +9,7 @@ import {
   isCompleteUserCode,
   normalizeUserCode,
 } from '../lib/usercode';
-import type { DeviceSession, PendingDevice } from '../api';
+import type { AliceIdentity, DeviceSession, PendingDevice } from '../api';
 
 /**
  * Экран устройств: кто просится, кто уже внутри, и поле для одобрения.
@@ -303,6 +303,188 @@ function SessionRow({
   );
 }
 
+function MicIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="8.5" y="2.5" width="7" height="12" rx="3.5" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M5 11.5a7 7 0 0 0 14 0M12 18.5v3"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+const ALICE_SOURCE: Record<string, string> = {
+  tofu: 'Первый голос',
+  enroll: 'Подключён здесь',
+  promoted: 'Вошёл с подключённой колонки',
+  api: 'Подтверждён вручную',
+};
+
+function AliceRow({
+  item,
+  fresh,
+  busy,
+  onRevoke,
+}: {
+  item: AliceIdentity;
+  fresh: boolean;
+  busy: boolean;
+  onRevoke: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const source = ALICE_SOURCE[item.source];
+
+  return (
+    <div className="devrow">
+      <span className="devrow__icon" aria-hidden="true">
+        <MicIcon />
+      </span>
+      <div className="devrow__body">
+        <div className="devrow__name">
+          {item.kind === 'account' ? 'Аккаунт Яндекса' : 'Колонка без входа в аккаунт'}
+          {fresh ? <span className="devrow__badge">только что</span> : null}
+        </div>
+        <div className="devrow__meta">
+          {source ? `${source} · ` : ''}
+          впервые {formatWhen(item.firstSeenAt)} · последняя фраза {formatWhen(item.lastSeenAt)}
+        </div>
+      </div>
+
+      {confirming ? (
+        <div className="devrow__confirm">
+          <button
+            type="button"
+            className="btn btn--danger btn--sm"
+            disabled={busy}
+            onClick={() => {
+              setConfirming(false);
+              onRevoke();
+            }}
+          >
+            Точно отключить
+          </button>
+          <button
+            type="button"
+            className="btn btn--sm"
+            disabled={busy}
+            onClick={() => setConfirming(false)}
+          >
+            Отмена
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="btn btn--danger btn--sm"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
+          Отключить
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Голоса Алисы: чьи фразы навыку записываются в дневник.
+ *
+ * Навык приватный, и владелец делится им с семьёй — но каждый новый аккаунт
+ * Яндекса сервер поначалу не узнаёт и отвечает «вы пока не подключены»
+ * (§3.1). Раньше этот ответ отсылал «в админку», где подтвердить было нечего:
+ * ручки были только в API.
+ *
+ * Подключение устроено так же, как одобрение по коду выше, — через
+ * присутствие, а не через список с кнопкой «доверять» у каждой строки.
+ * Нажали «Подключить», и первый незнакомый аккаунт, заговоривший с навыком
+ * в ближайшие 10 минут, становится своим; окно закрывается само. Кто этот
+ * аккаунт — ясно без всяких идентификаторов: это тот, кто стоит рядом
+ * и только что сказал фразу. Строка из списка незнакомых такой уверенности
+ * не даёт — в ней нет ничего, кроме длинного хеша и времени.
+ */
+function AliceSection({ devices }: { devices: DevicesData }) {
+  const alice = devices.alice;
+  if (!alice) return null;
+
+  const until = alice.enrollOpenUntil ? Date.parse(alice.enrollOpenUntil) : null;
+  const minutesLeft = until === null ? 0 : Math.max(1, Math.ceil((until - Date.now()) / 60_000));
+
+  return (
+    <section className="devsec">
+      <h2 className="devsec__title">Алиса</h2>
+
+      {!alice.identityCheck ? (
+        <p className="field__hint" style={{ marginTop: 0 }}>
+          Сейчас дневник записывает фразы с любого аккаунта: сверка выключена на сервере
+          (ALICE_IDENTITY_CHECK=false). Подключать никого не нужно.
+        </p>
+      ) : until !== null ? (
+        <div className="devcard">
+          <p className="devcard__lead">Ждём новый голос — ещё {minutesLeft} мин.</p>
+          <p className="field__hint">
+            Пусть человек, которого подключаете, скажет своей Алисе что-нибудь навыку дневника:
+            например, откроет навык. Первый незнакомый аккаунт станет своим, и окно закроется
+            само.
+          </p>
+          <button
+            type="button"
+            className="btn devcard__submit"
+            disabled={devices.busy}
+            onClick={() => void devices.closeEnroll()}
+          >
+            Отменить
+          </button>
+        </div>
+      ) : (
+        <div className="devcard">
+          {devices.justEnrolledId !== null ? (
+            <p className="devcard__lead" role="status">
+              Подключено: фразы с нового аккаунта теперь записываются в дневник.
+            </p>
+          ) : null}
+          <p className="field__hint" style={devices.justEnrolledId !== null ? undefined : { marginTop: 0 }}>
+            Чтобы ещё кто-то из семьи мог записывать голосом, поделитесь с ним навыком в
+            Яндекс Диалогах и нажмите кнопку. Следующие 10 минут первый незнакомый аккаунт,
+            заговоривший с навыком, станет своим.
+          </p>
+          {alice.lastUnknownAt ? (
+            <p className="field__hint">
+              Последняя фраза с неподключённого аккаунта — {formatWhen(alice.lastUnknownAt)}.
+              После нажатия её нужно повторить: сама она не записалась.
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn--primary devcard__submit"
+            disabled={devices.busy}
+            onClick={() => void devices.openEnroll()}
+          >
+            Подключить новый голос
+          </button>
+        </div>
+      )}
+
+      {alice.trusted.length > 0 ? (
+        <div className="group">
+          {alice.trusted.map((item) => (
+            <AliceRow
+              key={item.id}
+              item={item}
+              fresh={item.id === devices.justEnrolledId}
+              busy={devices.busy}
+              onRevoke={() => void devices.revokeAlice(item.id)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 /**
  * Данные приходят сверху, а не заводятся здесь своим хуком: так App держит
  * один опрос на весь экран и гасит его, когда экран закрыт.
@@ -389,6 +571,8 @@ export function DevicesScreen({ devices }: { devices: DevicesData }) {
           секунду, даже если сейчас открыто. Потерянный телефон отзывается отсюда.
         </p>
       </section>
+
+      <AliceSection devices={devices} />
 
       <section className="devsec">
         <button type="button" className="btn btn--danger" disabled={leaving} onClick={() => void onLogout()}>

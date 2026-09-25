@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   approveByCode,
+  closeAliceEnroll,
   denyPending,
+  fetchAliceIdentities,
   fetchDevices,
+  openAliceEnroll,
+  revokeAliceIdentity,
   revokeDevice,
+  type AliceIdentity,
   type DeviceSession,
   type PendingDevice,
 } from '../api';
@@ -40,9 +45,22 @@ const POLL_MS = 5000;
  */
 export type DevicesPollMode = 'active' | 'off';
 
+export interface AliceData {
+  /** Кто уже может записывать в дневник голосом. */
+  trusted: AliceIdentity[];
+  /** Последнее обращение незнакомого аккаунта — видно, что попытка дошла. */
+  lastUnknownAt: string | null;
+  enrollOpenUntil: string | null;
+  identityCheck: boolean;
+}
+
 export interface DevicesData {
   pending: PendingDevice[];
   sessions: DeviceSession[];
+  /** null — ещё не загрузилось или сервер не ответил. */
+  alice: AliceData | null;
+  /** Голос, который только что подключили кнопкой, — до следующего действия. */
+  justEnrolledId: number | null;
   /** Ошибка последнего действия — показывается рядом с кнопками. */
   error: string | null;
   /** Что получилось: «устройство одобрено». Живёт до следующего действия. */
@@ -53,6 +71,9 @@ export interface DevicesData {
   approve: (userCode: string) => Promise<boolean>;
   deny: (id: number) => Promise<void>;
   revoke: (id: string) => Promise<void>;
+  openEnroll: () => Promise<void>;
+  closeEnroll: () => Promise<void>;
+  revokeAlice: (id: number) => Promise<void>;
   refresh: () => Promise<void>;
   clearMessages: () => void;
 }
@@ -60,24 +81,60 @@ export interface DevicesData {
 export function useDevices(mode: DevicesPollMode): DevicesData {
   const [pending, setPending] = useState<PendingDevice[]>([]);
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
+  const [alice, setAlice] = useState<AliceData | null>(null);
+  const [justEnrolledId, setJustEnrolledId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const alive = useRef(true);
+  /**
+   * Кого подключили кнопкой, на момент прошлого опроса. null — первого опроса
+   * ещё не было: уже подключённые раньше не должны выглядеть новостью.
+   */
+  const enrolledSeen = useRef<Set<number> | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const data = await fetchDevices();
-      if (!alive.current) return;
-      setPending(data.pending);
-      setSessions(data.sessions);
+    // Два запроса независимы: сбой одного не должен прятать другой список.
+    const [devicesRes, aliceRes] = await Promise.allSettled([
+      fetchDevices(),
+      fetchAliceIdentities(),
+    ]);
+    if (!alive.current) return;
+
+    // Сбои — молча: экран не должен мигать ошибкой из-за одного неудачного
+    // опроса, а телефон теряет сеть постоянно. Потеря сессии сюда не
+    // относится — её ловит App по 401 из /api/state и показывает «Сессия
+    // завершена», после чего опрос уходит в режим `off`.
+    if (devicesRes.status === 'fulfilled') {
+      setPending(devicesRes.value.pending);
+      setSessions(devicesRes.value.sessions);
       setLoaded(true);
-    } catch {
-      // Молча: экран не должен мигать ошибкой из-за одного неудачного опроса,
-      // а телефон теряет сеть постоянно. Потеря сессии сюда не относится —
-      // её ловит App по 401 из /api/state и показывает «Сессия завершена»,
-      // после чего опрос уходит в режим `off`.
+    }
+
+    if (aliceRes.status === 'fulfilled') {
+      const data = aliceRes.value;
+      const trusted = data.identities.filter((i) => i.status === 'trusted');
+      const unknown = data.identities.filter((i) => i.status === 'pending');
+      const lastUnknownAt =
+        unknown.map((i) => i.lastSeenAt).sort().at(-1) ?? null;
+
+      // Окно подключения закрывается само, когда кто-то новый заговорил.
+      // Человек, который нажал кнопку и ждёт, должен это увидеть, а не
+      // догадываться по исчезнувшему таймеру. Показывается в самом разделе
+      // «Алиса», а не общей полоской вверху: смотрят в этот момент туда.
+      const enrolled = trusted.filter((i) => i.source === 'enroll').map((i) => i.id);
+      const before = enrolledSeen.current;
+      const fresh = before === null ? undefined : enrolled.find((id) => !before.has(id));
+      if (fresh !== undefined) setJustEnrolledId(fresh);
+      enrolledSeen.current = new Set(enrolled);
+
+      setAlice({
+        trusted,
+        lastUnknownAt,
+        enrollOpenUntil: data.enrollOpenUntil,
+        identityCheck: data.identityCheck,
+      });
     }
   }, []);
 
@@ -102,6 +159,7 @@ export function useDevices(mode: DevicesPollMode): DevicesData {
       setBusy(true);
       setError(null);
       setNotice(null);
+      setJustEnrolledId(null);
       let success = false;
       try {
         await fn();
@@ -121,11 +179,14 @@ export function useDevices(mode: DevicesPollMode): DevicesData {
   const clearMessages = useCallback(() => {
     setError(null);
     setNotice(null);
+    setJustEnrolledId(null);
   }, []);
 
   return {
     pending,
     sessions,
+    alice,
+    justEnrolledId,
     error,
     notice,
     busy,
@@ -140,6 +201,15 @@ export function useDevices(mode: DevicesPollMode): DevicesData {
     },
     revoke: async (id) => {
       await act(() => revokeDevice(id));
+    },
+    openEnroll: async () => {
+      await act(() => openAliceEnroll());
+    },
+    closeEnroll: async () => {
+      await act(() => closeAliceEnroll());
+    },
+    revokeAlice: async (id) => {
+      await act(() => revokeAliceIdentity(id));
     },
     refresh,
     clearMessages,
