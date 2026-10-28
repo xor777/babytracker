@@ -44,8 +44,8 @@ pnpm start
 | `CHILD_NAME` | `Андрей` | Имя в ответах Алисы и на дашборде |
 | `CHILD_BIRTHDATE` | `2026-03-01` | Для расчёта возраста |
 | `CLAUDE_BIN` | `claude` | Путь к CLI. Нет CLI — сервер всё равно работает |
-| `CLAUDE_MODEL` | `claude-opus-5` | Модель для `claude -p`. Вызовы идут через подписку (OAuth), не по API-ключу |
-| `CLAUDE_EFFORT` | `high` | Уровень усилия: `low`/`medium`/`high`/`xhigh`/`max`. Передаётся `--effort` явно; непонятное значение откатывается к `high`, а не роняет воркер |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Модель для `claude -p`. Вызовы идут через подписку (OAuth), не по API-ключу |
+| `CLAUDE_EFFORT` | `medium` | Уровень усилия: `low`/`medium`/`high`/`xhigh`/`max`. Передаётся `--effort` явно; непонятное значение откатывается к `medium`, а не роняет воркер |
 | `WORKER_ENABLED` | `true` | Выключает фоновый разбор |
 | `LLM_QUEUE_POLICY` | `smart` | Когда звать модель: `smart` / `all` / `unknown` (§9.4) |
 | `LLM_CONFIDENCE_THRESHOLD` | `0.8` | Ниже этой уверенности fast-path зовём модель |

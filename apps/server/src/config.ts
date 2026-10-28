@@ -205,7 +205,7 @@ export function loadConfig(
     childName: str(env, 'CHILD_NAME', 'Андрей'),
     childBirthDate: birthDate,
     claudeBin: str(env, 'CLAUDE_BIN', 'claude'),
-    claudeModel: str(env, 'CLAUDE_MODEL', 'claude-opus-5'),
+    claudeModel: str(env, 'CLAUDE_MODEL', 'claude-opus-5-5'),
     workerEnabled: ['true', '1', 'yes'].includes(workerRaw),
     dashboardOrigin: list(env, 'DASHBOARD_ORIGIN'),
     dashboardDist: path.isAbsolute(dashboardDistRaw)

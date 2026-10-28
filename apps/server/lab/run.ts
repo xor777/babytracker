@@ -30,8 +30,8 @@ import type { EventRow, UtteranceRow } from '../src/types.ts';
 const SECRET = '0123456789abcdef0123456789abcdef';
 const LAB_DIR = process.env.LAB_DIR ?? '/tmp/ambiguity-lab';
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? `${process.env.HOME}/.local/bin/claude`;
-const MODEL = process.env.CLAUDE_MODEL ?? 'claude-opus-5';
-const EFFORT = process.env.CLAUDE_EFFORT ?? 'high';
+const MODEL = process.env.CLAUDE_MODEL ?? 'claude-opus-5-5';
+const EFFORT = process.env.CLAUDE_EFFORT ?? 'medium';
 const TIMEOUT_MS = Number(process.env.LAB_TIMEOUT_MS ?? 180_000);
 
 interface SeedEvent {

@@ -325,7 +325,7 @@ ALICE_ALLOWED_USER_IDS=
 CHILD_NAME=Андрей
 CHILD_BIRTHDATE=2026-03-01
 CLAUDE_BIN=claude
-CLAUDE_MODEL=claude-sonnet-5
+CLAUDE_MODEL=claude-opus-5-5
 WORKER_ENABLED=true
 DASHBOARD_ORIGIN=http://localhost:5173
 ```
@@ -432,7 +432,7 @@ END;
 
 ## 9.4 Политика запуска модели
 
-Модель — `claude-opus-5` (env `CLAUDE_MODEL`). Сильная модель здесь оправдана: она пишет SQL по
+Модель — `claude-opus-5-5` (env `CLAUDE_MODEL`). Сильная модель здесь оправдана: она пишет SQL по
 свободной русской фразе и правит чужие данные, цена ошибки выше цены токенов.
 
 Воркер стартует **немедленно при постановке в очередь**, а не по таймеру: фраза попала в
