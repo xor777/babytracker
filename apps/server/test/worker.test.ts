@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { makeTestApp } from './helpers.ts';
 import {
+  cliFailureText,
   createWorker,
   looksRateLimited,
   parseClaudeJson,
@@ -78,11 +79,11 @@ exit 1`,
   await worker.tick();
 
   const row = listUtterances(h.db)[0];
-  // Протухший токен фразу больше не хоронит: она остаётся в очереди.
-  // Попытка при этом списана — иначе «--version проходит, разбор падает 401»
-  // крутилось бы вечно (см. комментарий в worker.ts).
+  // Протухший токен фразу не хоронит и попытку не тратит: вины фразы нет.
+  // Вечный круг «--version проходит, разбор падает 401» сдерживает пауза
+  // между пробами, а не счётчик попыток (см. комментарий в worker.ts).
   assert.equal(row?.status, 'pending', 'проблема авторизации фразу не хоронит');
-  assert.equal(row?.attempts, 1, 'попытка списана — это страховка от вечного круга');
+  assert.equal(row?.attempts, 0, 'попытка не списана: за протухший токен фраза не платит');
   assert.match(row?.llm_error ?? '', /authenticate/i, 'причина видна в ленте');
   assert.equal(worker.status().claudeAvailable, false);
   assert.match(worker.status().claudeProblem ?? '', /authenticate/i);
@@ -90,8 +91,104 @@ exit 1`,
   // Пока CLI считается мёртвым, очередь не разбирается вовсе: ни попыток, ни запусков.
   await worker.tick();
   await worker.tick();
-  assert.equal(listUtterances(h.db)[0]?.attempts, 1, 'простой не расходует попытки');
+  assert.equal(listUtterances(h.db)[0]?.attempts, 0, 'простой не расходует попытки');
   assert.equal(listUtterances(h.db)[0]?.status, 'pending');
+});
+
+test('CLI не знает модель (400 «version … or newer is required»): фраза ждёт, CLI помечен мёртвым', async (t) => {
+  // Ровно так отвечал CLI 2.1.150 на `--model claude-opus-5-5`. Раньше такая
+  // ошибка считалась ошибкой фразы, и рассинхрон CLI и CLAUDE_MODEL за три
+  // попытки на фразу хоронил всю очередь.
+  const bin = fakeClaude(
+    'claude',
+    `${VERSION_OK}
+echo '{"type":"result","is_error":true,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},"result":"API Error: 400 Claude Code 2.1.150 does not support this model; version 2.1.280 or newer is required. Run '"'"'claude update'"'"', or update the Claude desktop app, then try again."}'
+exit 1`,
+  );
+
+  const h = await makeTestApp({ CLAUDE_BIN: bin, WORKER_ENABLED: 'true' });
+  t.after(() => h.close());
+
+  const worker = createWorker(h.ctx);
+  t.after(() => worker.stop());
+  worker.start();
+  await worker.ready();
+
+  insertUtterance(h.db, { rawText: 'он весит шесть килограмм', fastResult: { kind: 'unknown' } });
+  for (let i = 0; i < 5; i++) await worker.tick();
+
+  const row = listUtterances(h.db)[0];
+  assert.equal(row?.status, 'pending', 'фраза ждёт обновления CLI, а не уходит в failed');
+  assert.equal(row?.attempts, 0, 'попытки не тратятся');
+  assert.equal(worker.status().claudeAvailable, false);
+  assert.match(
+    worker.status().claudeProblem ?? '',
+    /or newer is required/,
+    'в /healthz понятно, что чинить: версию CLI',
+  );
+});
+
+test('модель ответила, а разбор упал: это ошибка фразы, даже если в ответе есть «OAuth»', async (t) => {
+  // Признак «до модели не дошло» — нулевой расход токенов. Если модель уже
+  // отвечала, слова про авторизацию в её тексте — содержание, а не диагноз
+  // CLI: иначе такая фраза никогда бы не дошла до failed.
+  const bin = fakeClaude(
+    'claude',
+    `${VERSION_OK}
+echo '{"type":"result","is_error":true,"usage":{"output_tokens":350},"modelUsage":{"claude-opus-5-5":{}},"result":"Не смогла: в заметке упомянут OAuth, а дальше разбор оборвался"}'
+exit 1`,
+  );
+
+  const h = await makeTestApp({ CLAUDE_BIN: bin, WORKER_ENABLED: 'true' });
+  t.after(() => h.close());
+
+  const worker = createWorker(h.ctx);
+  t.after(() => worker.stop());
+  worker.start();
+  await worker.ready();
+
+  insertUtterance(h.db, { rawText: 'запиши про oauth', fastResult: { kind: 'unknown' } });
+  await worker.tick();
+
+  const row = listUtterances(h.db)[0];
+  assert.equal(row?.attempts, 1, 'обычная попытка разбора — списана');
+  assert.equal(worker.status().claudeAvailable, true, 'CLI исправен, очередь не встаёт');
+});
+
+test('причина отказа берётся из поля result, а не из обрезанного служебного JSON', async (t) => {
+  // Настоящий ответ CLI: перед result идёт килобайт служебных полей, и обрезка
+  // сырого вывода съедала именно причину. Так было на проде в октябре 2026.
+  const padding = 'x'.repeat(1500);
+  const bin = fakeClaude(
+    'claude',
+    `${VERSION_OK}
+echo '{"type":"result","subagent_stats":"${padding}","is_error":true,"api_error_status":null,"terminal_reason":"api_error","modelUsage":{},"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
+exit 1`,
+  );
+
+  const h = await makeTestApp({ CLAUDE_BIN: bin, WORKER_ENABLED: 'true' });
+  t.after(() => h.close());
+
+  const worker = createWorker(h.ctx);
+  t.after(() => worker.stop());
+  worker.start();
+  await worker.ready();
+
+  insertUtterance(h.db, { rawText: 'покакал', fastResult: { kind: 'unknown' } });
+  await worker.tick();
+
+  assert.equal(
+    worker.status().claudeProblem,
+    'код выхода 1: Failed to authenticate: OAuth session expired and could not be refreshed',
+  );
+  assert.match(listUtterances(h.db)[0]?.llm_error ?? '', /OAuth session expired/);
+});
+
+test('cliFailureText: result из JSON, иначе сырой вывод', () => {
+  assert.equal(cliFailureText('{"is_error":true,"result":"  нет входа  "}', ''), 'нет входа');
+  assert.equal(cliFailureText('', 'internal error\n'), 'internal error');
+  assert.equal(cliFailureText('не json', ''), 'не json');
+  assert.equal(cliFailureText('{"is_error":true,"result":""}', 'stderr'), 'stderr');
 });
 
 test('успешный разбор: статус done и llm_result сохранён', async (t) => {

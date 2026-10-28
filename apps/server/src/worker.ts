@@ -117,6 +117,53 @@ export const ALLOWED_TOOLS: readonly string[] = [
 const AUTH_PROBLEM_RE =
   /authenticat|unauthorized|not logged in|oauth|invalid api key|no api key|credit balance|"api_error_status":\s*40[13]|please run .*login/i;
 
+/**
+ * CLI и `CLAUDE_MODEL` не сошлись: CLI слишком старый для модели или имя
+ * модели неверное. Фраза тут ни при чём, и повтор её не вылечит — каждая
+ * следующая упадёт так же, пока человек не обновит CLI или `.env`.
+ */
+const MODEL_UNSUPPORTED_RE =
+  /does not support this model|or newer is required|not_found_error|invalid model|model[^\n]{0,80}not (?:found|available)/i;
+
+/**
+ * Дошёл ли запрос до модели. Если модель успела ответить хоть токеном, отказ
+ * случился уже в разборе — это ошибка фразы, а не CLI, сколько бы слов
+ * «oauth» ни оказалось в тексте её ответа.
+ */
+function reachedModel(stdout: string): boolean {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as {
+      usage?: { output_tokens?: unknown };
+      modelUsage?: unknown;
+    };
+    const outputTokens = Number(parsed.usage?.output_tokens ?? 0);
+    const models =
+      parsed.modelUsage && typeof parsed.modelUsage === 'object'
+        ? Object.keys(parsed.modelUsage).length
+        : 0;
+    return outputTokens > 0 || models > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Человеческая причина отказа. `claude -p --output-format json` кладёт её в
+ * поле `result`, а перед ним — простыня служебного JSON: обрезав сырой вывод,
+ * причину теряем (на проде обрезка шла ровно перед ней).
+ */
+export function cliFailureText(stdout: string, stderr: string): string {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { result?: unknown };
+    if (typeof parsed.result === 'string' && parsed.result.trim().length > 0) {
+      return parsed.result.trim();
+    }
+  } catch {
+    // не JSON — берём сырой вывод ниже
+  }
+  return (stderr || stdout).trim();
+}
+
 /** Как часто пробовать, не ожил ли claude (например, пользователь перелогинился). */
 export const REPROBE_MS = 5 * 60_000;
 
@@ -133,12 +180,12 @@ export const PROBE_BACKOFF_MAX_MS = 60 * 60_000;
  * Пауза до следующей проверки CLI.
  *
  * Проба — это `claude --version`: локальный процесс, модель она не зовёт и
- * лимитов не тратит. Но она не проверяет авторизацию, и есть ровно один
- * неприятный случай: токен протух, `--version` бодро отвечает «живой»,
- * а каждый разбор падает с 401. Проверять такое каждые пять минут — значит
- * впустую жечь попытки фраз, поэтому после КАЖДОГО ложного «ожил» пауза
- * удваивается: 5 мин → 10 → 20 → 40 → час. Первый же успешный разбор
- * возвращает её к исходным пяти минутам.
+ * лимитов не тратит. Но она не проверяет ни авторизацию, ни то, знает ли CLI
+ * нашу модель: токен протух, `--version` бодро отвечает «живой», а каждый
+ * разбор падает с 401. Попыток фраз такой разбор не тратит, но запускать
+ * заведомо падающий процесс каждые пять минут незачем, поэтому после КАЖДОГО
+ * ложного «ожил» пауза удваивается: 5 мин → 10 → 20 → 40 → час. Первый же
+ * успешный разбор возвращает её к исходным пяти минутам.
  *
  * Когда CLI честно отсутствует (проба падает), пауза не растёт: такая проверка
  * стоит меньше миллисекунды, а быстро подхватить вернувшийся CLI — ценно.
@@ -254,6 +301,8 @@ interface RunResult {
   payload?: unknown;
   error?: string;
   authProblem?: boolean;
+  /** CLI не знает модель из `CLAUDE_MODEL` (старая версия CLI или опечатка). */
+  modelUnsupported?: boolean;
   /**
    * Процесс не удалось даже запустить (нет файла, нет прав). Это не ошибка
    * разбора: попытку за неё списывать нельзя, иначе исчезнувший в середине
@@ -549,11 +598,14 @@ export function createWorker(ctx: AppContext, options: WorkerOptions = {}): Work
           return;
         }
         const rateLimited = looksRateLimited(combined);
+        // Отказ CLI, а не разбора, бывает только до первого токена модели.
+        const cliFault = !rateLimited && !reachedModel(stdout);
         finish({
           ok: false,
-          error: `код выхода ${code}: ${(stderr || stdout).trim().slice(0, 1000)}`,
+          error: `код выхода ${code}: ${cliFailureText(stdout, stderr).slice(0, 1000)}`,
           // лимит проверяем первым: 429 — это «позже», а не «сломалось»
-          authProblem: !rateLimited && AUTH_PROBLEM_RE.test(combined),
+          authProblem: cliFault && AUTH_PROBLEM_RE.test(combined),
+          modelUnsupported: cliFault && MODEL_UNSUPPORTED_RE.test(combined),
           rateLimited,
           rateLimitResetMs: rateLimited ? parseRateLimitReset(combined) : null,
         });
@@ -659,33 +711,33 @@ export function createWorker(ctx: AppContext, options: WorkerOptions = {}): Work
       );
       if (row) ctx.sse.broadcastUtterance(toUtteranceDto(row));
       return;
-    } else {
-      // CLI лёг посреди очереди: исчез бинарь, протух токен, кончился баланс.
-      // Помечаем его недоступным — и очередь ВСТАЁТ (см. tick), то есть
-      // остальные фразы ждут целыми и не тратят ни одной попытки.
+    } else if (result.spawnFailed || result.authProblem || result.modelUnsupported) {
+      // CLI лёг посреди очереди: исчез бинарь, протух токен, кончился баланс,
+      // CLI не знает модель. Помечаем его недоступным — и очередь ВСТАЁТ
+      // (см. tick), а фраза возвращается в неё, как при лимите: попытка НЕ
+      // сгорает. Вины фразы тут нет, и повтор её не вылечит.
       //
-      // А вот попытку текущей фразы списываем, и это осознанно. Иначе
-      // получается вечный круг: проба `--version` проходит (она не проверяет
-      // авторизацию), воркер считает CLI живым, берёт ту же фразу, снова
-      // получает 401, снова возвращает её — и так каждые REPROBE_MS до
-      // скончания века. Счётчик попыток живёт в базе и переживает рестарт,
-      // поэтому даже такая патология конечна: через MAX_ATTEMPTS голова
-      // очереди становится `failed` — статус, ВИДИМЫЙ человеку в админке,
-      // а не тихий `skipped`. Вызовов модели этот путь не стоит: 401 и
-      // несостоявшийся запуск процесса до модели не доходят.
-      if (result.spawnFailed || result.authProblem) {
-        // Проба только что считала CLI живым, а он не работает: в следующий раз
-        // проверим позже (пауза удваивается), чтобы не жечь попытки фраз впустую.
-        falseRecoveries += 1;
-        reportProblem(result.error ?? 'claude недоступен');
-        log.warn(
-          {
-            falseRecoveries,
-            nextProbeInSec: Math.round(probeIntervalMs(reprobeMs, falseRecoveries) / 1000),
-          },
-          'worker: `claude --version` отвечает, но разбор не работает — проверяем реже',
-        );
-      }
+      // Раньше попытку списывали, чтобы круг «проба `--version` проходит,
+      // разбор падает 401» был конечен. Он и был конечен — через `failed`:
+      // за 11 дней протухшего OAuth (октябрь 2026) так похоронили 91
+      // настоящую фразу, по одной попытке в час. Теперь круг сдерживает
+      // пауза между пробами (probeIntervalMs, растёт до часа), а стоит он
+      // ноль вызовов модели: 401 и незапустившийся процесс до неё не доходят.
+      // Зато после починки CLI очередь разбирается сама и целиком.
+      falseRecoveries += 1;
+      const reason = result.error ?? 'claude недоступен';
+      reportProblem(reason);
+      log.warn(
+        {
+          falseRecoveries,
+          nextProbeInSec: Math.round(probeIntervalMs(reprobeMs, falseRecoveries) / 1000),
+        },
+        'worker: `claude --version` отвечает, но разбор не работает — проверяем реже',
+      );
+      const row = releaseUtterance(db, utterance.id, `claude недоступен, фраза ждёт: ${reason}`);
+      if (row) ctx.sse.broadcastUtterance(toUtteranceDto(row));
+      return;
+    } else {
       finishFailure(utterance, result.error ?? 'неизвестная ошибка');
     }
 

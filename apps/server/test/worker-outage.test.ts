@@ -155,21 +155,21 @@ test('CLI лёг посреди очереди: разобранное оста�
 
   const afterFailure = getUtterance(h.db, second);
   assert.equal(afterFailure?.status, 'pending', 'фраза осталась в очереди, а не сгорела');
-  assert.equal(afterFailure?.attempts, 1, 'попытка списана — страховка от вечного круга');
+  assert.equal(afterFailure?.attempts, 0, 'попытка не списана: за протухший токен фраза не платит');
 
   // Дальше очередь не трогается вообще: ни одного запуска разбора.
   const runsAtOutage = cli.runs();
   for (let i = 0; i < 20; i++) await worker.tick();
 
   assert.equal(cli.runs(), runsAtOutage, 'простой не стоит НИ ОДНОГО вызова модели');
-  assert.equal(getUtterance(h.db, second)?.attempts, 1, 'попытки второй фразы не жгутся');
+  assert.equal(getUtterance(h.db, second)?.attempts, 0, 'попытки второй фразы не жгутся');
   assert.equal(getUtterance(h.db, third)?.attempts, 0, 'до третьей вообще не дошли');
   assert.equal(getUtterance(h.db, third)?.status, 'pending');
   assert.equal(worker.status().queueDepth, 2, 'в очереди честные две фразы');
   assert.ok(worker.status().oldestPendingAt, 'видно, с какого момента очередь стоит');
 });
 
-test('CLI снесли с сервера: попытки не жгутся вовсе, потому что процесс не стартует', async (t) => {
+test('CLI снесли с сервера: попытки не жгутся, потому что процесс не стартует', async (t) => {
   const cli = fakeCli(t);
   const h = await makeTestApp({ CLAUDE_BIN: cli.bin, WORKER_ENABLED: 'true' });
   t.after(() => h.close());
@@ -191,8 +191,8 @@ test('CLI снесли с сервера: попытки не жгутся во�
   assert.equal(getUtterance(h.db, first)?.status, 'pending');
   assert.equal(
     getUtterance(h.db, first)?.attempts,
-    1,
-    'одна попытка на обнаружение пропажи — дальше очередь стоит',
+    0,
+    'обнаружение пропажи попытки не стоит — фраза ни при чём',
   );
   assert.equal(getUtterance(h.db, second)?.attempts, 0);
 
@@ -244,10 +244,9 @@ test('CLI ожил: очередь разгребается в хронолог�
   for (const id of ids) {
     assert.equal(getUtterance(h.db, id)?.status, 'done', `фраза ${id} разобрана`);
   }
-  // Головная фраза оплатила обнаружение пропажи одной попыткой, остальные — нет.
-  assert.ok((getUtterance(h.db, ids[0])?.attempts ?? 0) <= 2);
-  for (const id of ids.slice(1)) {
-    assert.equal(getUtterance(h.db, id)?.attempts, 1, 'на остальных простой не сказался');
+  // Простой не стоил попыток ни одной фразе, даже головной, на которой его обнаружили.
+  for (const id of ids) {
+    assert.equal(getUtterance(h.db, id)?.attempts, 1, `фразе ${id} — одна попытка, удачная`);
   }
 
   // Разгребли — и остановились. Само себя это не переоткрывает.
@@ -371,13 +370,13 @@ exit 2
   assert.equal(worker2.status().queueDepth, 0, 'очередь пуста: фраза не крутится в ней');
 });
 
-test('проба врёт («--version» жив, разбор падает 401): круг конечен и пауза растёт', async (t) => {
+test('проба врёт («--version» жив, разбор падает 401): фразы ждут целыми и разбираются после починки', async (t) => {
   const cli = fakeCli(t);
   const h = await makeTestApp({ CLAUDE_BIN: cli.bin, WORKER_ENABLED: 'true' });
   t.after(() => h.close());
 
   // reprobeMs = 0 выключает паузу целиком: остаётся ХУДШИЙ случай, когда
-  // воркер проверяет CLI на каждом тике. Даже в нём круг обязан кончиться.
+  // воркер проверяет CLI на каждом тике. Даже в нём фразы не сгорают.
   const worker = createWorker(h.ctx, { reprobeMs: 0 });
   t.after(() => worker.stop());
   worker.start();
@@ -385,18 +384,31 @@ test('проба врёт («--version» жив, разбор падает 401):
 
   cli.breakAuth();
   const ids = [say(h.db, 'заснул'), say(h.db, 'покушал')];
+  ids.forEach((id, i) => backdate(h.db, id, 10 - i));
 
-  for (let i = 0; i < 100; i++) await worker.tick();
+  for (let i = 0; i < 50; i++) await worker.tick();
 
+  // Так выглядел прод в октябре 2026: одиннадцать дней протухшего OAuth.
+  // Раньше каждая проба отнимала попытку у головы очереди, и фразы по одной
+  // уходили в failed. Теперь они ждут, сколько бы ни длился простой.
   for (const id of ids) {
     const row = getUtterance(h.db, id);
-    assert.equal(row?.status, 'failed', 'фраза пришла в терминальный статус, а не крутится');
-    assert.equal(row?.attempts, 3, 'ровно три попытки, счётчик живёт в базе');
-    // failed — статус, ВИДИМЫЙ человеку в админке (в отличие от прежнего skipped).
-    assert.match(row?.llm_error ?? '', /authenticate/i, 'причина сохранена');
+    assert.equal(row?.status, 'pending', 'фраза ждёт, а не уходит в failed');
+    assert.equal(row?.attempts, 0, 'простой не тратит попыток');
   }
-  assert.equal(cli.runs(), 6, 'сто тиков стоили ровно 3 попытки × 2 фразы, а не ста вызовов');
-  assert.equal(worker.status().queueDepth, 0, 'очередь пуста: ничего не крутится по кругу');
+  assert.ok(cli.runs() > 0, 'разбор пробовали — иначе тест ничего не проверяет');
+  assert.match(worker.status().claudeProblem ?? '', /authenticate/i, 'причина видна в /healthz');
+
+  // Токен обновили — очередь разобралась сама, по порядку и без потерь.
+  cli.fixAuth();
+  for (let i = 0; i < 10; i++) await worker.tick();
+
+  assert.deepEqual(cli.order(), ids, 'после починки разобрано всё и по порядку');
+  for (const id of ids) {
+    assert.equal(getUtterance(h.db, id)?.status, 'done', `фраза ${id} разобрана`);
+    assert.equal(getUtterance(h.db, id)?.attempts, 1);
+  }
+  assert.equal(worker.status().claudeAvailable, true);
 });
 
 test('пауза между проверками CLI растёт только на ложных «ожил»', () => {
